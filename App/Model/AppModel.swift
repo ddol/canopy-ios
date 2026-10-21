@@ -134,3 +134,52 @@ enum LocalPlayerID {
         return .local(id)
     }
 }
+
+// MARK: - Measurements
+
+extension AppModel {
+    /// Saves a trunk measurement: the GLB blob, its evidence record and the observation. With no target tree,
+    /// first adds a new tree at `position`. Returns the measured tree.
+    @discardableResult
+    func saveTrunkMeasurement(
+        dbh: DBH, lean: Lean?, glb: Data, evidenceMesh: (vertices: Int, triangles: Int), cropRadius: Double,
+        tree target: Tree?, position: Position
+    ) async -> Tree? {
+        var tree = target
+        if tree == nil {
+            let added = Tree(
+                meta: RecordMeta(playerID: player.id, cell: position.chunk), position: position,
+                countStatus: .proposed)
+            guard await record(.treeAdded(added)) != nil else { return nil }
+            tree = census.trees[added.id]
+        }
+        guard let tree else { return nil }
+        do {
+            let blob = try store.blobs.put(glb)
+            let evidence = Evidence(
+                meta: RecordMeta(playerID: player.id, cell: tree.position.chunk),
+                blob: blob,
+                byteCount: glb.count,
+                kind: .trunkScan,
+                subjectID: tree.id,
+                cropRadius: cropRadius,
+                vertexCount: evidenceMesh.vertices,
+                triangleCount: evidenceMesh.triangles
+            )
+            try await store.addEvidence(evidence, data: glb)
+            await record(.trunkMeasured(treeID: tree.id, dbh: dbh, lean: lean, evidence: blob))
+            return census.trees[tree.id]
+        } catch {
+            self.error = "Could not save the measurement: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// A copy of an evidence blob with a `.glb` name, for sharing.
+    func shareableGLB(_ ref: BlobRef) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appending(path: "canopy-\(ref.rawValue.prefix(12)).glb")
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.copyItem(at: store.blobs.url(for: ref), to: url)
+        return url
+    }
+}

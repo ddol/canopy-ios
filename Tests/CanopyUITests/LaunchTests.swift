@@ -46,6 +46,15 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
+    func testCensusExplainsWhenThereIsNoLiDAR() {
+        // The simulator has no LiDAR, so Census offers the verification list.
+        let app = launch()
+        app.buttons["Census"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["no-lidar-message"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["New tree at my location"].firstMatch.exists)
+    }
+
+    @MainActor
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing"]

@@ -5,7 +5,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-[ -d Canopy.xcodeproj ] || scripts/bootstrap.sh
+# Regenerate first so new or removed files are always in the project.
+scripts/bootstrap.sh
 
 # Pick the newest available iPhone simulator unless SIMULATOR_ID is set.
 simulator_id="${SIMULATOR_ID:-$(xcrun simctl list devices available iPhone \
