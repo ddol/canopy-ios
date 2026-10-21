@@ -99,6 +99,33 @@ import Testing
         #expect(try await model.store.evidence(about: tag.id).first?.kind == .limbScan)
     }
 
+    @Test func syncSubmitsAndASimulatedTrustedApprovalAppliesTheChange() async throws {
+        let model = try makeModel()
+        await model.load()
+        let tree = try #require(model.census.trees.values.first)
+        await model.confirm(tree)
+
+        await model.sync()
+        #expect(model.lastSync?.submitted == 1)
+        #expect(model.changesets.map(\.state) == [.pending])
+
+        await model.simulateTrustedApproval()
+        #expect(model.changesets.map(\.state) == [.applied])
+        #expect(model.tree(tree.id)?.countStatus == .confirmed)
+        #expect(model.summary.confirmed == 1)
+        #expect(model.error == nil)
+    }
+
+    @Test func resetStartsAgainFromTheFixtures() async throws {
+        let model = try makeModel()
+        await model.load()
+        await model.confirm(try #require(model.census.trees.values.first))
+        await model.reset()
+        #expect(model.changesets.isEmpty)
+        #expect(model.census.trees.count == 200)
+        #expect(model.summary.coverage == 0)
+    }
+
     @Test func taggingFromATreeSwitchesToTheTagTab() async throws {
         let model = try makeModel()
         await model.load()

@@ -72,6 +72,43 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
+    func testMeListsPendingChangesAndTheSimulatedApprovalAppliesThem() {
+        let app = launch()
+        app.buttons["Census"].firstMatch.tap()
+        let confirm = app.buttons["Confirm tree"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        confirm.tap()
+
+        app.buttons["Me"].firstMatch.tap()
+        let row = app.descendants(matching: .any)["changeset-row"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(row.label.contains("Confirm tree"), row.label)
+        XCTAssertTrue(row.label.contains("Pending"), row.label)
+
+        app.buttons["Sync now"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["sync-submitted"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Pending changes (1)"].firstMatch.exists)
+
+        let approve = app.buttons["Simulate trusted approval"].firstMatch
+        scroll(app, toReveal: approve)
+        approve.tap()
+        let applied = app.descendants(matching: .any)["On the map"].firstMatch
+        scroll(app, toReveal: applied)
+        XCTAssertTrue(applied.waitForExistence(timeout: 10))
+        app.swipeDown()
+        app.swipeDown()
+        XCTAssertTrue(app.staticTexts["Pending changes (0)"].firstMatch.waitForExistence(timeout: 10))
+    }
+
+    /// Lists load rows lazily, so swipe until the element exists.
+    @MainActor
+    private func scroll(_ app: XCUIApplication, toReveal element: XCUIElement, attempts: Int = 6) {
+        for _ in 0..<attempts where !element.exists {
+            app.swipeUp()
+        }
+    }
+
+    @MainActor
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing"]

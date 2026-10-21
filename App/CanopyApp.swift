@@ -14,7 +14,12 @@ struct CanopyApp: App {
             RootView()
                 .environment(model)
                 .tint(.canopyBrand)
-                .task { await model.load() }
+                .task {
+                    if !AppModel.isUITesting() {
+                        model.players.authenticate()
+                    }
+                    await model.load()
+                }
         }
     }
 }

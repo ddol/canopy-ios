@@ -1,4 +1,5 @@
 import CanopyModel
+import CanopyPlayers
 import CanopyStore
 import CanopySync
 import Foundation
@@ -20,7 +21,8 @@ final class AppModel {
     private(set) var summary = CensusSummary(confirmed: 0, estimated: 0, coverage: 0)
     private(set) var changesets: [Changeset] = []
     private(set) var boundary: [[GeoPoint]] = []
-    private(set) var player: Player
+    private(set) var lastSync: SyncCoordinator.Report?
+    private(set) var isSyncing = false
     /// The last error to show, if any.
     var error: String?
     /// The selected tab, so screens can send the player elsewhere (for example from a tree to Tag).
@@ -29,30 +31,44 @@ final class AppModel {
     var tagTarget: UUID?
 
     let store: LocalStore
-    let server: FakeGerardusClient
+    let players: PlayerService
+    /// The Gerardus server stand-in. In memory: it forgets everything when the app quits.
+    private(set) var server: FakeGerardusClient
 
-    init(store: LocalStore, player: Player, server: FakeGerardusClient = FakeGerardusClient()) {
+    /// Who records are attributed to: the Game Center player once signed in, the local id before.
+    var player: Player { players.player }
+
+    init(store: LocalStore, players: PlayerService, server: FakeGerardusClient = FakeGerardusClient()) {
         self.store = store
-        self.player = player
+        self.players = players
         self.server = server
+    }
+
+    convenience init(store: LocalStore, player: Player) {
+        self.init(store: store, players: PlayerService(local: player))
     }
 
     /// The model the app runs with: the store in Application Support, or an in-memory one for UI tests.
     static func live(arguments: [String] = ProcessInfo.processInfo.arguments) -> AppModel {
-        let player = Player(id: LocalPlayerID.current(), alias: "You", isTrusted: false, source: .local)
+        let players = PlayerService(
+            local: Player(id: LocalPlayerID.current(), alias: "You", isTrusted: false, source: .local))
         do {
-            if arguments.contains("-ui-testing") {
-                return AppModel(store: try LocalStore.inMemory(), player: player)
+            if isUITesting(arguments) {
+                return AppModel(store: try LocalStore.inMemory(), players: players)
             }
             let support = try FileManager.default.url(
                 for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            return AppModel(store: try LocalStore(directory: support.appending(path: "Canopy")), player: player)
+            return AppModel(store: try LocalStore(directory: support.appending(path: "Canopy")), players: players)
         } catch {
-            // Fall back to memory so the app still opens; the error is shown on the Me screen.
-            let model = AppModel(store: try! LocalStore.inMemory(), player: player)
+            // Fall back to memory so the app still opens, and say why.
+            let model = AppModel(store: try! LocalStore.inMemory(), players: players)
             model.error = "Could not open local data: \(error.localizedDescription)"
             return model
         }
+    }
+
+    static func isUITesting(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
+        arguments.contains("-ui-testing")
     }
 
     // MARK: Loading
@@ -65,8 +81,7 @@ final class AppModel {
                 try await store.importCandidates(try ParkFixtures.candidates())
             }
             await refresh()
-            let base = census.trees.values.filter { $0.meta.playerID == .aerialSurvey }
-            await server.seed(Dictionary(uniqueKeysWithValues: base.map { ($0.id, 1) }))
+            await seedServer()
             phase = .ready
         } catch {
             phase = .failed(error.localizedDescription)
@@ -181,5 +196,67 @@ extension AppModel {
         try? FileManager.default.removeItem(at: url)
         try FileManager.default.copyItem(at: store.blobs.url(for: ref), to: url)
         return url
+    }
+}
+
+// MARK: - Sync
+
+extension AppModel {
+    /// Pushes open changesets to the (fake) Gerardus server and brings back their state.
+    func sync() async {
+        isSyncing = true
+        defer { isSyncing = false }
+        let blobs = store.blobs
+        do {
+            let report = try await SyncCoordinator(client: server).sync(
+                changesets.filter(\.state.isOpen), author: player
+            ) { ref in try blobs.data(for: ref) }
+            for changeset in report.updated {
+                try await store.updateChangeset(changeset)
+            }
+            lastSync = report
+            await refresh()
+        } catch {
+            self.error = "Sync failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// A trusted stand-in player who agrees with everything, for trying the policy before the review flow
+    /// exists.
+    static let fakeRanger = Player(
+        id: PlayerID(rawValue: "gerardus:fake-ranger"), alias: "Ranger (simulated)", isTrusted: true,
+        source: .gameCenter)
+
+    /// Has the simulated trusted ranger approve every open changeset on the fake server, then syncs.
+    func simulateTrustedApproval() async {
+        await sync()
+        do {
+            for id in await server.openChangesetIDs() {
+                try await server.approve(id, by: Self.fakeRanger)
+            }
+        } catch {
+            self.error = "Approval failed: \(error.localizedDescription)"
+        }
+        await sync()
+    }
+
+    /// Deletes all local data and starts again from the fixtures.
+    func reset() async {
+        do {
+            try await store.reset()
+            server = FakeGerardusClient()
+            lastSync = nil
+            try await store.importCandidates(try ParkFixtures.candidates())
+            await refresh()
+            await seedServer()
+        } catch {
+            self.error = "Reset failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Tells the fake server about the aerial base layer, which the real server will already have.
+    private func seedServer() async {
+        let base = census.trees.values.filter { $0.meta.playerID == .aerialSurvey }
+        await server.seed(Dictionary(uniqueKeysWithValues: base.map { ($0.id, 1) }))
     }
 }
