@@ -168,4 +168,27 @@ of them is trusted. The author's submission counts as one agreement (`Changeset.
 `CanopyJSON` encodes with sorted keys and dates as integer milliseconds since 1970, so encodings are stable
 enough to hash and compare.
 
-*Storage tables are described with `CanopyStore`.*
+## Storage
+
+`CanopyStore.LocalStore` is an actor over one connection to the system SQLite library (`import SQLite3`,
+a thin wrapper, no ORM). The database is `Application Support/Canopy/canopy.sqlite` (WAL mode); blobs are in
+`Application Support/Canopy/blobs/`. Both use iOS file protection
+(`completeUntilFirstUserAuthentication`). The schema is versioned with `PRAGMA user_version`.
+
+| Table | Contents | Mutability |
+|---|---|---|
+| `observations` | `seq` (log order), id, created_at (ms), player_id, cell, version, kind, subject_id, changeset_id, `payload` (JSON) | **Append-only**: triggers abort any `UPDATE` or `DELETE` |
+| `evidence` | id, created_at, player_id, cell, blob (SHA-256), subject_id, kind, `payload` | **Immutable**: same triggers |
+| `changesets` | id, created_at, player_id, cell, state, cells, `payload`, updated_at | State and approvals change with sync |
+| `candidates` | The aerial base layer, one JSON `TreeCandidate` per row | Replaced on import |
+| `trees`, `tags` | Current state: id, cell, tile, status columns, version, `payload` | **Derived**: rewritten on every write |
+
+Every write runs in one transaction that also re-derives the state (`CensusState.derive`) and rewrites
+`trees` and `tags`, so the derived tables always match the log; opening the store re-derives too.
+`LocalStore.record(_:by:)` appends an observation and the changeset built from it atomically.
+
+The blob store names each file by its SHA-256 (`blobs/ab/cdef…`), checks the hash on write
+(`put(_:expecting:)`) and on read, and never overwrites.
+
+The debug **Reset local data** action deletes the database files and the blob folder, then recreates an empty
+store.
