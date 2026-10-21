@@ -1,2 +1,90 @@
-# canopy-ios
-🌲 Canopy is a shared, living census of every tree in Golden Gate Park
+# Canopy
+
+🌲 Canopy is a shared, living census of every tree in Golden Gate Park, San Francisco.
+
+Players walk the park with an iPhone or iPad. They confirm trees that aerial LiDAR detected, measure
+trunks (diameter at breast height, 1.37 m, and lean), tag limb hazards in 3D, and label routes. A change
+reaches the shared map only when two players agree and at least one of them is trusted.
+
+Canopy is the second app built on **Gerardus**, an open map spec: S2 level‑16 tiles and level‑19 chunks,
+immutable evidence, and changesets. The Gerardus Rust core and server do not exist yet; this app talks to
+them through Swift protocols with in‑memory fakes so the real implementations can be swapped in later.
+
+> **Status:** Milestone 0, app shell and local data only. Nothing is uploaded anywhere yet.
+
+## Privacy first
+
+- Canopy **never stores or uploads photos**. Evidence is a colourless 3D mesh (geometry only), cropped to
+  the tree or limb being recorded.
+- The only identity in the data is your Game Center player id and alias.
+- See [PRIVACY.md](PRIVACY.md) for exactly what is stored and synced.
+
+## Requirements
+
+| | |
+|---|---|
+| Devices | iPhone and iPad (universal) |
+| Minimum iOS | **18.0** |
+| LiDAR features | iPhone Pro / iPad Pro with LiDAR; other devices get the map, tagging and verification |
+| Xcode | 26.3 or later (Swift 6, strict concurrency) |
+| Tools | [XcodeGen](https://github.com/yonaskolb/XcodeGen) (installed by `scripts/bootstrap.sh`) |
+
+**Why iOS 18.0:** it is the oldest iOS that supports everything Canopy uses. SwiftUI's `Tab` API and the
+adaptable iPad sidebar need iOS 18; MapKit for SwiftUI and the Observation framework need iOS 17; ARKit
+scene reconstruction needs iOS 13.4. Anything newer than iOS 18 is used only behind `if #available`.
+
+## Getting started
+
+```sh
+scripts/bootstrap.sh          # installs XcodeGen if missing, generates Canopy.xcodeproj
+open Canopy.xcodeproj
+```
+
+Run the tests from the command line:
+
+```sh
+xcodebuild test -project Canopy.xcodeproj -scheme Canopy \
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+```
+
+To run on a device, copy `Configs/Local.xcconfig.example` to `Configs/Local.xcconfig` and set your
+`DEVELOPMENT_TEAM`. That file is git-ignored.
+
+The `.xcodeproj` is generated from [`project.yml`](project.yml) and is not committed. Change the
+project by editing `project.yml` and re-running `scripts/bootstrap.sh`.
+
+## Repository layout
+
+```
+project.yml          XcodeGen spec: app target Canopy, unit and UI test targets
+App/                 SwiftUI app: CanopyApp, tab shell (Map · Census · Tag · Me), screens
+Packages/
+  CanopyDesign/      design tokens and base components
+  CanopyModel/       value types and S2 cell ids
+  CanopyStore/       SQLite: append-only observation log, current state, sha256 blob store
+  CanopyCapture/     ARKit + LiDAR capture, GLB writer, trunk DBH and lean
+  CanopyMap/         map behind a protocol (MapKit now), layers
+  CanopySync/        GerardusClient protocol and an in-memory fake
+  CanopyPlayers/     Game Center sign-in wrapper
+Fixtures/ggp/        sample park boundary, synthetic aerial tree candidates, S2 cells
+docs/                architecture, data model, design tokens, dependencies
+scripts/             bootstrap and fixture generation
+```
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Data model](docs/DATA-MODEL.md)
+- [Design tokens](docs/DESIGN-TOKENS.md)
+- [Dependencies](docs/DEPENDENCIES.md)
+
+## Contributing
+
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md). Report security issues privately as described in
+[SECURITY.md](SECURITY.md).
+
+## Licence
+
+Apache License 2.0, see [LICENSE](LICENSE). The bundled DM Sans font is licensed under the SIL Open Font
+License 1.1 (see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)).
