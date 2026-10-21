@@ -63,7 +63,7 @@ final class LaunchTests: XCTestCase {
         let tagButton = app.buttons["Tag a limb hazard"].firstMatch
         XCTAssertTrue(tagButton.waitForExistence(timeout: 10))
         tagButton.tap()
-        let save = app.buttons["Save tag"].firstMatch
+        let save = app.navigationBars.buttons["Save"].firstMatch
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         save.tap()
         let saved = app.descendants(matching: .any)["tag-saved"].firstMatch

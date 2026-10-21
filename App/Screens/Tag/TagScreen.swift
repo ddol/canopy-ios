@@ -33,15 +33,6 @@ struct TagScreen: View {
                         .buttonStyle(.canopyPrimary)
                         .frame(maxWidth: .infinity)
                         .listRowBackground(Color.clear)
-                        if let lastSaved, lastSaved.treeID == tree.id {
-                            HStack {
-                                Text("Saved: \(lastSaved.issue.label.lowercased())")
-                                Spacer()
-                                StatusBadge(lastSaved.status.presentation)
-                            }
-                            .accessibilityElement(children: .combine)
-                            .accessibilityIdentifier("tag-saved")
-                        }
                     } footer: {
                         Text("Saved as proposed. It reaches the shared map when a second player agrees.")
                     }
@@ -50,6 +41,15 @@ struct TagScreen: View {
             }
             .navigationTitle("Tag")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        guard let tree else { return }
+                        Task { await save(on: tree) }
+                    }
+                    .disabled(tree == nil)
+                }
+            }
             .onAppear {
                 location.start()
                 if let target = model.tagTarget {
@@ -90,6 +90,16 @@ struct TagScreen: View {
                     StatusBadge(tree.displayStatus.presentation)
                     Text(tree.position.chunk.token).font(CanopyFont.mono(.footnote))
                     Spacer()
+                }
+                if let lastSaved, lastSaved.treeID == tree.id {
+                    HStack {
+                        Label("Saved: \(lastSaved.issue.label.lowercased())", systemImage: "checkmark.circle")
+                            .foregroundStyle(Color.canopyBrand)
+                        Spacer()
+                        StatusBadge(lastSaved.status.presentation)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("tag-saved")
                 }
             }
             Picker("Choose a tree", selection: $treeID) {
