@@ -40,12 +40,15 @@ scripts/bootstrap.sh          # installs XcodeGen if missing, generates Canopy.x
 open Canopy.xcodeproj
 ```
 
-Run the tests from the command line:
+Run every test (app, UI and all packages) on the newest available iPhone simulator:
 
 ```sh
-xcodebuild test -project Canopy.xcodeproj -scheme Canopy \
-  -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+scripts/test.sh
 ```
+
+which is `xcodebuild test -project Canopy.xcodeproj -scheme Canopy -destination 'id=<simulator>'`. The
+packages that do not need UIKit (`CanopyModel`, `CanopyStore`, `CanopySync`, `CanopyCapture`'s geometry) also
+build on macOS, so `swift test` inside one of them is the quickest loop.
 
 To run on a device, copy `Configs/Local.xcconfig.example` to `Configs/Local.xcconfig` and set your
 `DEVELOPMENT_TEAM`. That file is git-ignored.
@@ -66,9 +69,11 @@ Packages/
   CanopyMap/         map behind a protocol (MapKit now), layers
   CanopySync/        GerardusClient protocol and an in-memory fake
   CanopyPlayers/     Game Center sign-in wrapper
+Tests/               app unit tests (Swift Testing) and UI tests (XCTest)
+Configs/             xcconfig files; Local.xcconfig (git-ignored) holds your signing team
 Fixtures/ggp/        sample park boundary, synthetic aerial tree candidates, S2 cells
 docs/                architecture, data model, design tokens, dependencies
-scripts/             bootstrap and fixture generation
+scripts/             bootstrap, test and fixture generation
 ```
 
 ## Documentation

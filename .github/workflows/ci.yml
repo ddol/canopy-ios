@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Keep in step with the Xcode version in README.md and project.yml.
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+
+jobs:
+  lint:
+    name: swift-format lint
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint
+        run: swift format lint --strict --recursive --parallel App Packages Tests
+
+  test:
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+      - name: Bootstrap
+        run: scripts/bootstrap.sh
+      - name: Test
+        run: scripts/test.sh -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults
+          path: TestResults.xcresult
+          retention-days: 7

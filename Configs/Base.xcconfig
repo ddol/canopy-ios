@@ -1,0 +1,8 @@
+// Shared build settings for every target. XcodeGen applies this file to the project's Debug and Release
+// configurations; target settings in project.yml build on it.
+
+// The app's bundle identifier. Override it in Local.xcconfig if you sign with a team that cannot use it.
+CANOPY_BUNDLE_ID = io.github.ddol.canopy
+
+// Per-developer settings (signing team, bundle id). Optional and git-ignored; see Local.xcconfig.example.
+#include? "Local.xcconfig"

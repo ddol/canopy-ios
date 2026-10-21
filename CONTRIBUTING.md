@@ -48,8 +48,7 @@ These come from the project's goals. A pull request that breaks one will not be 
 ## Tests
 
 ```sh
-xcodebuild test -project Canopy.xcodeproj -scheme Canopy \
-  -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+scripts/test.sh
 ```
 
 The `Canopy` scheme runs the app's unit and UI tests and every package's tests. Unit tests use Swift

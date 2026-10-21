@@ -1,0 +1,134 @@
+# XcodeGen spec. Generate the project with scripts/bootstrap.sh; never edit Canopy.xcodeproj by hand.
+name: Canopy
+
+options:
+  bundleIdPrefix: io.github.ddol
+  deploymentTarget:
+    iOS: "18.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  xcodeVersion: "26.3"
+  localPackagesGroup: Packages
+
+configFiles:
+  Debug: Configs/Base.xcconfig
+  Release: Configs/Base.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+
+packages:
+  CanopyDesign:
+    path: Packages/CanopyDesign
+  CanopyModel:
+    path: Packages/CanopyModel
+  CanopyStore:
+    path: Packages/CanopyStore
+  CanopyCapture:
+    path: Packages/CanopyCapture
+  CanopyMap:
+    path: Packages/CanopyMap
+  CanopySync:
+    path: Packages/CanopySync
+  CanopyPlayers:
+    path: Packages/CanopyPlayers
+
+targets:
+  Canopy:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    entitlements:
+      path: App/Canopy.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(CANOPY_BUNDLE_ID)
+        PRODUCT_NAME: Canopy
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Canopy
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.education
+        INFOPLIST_KEY_NSCameraUsageDescription: >-
+          Canopy uses the camera and LiDAR to build a colourless 3D mesh of the tree in front of you.
+          No photos are taken or stored.
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: >-
+          Canopy uses your location to place the trees and tags you record on the park map.
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: >-
+          UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: >-
+          UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown
+          UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+    dependencies:
+      - package: CanopyDesign
+      - package: CanopyModel
+      - package: CanopyStore
+      - package: CanopyCapture
+      - package: CanopyMap
+      - package: CanopySync
+      - package: CanopyPlayers
+
+  CanopyTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/CanopyTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(CANOPY_BUNDLE_ID).tests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - target: Canopy
+
+  CanopyUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/CanopyUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(CANOPY_BUNDLE_ID).uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        TEST_TARGET_NAME: Canopy
+    dependencies:
+      - target: Canopy
+
+schemes:
+  Canopy:
+    build:
+      targets:
+        Canopy: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      coverageTargets:
+        - Canopy
+      targets:
+        - CanopyTests
+        - CanopyUITests
+        - package: CanopyDesign/CanopyDesignTests
+        - package: CanopyModel/CanopyModelTests
+        - package: CanopyStore/CanopyStoreTests
+        - package: CanopyCapture/CanopyCaptureTests
+        - package: CanopyMap/CanopyMapTests
+        - package: CanopySync/CanopySyncTests
+        - package: CanopyPlayers/CanopyPlayersTests
+    profile:
+      config: Release
+    archive:
+      config: Release
