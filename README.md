@@ -10,7 +10,20 @@ Canopy is the second app built on **Gerardus**, an open map spec: S2 level‑16 
 immutable evidence, and changesets. The Gerardus Rust core and server do not exist yet; this app talks to
 them through Swift protocols with in‑memory fakes so the real implementations can be swapped in later.
 
-> **Status:** Milestone 0, app shell and local data only. Nothing is uploaded anywhere yet.
+> **Status:** Milestone 0. Everything works locally against a simulated Gerardus server; nothing is uploaded
+> anywhere yet. The tree candidates in this build are synthetic sample data.
+
+## What works in Milestone 0
+
+| Tab | |
+|---|---|
+| **Map** | The park with 200 synthetic aerial candidates: faint dot = detected, dashed ring = proposed, ring = confirmed, solid = verified. Summary bar (Confirmed · Estimated · Coverage), layer toggles (including S2 level-16 tiles), and a tree sheet with Confirm / Not a tree / Tag. |
+| **Census** | With LiDAR: an AR view with the reconstructed mesh, Confirm tree, Not a tree, New tree here, and **Measure trunk** (DBH at 1.37 m with ±, lean, a cropped GLB mesh saved as evidence). Without LiDAR: a verification list of nearby trees. |
+| **Tag** | Pick a tree, place the limb point (on the LiDAR mesh within ~5 m, or by height), choose issue, what it could hit, size and urgency. Saved as a proposed tag. |
+| **Me** | Game Center sign-in (falls back to a local id), pending changes, sync with the simulated server, and debug tools: simulate a trusted approval, reset local data. |
+
+Debug builds can share a measurement's GLB and preview it in Quick Look (as a temporary USDZ, since GLB is not
+a Quick Look format on iOS).
 
 ## Privacy first
 
@@ -24,7 +37,7 @@ them through Swift protocols with in‑memory fakes so the real implementations 
 | | |
 |---|---|
 | Devices | iPhone and iPad (universal) |
-| Minimum iOS | **18.0** |
+| Minimum iOS | **18.0** (the test suite runs on iOS 18.2 and 26.3 simulators) |
 | LiDAR features | iPhone Pro / iPad Pro with LiDAR; other devices get the map, tagging and verification |
 | Xcode | 26.3 or later (Swift 6, strict concurrency) |
 | Tools | [XcodeGen](https://github.com/yonaskolb/XcodeGen) (installed by `scripts/bootstrap.sh`) |
@@ -51,7 +64,9 @@ packages that do not need UIKit (`CanopyModel`, `CanopyStore`, `CanopySync`, `Ca
 build on macOS, so `swift test` inside one of them is the quickest loop.
 
 To run on a device, copy `Configs/Local.xcconfig.example` to `Configs/Local.xcconfig` and set your
-`DEVELOPMENT_TEAM`. That file is git-ignored.
+`DEVELOPMENT_TEAM`. That file is git-ignored. LiDAR features need an iPhone 12 Pro or later Pro model, or an
+iPad Pro with LiDAR. Game Center sign-in only succeeds once the bundle id is registered in App Store Connect
+with Game Center enabled; until then the app says Game Center is unavailable and uses a local player id.
 
 The `.xcodeproj` is generated from [`project.yml`](project.yml) and is not committed. Change the
 project by editing `project.yml` and re-running `scripts/bootstrap.sh`.

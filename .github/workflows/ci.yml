@@ -40,7 +40,7 @@ jobs:
       - name: Bootstrap
         run: scripts/bootstrap.sh
       - name: Test
-        run: scripts/test.sh -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO
+        run: scripts/test.sh -resultBundlePath TestResults.xcresult
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4

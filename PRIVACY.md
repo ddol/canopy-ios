@@ -8,7 +8,8 @@ send, so you can check it against the code.
 - **No photos, ever.** The app never stores or uploads camera images or video.
 - **Evidence is colourless geometry.** When you measure a trunk or tag a limb, the app keeps a 3D mesh
   (vertex positions and triangles only, no colour or texture), cropped to a small radius around the
-  subject.
+  subject. Geometry has no faces or colours, but someone standing right next to the tree would still show up as
+  a shape, so scan when nobody is within a couple of metres of it.
 - **One identity.** Your Game Center player id and alias are the only identity in the data. No email, no
   name, no device identifiers, no advertising ids, no analytics.
 - **Milestone 0 sends nothing.** Sync is a local fake. Nothing leaves your device until the Gerardus server
@@ -27,12 +28,13 @@ send, so you can check it against the code.
 | Data | Contents | Where |
 |---|---|---|
 | Observations | What you did (confirmed a tree, measured a trunk, tagged a limb), when, where (S2 cell and position), and your player id. Append-only. | SQLite database in the app's Application Support folder |
-| Current state | Trees, tags and routes derived from the observations. | Same database |
+| Current state | Trees and tags derived from the observations. | Same database |
 | Changesets | The changes you propose for the shared map, with their state (pending, approved, applied, rejected, conflicted). | Same database |
-| Evidence | Cropped, colourless meshes as GLB files, named by their SHA-256 hash. | `blobs/` folder in Application Support |
-| Settings | Small preferences such as the last map position. | User defaults |
+| Evidence | Cropped, colourless meshes as GLB files, named by their SHA-256 hash: trunk scans (1.5 m around the trunk) and limb scans (1 m around the limb point). | `blobs/` folder in Application Support |
+| Local player id | A random `local:<uuid>` used for records made before (or without) Game Center sign-in. | User defaults |
 
 The data is protected by iOS file protection. **Me → Reset local data** (debug builds) deletes all of it.
+Debug builds can also share a scan's GLB file or preview it; that only happens when you tap Share or Preview.
 Deleting the app deletes all of it too.
 
 ## What will be synced (not yet)
