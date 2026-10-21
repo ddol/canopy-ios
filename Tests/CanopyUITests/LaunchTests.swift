@@ -87,7 +87,7 @@ final class LaunchTests: XCTestCase {
 
         app.buttons["Sync now"].firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["sync-submitted"].firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Pending changes (1)"].firstMatch.exists)
+        XCTAssertTrue(text(app, "Pending changes (1)").exists)
 
         let approve = app.buttons["Simulate trusted approval"].firstMatch
         scroll(app, toReveal: approve)
@@ -97,7 +97,13 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(applied.waitForExistence(timeout: 10))
         app.swipeDown()
         app.swipeDown()
-        XCTAssertTrue(app.staticTexts["Pending changes (0)"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(text(app, "Pending changes (0)").waitForExistence(timeout: 10))
+    }
+
+    /// A static text matched without regard to case (iOS 18 upper-cases list section headers).
+    @MainActor
+    private func text(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", label)).firstMatch
     }
 
     /// Lists load rows lazily, so swipe until the element exists.

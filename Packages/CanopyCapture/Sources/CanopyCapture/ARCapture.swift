@@ -77,8 +77,8 @@
             raycast(at: CGPoint(x: view.bounds.midX, y: view.bounds.midY), maxDistance: maxDistance)
         }
 
-        /// The reconstructed mesh within `radius` metres of `point`, in world coordinates, plus the heights of
-        /// nearby vertices ARKit classified as floor.
+        /// The reconstructed mesh from the anchors near `point`, in world coordinates, plus the heights of the
+        /// faces ARKit classified as floor within `radius` metres of `point` horizontally.
         public func meshSnapshot(around point: SIMD3<Float>, radius: Float) -> (mesh: Mesh, floorHeights: [Float]) {
             var mesh = Mesh.empty
             var floor: [Float] = []
@@ -89,13 +89,15 @@
                 guard simd_distance(SIMD3(origin.x, origin.y, origin.z), point) < radius + 5 else { continue }
                 let (part, partFloor) = Self.extract(anchor)
                 mesh.append(part)
-                floor += partFloor
+                floor += partFloor.filter { simd_distance(SIMD2($0.x, $0.z), SIMD2(point.x, point.z)) <= radius }
+                    .map(\.y)
             }
             return (mesh, floor)
         }
 
-        /// Copies an anchor's geometry out of its Metal buffers into world coordinates.
-        static func extract(_ anchor: ARMeshAnchor) -> (Mesh, [Float]) {
+        /// Copies an anchor's geometry out of its Metal buffers into world coordinates, with one corner of each
+        /// floor-classified face.
+        static func extract(_ anchor: ARMeshAnchor) -> (Mesh, [SIMD3<Float>]) {
             let geometry = anchor.geometry
             let transform = anchor.transform
             let vertices = geometry.vertices
@@ -121,15 +123,14 @@
                 }
             }
 
-            var floor: [Float] = []
+            var floor: [SIMD3<Float>] = []
             if let classification = geometry.classification {
                 let base = classification.buffer.contents().advanced(by: classification.offset)
                 for face in 0..<faces.count {
                     let value = base.advanced(by: face * classification.stride).assumingMemoryBound(to: UInt8.self)
                         .pointee
                     guard value == UInt8(ARMeshClassification.floor.rawValue) else { continue }
-                    let first = Int(indices[face * 3])
-                    floor.append(positions[first].y)
+                    floor.append(positions[Int(indices[face * 3])])
                 }
             }
             return (Mesh(positions: positions, indices: indices), floor)
