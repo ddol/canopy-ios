@@ -53,7 +53,7 @@ final class AppModel {
         let players = PlayerService(
             local: Player(id: LocalPlayerID.current(), alias: "You", isTrusted: false, source: .local))
         do {
-            if isUITesting(arguments) {
+            if isTesting(arguments) {
                 return AppModel(store: try LocalStore.inMemory(), players: players)
             }
             let support = try FileManager.default.url(
@@ -67,8 +67,13 @@ final class AppModel {
         }
     }
 
-    static func isUITesting(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
-        arguments.contains("-ui-testing")
+    /// True under UI tests (`-ui-testing`) and when the app hosts unit tests: use an in-memory store and leave
+    /// Game Center alone.
+    static func isTesting(
+        _ arguments: [String] = ProcessInfo.processInfo.arguments,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        arguments.contains("-ui-testing") || environment["XCTestConfigurationFilePath"] != nil
     }
 
     // MARK: Loading

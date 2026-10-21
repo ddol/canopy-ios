@@ -1,6 +1,11 @@
 import XCTest
 
 final class LaunchTests: XCTestCase {
+    /// The first query against the map snapshots all 200 tree annotations, which takes 15 s or more on CI runners.
+    let mapTimeout: TimeInterval = 90
+    /// The first synthetic candidate in Fixtures/ggp/tree-candidates.geojson.
+    let firstTreeID = "tree-17174592-BB4C-47D2-B2B8-FE45CFF2DFB5"
+
     override func setUp() {
         continueAfterFailure = false
     }
@@ -18,17 +23,17 @@ final class LaunchTests: XCTestCase {
     @MainActor
     func testMapShowsTheSummaryOfTheFixtureCandidates() {
         let app = launch()
-        XCTAssertTrue(app.descendants(matching: .any)["summary-bar"].firstMatch.waitForExistence(timeout: 15))
-        XCTAssertTrue(app.descendants(matching: .any)["Estimated: 200"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["summary-bar"].firstMatch.waitForExistence(timeout: mapTimeout))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
         XCTAssertTrue(app.descendants(matching: .any)["Confirmed: 0"].firstMatch.exists)
     }
 
     @MainActor
     func testConfirmingATreeFromItsSheetMakesItProposed() {
         let app = launch()
-        // The first synthetic candidate in Fixtures/ggp/tree-candidates.geojson.
-        let tree = app.descendants(matching: .any)["tree-17174592-BB4C-47D2-B2B8-FE45CFF2DFB5"].firstMatch
-        XCTAssertTrue(tree.waitForExistence(timeout: 15))
+        let tree = app.buttons[firstTreeID].firstMatch
+        XCTAssertTrue(tree.waitForExistence(timeout: mapTimeout))
         tree.tap()
         let confirm = app.buttons["Confirm tree"].firstMatch
         let opened = confirm.waitForExistence(timeout: 10)
@@ -57,8 +62,8 @@ final class LaunchTests: XCTestCase {
     @MainActor
     func testTaggingATreeCreatesAProposedTag() {
         let app = launch()
-        let tree = app.descendants(matching: .any)["tree-17174592-BB4C-47D2-B2B8-FE45CFF2DFB5"].firstMatch
-        XCTAssertTrue(tree.waitForExistence(timeout: 15))
+        let tree = app.buttons[firstTreeID].firstMatch
+        XCTAssertTrue(tree.waitForExistence(timeout: mapTimeout))
         tree.tap()
         let tagButton = app.buttons["Tag a limb hazard"].firstMatch
         XCTAssertTrue(tagButton.waitForExistence(timeout: 10))
