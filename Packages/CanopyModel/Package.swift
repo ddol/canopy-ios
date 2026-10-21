@@ -10,6 +10,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "CanopyModel"),
-        .testTarget(name: "CanopyModelTests", dependencies: ["CanopyModel"]),
+        .testTarget(name: "CanopyModelTests", dependencies: ["CanopyModel"], exclude: ["S2Vectors.md"]),
     ]
 )
