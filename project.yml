@@ -57,8 +57,12 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Canopy
+        # Canopy uses no encryption beyond what iOS provides (SHA-256 hashing only), so TestFlight and App Store
+        # uploads need no export compliance documents.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.education
         INFOPLIST_KEY_NSCameraUsageDescription: >-
           Canopy uses the camera and LiDAR to build a colourless 3D mesh of the tree in front of you.

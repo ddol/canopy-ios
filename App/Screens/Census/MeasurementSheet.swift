@@ -73,7 +73,7 @@ struct MeasurementSheet: View {
                     Text("Saves the colourless, cropped mesh as evidence. No photo is taken.")
                 }
 
-                #if DEBUG
+                #if DEBUG || TESTING_TOOLS
                     Section("Debug") {
                         if let shareURL {
                             ShareLink(item: shareURL) {

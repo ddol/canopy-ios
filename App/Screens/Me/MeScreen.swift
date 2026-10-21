@@ -17,7 +17,7 @@ struct MeScreen: View {
                 pendingSection
                 syncSection
                 historySection
-                #if DEBUG
+                #if DEBUG || TESTING_TOOLS
                     debugSection
                 #endif
                 aboutSection
@@ -158,7 +158,7 @@ struct MeScreen: View {
         }
     }
 
-    #if DEBUG
+    #if DEBUG || TESTING_TOOLS
         private var debugSection: some View {
             Section {
                 Button("Simulate trusted approval", systemImage: "checkmark.shield") {

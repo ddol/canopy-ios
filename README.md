@@ -63,10 +63,11 @@ which is `xcodebuild test -project Canopy.xcodeproj -scheme Canopy -destination 
 packages that do not need UIKit (`CanopyModel`, `CanopyStore`, `CanopySync`, `CanopyCapture`'s geometry) also
 build on macOS, so `swift test` inside one of them is the quickest loop.
 
-To run on a device, copy `Configs/Local.xcconfig.example` to `Configs/Local.xcconfig` and set your
-`DEVELOPMENT_TEAM`. That file is git-ignored. LiDAR features need an iPhone 12 Pro or later Pro model, or an
-iPad Pro with LiDAR. Game Center sign-in only succeeds once the bundle id is registered in App Store Connect
-with Game Center enabled; until then the app says Game Center is unavailable and uses a local player id.
+To run on an iPhone or iPad, or ship a TestFlight build, see [docs/DEVICE-TESTING.md](docs/DEVICE-TESTING.md):
+set your `DEVELOPMENT_TEAM` in `Configs/Local.xcconfig` (git-ignored), then `scripts/device.sh` or
+`scripts/testflight.sh`. LiDAR features need an iPhone 12 Pro or later Pro model, or an iPad Pro with LiDAR.
+Game Center sign-in only succeeds once the app is set up in App Store Connect; until then the app says Game
+Center is unavailable and uses a local player id.
 
 The `.xcodeproj` is generated from [`project.yml`](project.yml) and is not committed. Change the
 project by editing `project.yml` and re-running `scripts/bootstrap.sh`.
@@ -88,7 +89,7 @@ Tests/               app unit tests (Swift Testing) and UI tests (XCTest)
 Configs/             xcconfig files; Local.xcconfig (git-ignored) holds your signing team
 Fixtures/ggp/        sample park boundary, synthetic aerial tree candidates, S2 cells
 docs/                architecture, data model, design tokens, dependencies
-scripts/             bootstrap, test and fixture generation
+scripts/             bootstrap, test, device install, TestFlight upload, fixture and icon generation
 ```
 
 ## Documentation
@@ -97,6 +98,7 @@ scripts/             bootstrap, test and fixture generation
 - [Data model](docs/DATA-MODEL.md)
 - [Design tokens](docs/DESIGN-TOKENS.md)
 - [Dependencies](docs/DEPENDENCIES.md)
+- [Testing on a device and TestFlight](docs/DEVICE-TESTING.md)
 
 ## Contributing
 
