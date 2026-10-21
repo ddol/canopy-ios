@@ -9,10 +9,11 @@ struct RootView: View {
         case me
     }
 
-    @State private var selection: Section = .map
+    @Environment(AppModel.self) private var model
 
     var body: some View {
-        TabView(selection: $selection) {
+        @Bindable var model = model
+        TabView(selection: $model.section) {
             Tab("Map", systemImage: "map", value: Section.map) {
                 MapScreen()
             }
@@ -27,9 +28,19 @@ struct RootView: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        .alert(
+            "Something went wrong",
+            isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } }),
+            presenting: model.error
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { error in
+            Text(error)
+        }
     }
 }
 
 #Preview {
     RootView()
+        .environment(AppModel.live(arguments: ["-ui-testing"]))
 }

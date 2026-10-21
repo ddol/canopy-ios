@@ -1,4 +1,4 @@
-// Generated from github.com/golang/geo/s2 as described in S2Vectors.md. Do not edit by hand.
+// Generated from github.com/golang/geo/s2 by scripts/s2-reference. Do not edit by hand.
 // swift-format-ignore-file
 
 struct S2Vector {

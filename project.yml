@@ -43,6 +43,9 @@ targets:
     platform: iOS
     sources:
       - path: App
+      - path: Fixtures/ggp
+        type: folder
+        buildPhase: resources
     entitlements:
       path: App/Canopy.entitlements
     settings:

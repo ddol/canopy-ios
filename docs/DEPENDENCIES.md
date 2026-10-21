@@ -42,4 +42,4 @@ These are used to build and check the project. None of them ends up in the app.
 
 | Tool | Licence | Why |
 |---|---|---|
-| [golang/geo](https://github.com/golang/geo) (`s2` package) | Apache-2.0 | Google's S2 implementation in Go, used once to generate the reference S2 cell tokens in `CanopyModel`'s tests. It is not part of the repository or the build; `Packages/CanopyModel/Tests/CanopyModelTests/S2Vectors.md` records how the vectors were made. |
+| [golang/geo](https://github.com/golang/geo) (`s2` package) | Apache-2.0 | Google's S2 implementation in Go. `scripts/s2-reference` (a small Go program) uses it to generate the reference S2 vectors in `CanopyModel`'s tests and the cells in `Fixtures/ggp/s2-cells.geojson`. Only needed to regenerate them; not part of the app or its build. |
