@@ -34,7 +34,7 @@ public struct ChangesetBuilder: Sendable {
     }
 
     /// Adds the ops for one observation and advances the builder's copy of the state.
-    public mutating func add(_ observation: Observation) throws {
+    public mutating func add(_ observation: FieldObservation) throws {
         let next = state.applying(observation)
         let subject = observation.kind.subject
         let op: ChangeOp
@@ -71,7 +71,7 @@ public struct ChangesetBuilder: Sendable {
 
     /// Builds a changeset for a single observation.
     public static func changeset(
-        for observation: Observation,
+        for observation: FieldObservation,
         in state: CensusState,
         author: PlayerID
     ) throws -> Changeset {

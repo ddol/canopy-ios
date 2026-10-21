@@ -137,7 +137,7 @@ import Testing
 
     @Test func observationsRoundTripThroughJSON() throws {
         let tree = Sample.newTree()
-        let observations: [Observation] = [
+        let observations: [FieldObservation] = [
             Sample.observation(.treeConfirmed(treeID: tree.id)),
             Sample.observation(.treeAdded(tree)),
             Sample.observation(.treeRejected(treeID: tree.id), changeset: nil),
@@ -152,7 +152,7 @@ import Testing
             Sample.observation(.tagPlaced(Sample.tag(on: tree))),
         ]
         let data = try CanopyJSON.encoder.encode(observations)
-        #expect(try CanopyJSON.decoder.decode([Observation].self, from: data) == observations)
+        #expect(try CanopyJSON.decoder.decode([FieldObservation].self, from: data) == observations)
     }
 
     @Test func recordTimesAreKeptToTheMillisecond() throws {

@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Observations are the local source of truth: the store appends them to a log and derives the current
 /// trees and tags from that log (see `CensusState`). Each one is shared through a changeset.
-public struct Observation: Identifiable, Hashable, Codable, Sendable {
+public struct FieldObservation: Identifiable, Hashable, Codable, Sendable {
     public enum Kind: Hashable, Codable, Sendable {
         /// "Confirm tree": an existing (usually detected) tree is real.
         case treeConfirmed(treeID: UUID)

@@ -13,8 +13,8 @@ import Testing
         id: UUID(), location: GeoPoint(latitude: 37.7699, longitude: -122.4757), confidence: 0.9, isSynthetic: true
     ).makeTree()
 
-    func changeset(_ kind: Observation.Kind, state: CensusState? = nil) throws -> Changeset {
-        let observation = Observation(
+    func changeset(_ kind: FieldObservation.Kind, state: CensusState? = nil) throws -> Changeset {
+        let observation = FieldObservation(
             meta: RecordMeta(playerID: author.id, cell: tree.position.chunk), changesetID: UUID(), kind: kind)
         return try ChangesetBuilder.changeset(
             for: observation, in: state ?? CensusState(trees: [tree]), author: author.id)
@@ -69,11 +69,11 @@ import Testing
         let ref = BlobRef(rawValue: SHA256.hash(data: mesh).map { String(format: "%02x", $0) }.joined())!
         var builder = ChangesetBuilder(author: author.id, state: CensusState(trees: [tree]))
         try builder.add(
-            Observation(
+            FieldObservation(
                 meta: RecordMeta(playerID: author.id, cell: tree.position.chunk), changesetID: nil,
                 kind: .treeConfirmed(treeID: tree.id)))
         try builder.add(
-            Observation(
+            FieldObservation(
                 meta: RecordMeta(playerID: author.id, cell: tree.position.chunk), changesetID: nil,
                 kind: .trunkMeasured(treeID: tree.id, dbh: dbh, lean: nil, evidence: ref)))
         let both = try builder.build()
@@ -126,7 +126,7 @@ import Testing
         let mesh = Data("trunk mesh".utf8)
         let ref = BlobRef(rawValue: SHA256.hash(data: mesh).map { String(format: "%02x", $0) }.joined())!
         let measure = try ChangesetBuilder.changeset(
-            for: Observation(
+            for: FieldObservation(
                 meta: RecordMeta(playerID: author.id, cell: tree.position.chunk), changesetID: UUID(),
                 kind: .trunkMeasured(
                     treeID: tree.id, dbh: DBH(diameter: Quantity(0.3, uncertainty: 0.01), method: .lidarCircleFit),

@@ -21,7 +21,7 @@ public struct CensusState: Hashable, Sendable {
 
     public static func derive(
         base: [Tree],
-        observations: [Observation],
+        observations: [FieldObservation],
         changesetStates: [UUID: Changeset.State]
     ) -> CensusState {
         let baseState = CensusState(trees: base)
@@ -59,7 +59,7 @@ public struct CensusState: Hashable, Sendable {
     }
 
     /// Applies one observation as if it were agreed. Observations about unknown entities are ignored.
-    public mutating func apply(_ observation: Observation) {
+    public mutating func apply(_ observation: FieldObservation) {
         switch observation.kind {
         case .treeConfirmed(let id):
             update(tree: id) { tree in
@@ -98,7 +98,7 @@ public struct CensusState: Hashable, Sendable {
         }
     }
 
-    public func applying(_ observation: Observation) -> CensusState {
+    public func applying(_ observation: FieldObservation) -> CensusState {
         var copy = self
         copy.apply(observation)
         return copy

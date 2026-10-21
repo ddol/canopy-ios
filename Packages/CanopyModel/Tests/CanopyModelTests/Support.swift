@@ -21,11 +21,11 @@ enum Sample {
     }
 
     static func observation(
-        _ kind: Observation.Kind, changeset: UUID? = UUID(), at point: GeoPoint = stowLake
+        _ kind: FieldObservation.Kind, changeset: UUID? = UUID(), at point: GeoPoint = stowLake
     )
-        -> Observation
+        -> FieldObservation
     {
-        Observation(meta: meta(point), changesetID: changeset, kind: kind)
+        FieldObservation(meta: meta(point), changesetID: changeset, kind: kind)
     }
 
     static let evidence = BlobRef(rawValue: String(repeating: "ab", count: 32))!

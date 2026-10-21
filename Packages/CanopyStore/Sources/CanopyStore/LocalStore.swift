@@ -50,7 +50,7 @@ public actor LocalStore {
     public func summary() -> CensusSummary { CensusSummary(trees: current.trees.values) }
 
     /// Every observation, oldest first.
-    public func observations() throws -> [Observation] {
+    public func observations() throws -> [FieldObservation] {
         try Self.observations(db)
     }
 
@@ -93,9 +93,9 @@ public actor LocalStore {
     /// Records an observation and the changeset that shares it, in one transaction.
     @discardableResult
     public func record(
-        _ kind: Observation.Kind, by player: PlayerID, at date: Date = .now
+        _ kind: FieldObservation.Kind, by player: PlayerID, at date: Date = .now
     ) throws
-        -> (observation: Observation, changeset: Changeset)
+        -> (observation: FieldObservation, changeset: Changeset)
     {
         let subject = kind.subject
         let chunk: S2CellID
@@ -108,7 +108,7 @@ public actor LocalStore {
             guard let tree = current.trees[id] else { throw LocalStoreError.unknownSubject(subject.id) }
             chunk = tree.position.chunk
         }
-        let observation = Observation(
+        let observation = FieldObservation(
             meta: RecordMeta(createdAt: date, playerID: player, cell: chunk),
             changesetID: UUID(),
             kind: kind
@@ -211,9 +211,9 @@ public actor LocalStore {
         return CensusState.derive(base: base, observations: try observations(db), changesetStates: changesetStates)
     }
 
-    private static func observations(_ db: SQLiteDatabase) throws -> [Observation] {
+    private static func observations(_ db: SQLiteDatabase) throws -> [FieldObservation] {
         try db.query("SELECT payload FROM observations ORDER BY seq") { row in
-            try CanopyJSON.decoder.decode(Observation.self, from: Data(row.string(0).utf8))
+            try CanopyJSON.decoder.decode(FieldObservation.self, from: Data(row.string(0).utf8))
         }
     }
 
@@ -248,7 +248,7 @@ public actor LocalStore {
         }
     }
 
-    private static func insert(_ observation: Observation, in db: SQLiteDatabase) throws {
+    private static func insert(_ observation: FieldObservation, in db: SQLiteDatabase) throws {
         try db.run(
             """
             INSERT INTO observations (id, created_at, player_id, cell, version, kind, subject_id, changeset_id, payload)

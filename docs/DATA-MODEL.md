@@ -104,8 +104,10 @@ The GLB holds vertex positions and triangle indices only: no normals, colours, t
 
 ## Observations
 
-An `Observation` is something a player saw or did. Observations are **append-only**: the store never updates
-or deletes one. Each has a `RecordMeta`, the id of the changeset that shares it, and a `kind`:
+A `FieldObservation` is something a player saw or did. (It is not called `Observation` because that name
+belongs to Apple's Observation framework, which `@Observable` expands into.) Observations are
+**append-only**: the store never updates or deletes one. Each has a `RecordMeta`, the id of the changeset that
+shares it, and a `kind`:
 
 | Kind | From |
 |---|---|
