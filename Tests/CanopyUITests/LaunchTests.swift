@@ -55,6 +55,23 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
+    func testTaggingATreeCreatesAProposedTag() {
+        let app = launch()
+        let tree = app.descendants(matching: .any)["tree-17174592-BB4C-47D2-B2B8-FE45CFF2DFB5"].firstMatch
+        XCTAssertTrue(tree.waitForExistence(timeout: 15))
+        tree.tap()
+        let tagButton = app.buttons["Tag a limb hazard"].firstMatch
+        XCTAssertTrue(tagButton.waitForExistence(timeout: 10))
+        tagButton.tap()
+        let save = app.buttons["Save tag"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        save.tap()
+        let saved = app.descendants(matching: .any)["tag-saved"].firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 10))
+        XCTAssertTrue(saved.label.contains("Proposed"), saved.label)
+    }
+
+    @MainActor
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing"]

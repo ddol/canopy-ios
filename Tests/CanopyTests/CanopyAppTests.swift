@@ -78,6 +78,27 @@ import Testing
         #expect(model.error == nil)
     }
 
+    @Test func placingATagMakesAProposedTagAndAPendingChangeset() async throws {
+        let model = try makeModel()
+        await model.load()
+        let tree = try #require(model.census.trees.values.first)
+        let tag = try #require(
+            await model.placeTag(
+                on: tree,
+                point: Tag.Point(position: tree.position, heightAboveGround: Quantity(6, uncertainty: 1)),
+                issue: .hanger, couldHit: .path, sizeClass: .large, urgency: .high,
+                evidence: AppModel.LimbEvidence(glb: Data("limb".utf8), vertexCount: 3, triangleCount: 1, cropRadius: 1)
+            ))
+        #expect(tag.status == .proposed)
+        #expect(tag.evidenceRef != nil)
+        #expect(model.tags(on: tree).map(\.id) == [tag.id])
+        let changeset = try #require(model.changesets.last)
+        #expect(changeset.state == .pending)
+        #expect(changeset.ops.map(\.entity) == [.tag])
+        #expect(changeset.ops.first?.fields["evidenceRef"] == .string(tag.evidenceRef!.rawValue))
+        #expect(try await model.store.evidence(about: tag.id).first?.kind == .limbScan)
+    }
+
     @Test func taggingFromATreeSwitchesToTheTagTab() async throws {
         let model = try makeModel()
         await model.load()
