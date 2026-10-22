@@ -47,7 +47,10 @@ targets:
         type: folder
         buildPhase: resources
     entitlements:
+      # XcodeGen writes this file from the properties below on every generate; edit them here, not the file.
       path: App/Canopy.entitlements
+      properties:
+        com.apple.developer.game-center: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(CANOPY_BUNDLE_ID)
