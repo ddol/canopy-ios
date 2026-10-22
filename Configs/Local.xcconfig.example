@@ -1,0 +1,7 @@
+// Copy this file to Configs/Local.xcconfig (git-ignored) to run Canopy on a device.
+
+// Your Apple Developer team id, from developer.apple.com → Membership.
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Uncomment if io.github.ddol.canopy is registered to another team.
+// CANOPY_BUNDLE_ID = com.example.canopy

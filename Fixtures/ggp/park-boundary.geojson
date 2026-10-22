@@ -1,0 +1,62 @@
+{
+  "description" : "Hand-traced from the bounding streets for development; accurate to about 50 m. Not an official boundary.",
+  "features" : [
+    {
+      "geometry" : {
+        "coordinates" : [
+          [
+            [
+              -122.5112,
+              37.7722
+            ],
+            [
+              -122.5098,
+              37.7638
+            ],
+            [
+              -122.4588,
+              37.766
+            ],
+            [
+              -122.4531,
+              37.7663
+            ],
+            [
+              -122.4532,
+              37.7716
+            ],
+            [
+              -122.4431,
+              37.7726
+            ],
+            [
+              -122.4429,
+              37.7735
+            ],
+            [
+              -122.4533,
+              37.7725
+            ],
+            [
+              -122.4543,
+              37.775
+            ],
+            [
+              -122.5112,
+              37.7722
+            ]
+          ]
+        ],
+        "type" : "Polygon"
+      },
+      "id" : "golden-gate-park",
+      "properties" : {
+        "approximate" : true,
+        "name" : "Golden Gate Park"
+      },
+      "type" : "Feature"
+    }
+  ],
+  "name" : "Golden Gate Park (approximate outline)",
+  "type" : "FeatureCollection"
+}
