@@ -24,6 +24,15 @@ struct MeScreen: View {
             }
             .navigationTitle("Me")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        SettingsScreen()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                }
+            }
             .sheet(isPresented: signInPresented) {
                 if let controller = model.players.signInViewController {
                     ViewControllerHost(controller: controller)
@@ -140,10 +149,21 @@ struct MeScreen: View {
             } else {
                 Text("Not synced yet").foregroundStyle(Color.canopyInkMuted)
             }
+            NavigationLink {
+                SettingsScreen()
+            } label: {
+                LabeledContent("Gerardus server") {
+                    Text(verbatim: model.serverSettings.endpoint?.hostAndPort ?? "Not set")
+                        .font(CanopyFont.mono(.subheadline))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .accessibilityIdentifier("server-row")
         } header: {
             Text("Sync")
         } footer: {
-            Text("Milestone 0 syncs with a simulated server on this device. Nothing is sent over the network.")
+            Text("Sync uses a simulated server on this device; changes are not sent over the network yet.")
         }
     }
 

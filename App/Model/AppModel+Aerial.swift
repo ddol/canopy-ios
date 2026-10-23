@@ -17,16 +17,17 @@ enum AerialProgress: Equatable {
 
 /// Real tree candidates and scan registration from a Gerardus align server.
 extension AppModel {
-    /// The user-defaults key holding the server URL (set on the Settings screen).
-    static let gerardusURLKey = "canopy.gerardusURL"
-    static let defaultGerardusURL = URL(string: "http://hydra.local:50061")!
     static let attributionKey = "canopy.aerialAttribution"
 
-    var gerardusURL: URL {
-        UserDefaults.standard.string(forKey: Self.gerardusURLKey).flatMap(URL.init(string:)) ?? Self.defaultGerardusURL
-    }
+    /// The Gerardus server set in Me → Settings; nil until one is set.
+    var gerardusURL: URL? { serverSettings.endpoint?.url }
 
-    var alignClient: AlignClient { AlignClient(baseURL: gerardusURL) }
+    var alignClient: AlignClient? { gerardusURL.map { AlignClient(baseURL: $0) } }
+
+    /// Thrown, or shown, when something needs the server and none is set.
+    struct NoServerSet: LocalizedError {
+        var errorDescription: String? { "Set the Gerardus server in Me → Settings." }
+    }
 
     /// Credits for the aerial data on the map; empty while only the synthetic sample is loaded.
     var aerialAttribution: [String] {
@@ -37,9 +38,12 @@ extension AppModel {
     /// Replaces the candidates in the 9 L16 tiles around `point` with the trees found in 3DEP there.
     func loadAerialTrees(around point: GeoPoint) async {
         guard !aerial.isWorking else { return }
-        aerial = .working("Asking \(gerardusURL.host() ?? "the server")…")
+        guard let client = alignClient, let host = gerardusURL?.host() else {
+            aerial = .failed(NoServerSet().errorDescription!)
+            return
+        }
+        aerial = .working("Asking \(host)…")
         let tile = point.tile
-        let client = alignClient
         do {
             let result = try await AerialTrees.load(tile: tile, label: "canopy-ggp", client: client) { stage in
                 Task { @MainActor [weak self] in
@@ -99,7 +103,7 @@ extension AppModel {
         arkitPoints: [SIMD3<Float>], gps: GeoPoint, camera: SIMD3<Float>, groundBelowOrigin: Float?,
         northAligned: Bool, progress: @escaping @MainActor (String) -> Void
     ) async throws -> RegistrationOutcome {
-        let client = alignClient
+        guard let client = alignClient else { throw NoServerSet() }
         progress("Thinning the scan…")
         let points = await Task.detached { ScanRegistration.scanPoints(fromARKit: arkitPoints) }.value
         guard points.count >= 2000 else { throw RegistrationFailure.tooFewPoints(points.count) }

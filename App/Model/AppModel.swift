@@ -38,14 +38,20 @@ final class AppModel {
     let players: PlayerService
     /// The Gerardus server stand-in. In memory: it forgets everything when the app quits.
     private(set) var server: FakeGerardusClient
+    /// The real Gerardus server's address, set in Settings.
+    let serverSettings: ServerSettings
 
     /// Who records are attributed to: the Game Center player once signed in, the local id before.
     var player: Player { players.player }
 
-    init(store: LocalStore, players: PlayerService, server: FakeGerardusClient = FakeGerardusClient()) {
+    init(
+        store: LocalStore, players: PlayerService, server: FakeGerardusClient = FakeGerardusClient(),
+        serverSettings: ServerSettings = .volatile()
+    ) {
         self.store = store
         self.players = players
         self.server = server
+        self.serverSettings = serverSettings
     }
 
     convenience init(store: LocalStore, player: Player) {
@@ -62,10 +68,12 @@ final class AppModel {
             }
             let support = try FileManager.default.url(
                 for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            return AppModel(store: try LocalStore(directory: support.appending(path: "Canopy")), players: players)
+            return AppModel(
+                store: try LocalStore(directory: support.appending(path: "Canopy")), players: players,
+                serverSettings: ServerSettings())
         } catch {
             // Fall back to memory so the app still opens, and say why.
-            let model = AppModel(store: try! LocalStore.inMemory(), players: players)
+            let model = AppModel(store: try! LocalStore.inMemory(), players: players, serverSettings: ServerSettings())
             model.error = "Could not open local data: \(error.localizedDescription)"
             return model
         }

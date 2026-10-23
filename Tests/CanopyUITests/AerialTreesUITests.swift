@@ -1,7 +1,7 @@
 import XCTest
 
 /// Loads real trees from a Gerardus align server through the app. Opt in by passing the server to the test runner:
-/// `TEST_RUNNER_CANOPY_GERARDUS_URL=http://192.168.10.14:50061 scripts/test.sh -only-testing:CanopyUITests/AerialTreesUITests`.
+/// `TEST_RUNNER_CANOPY_GERARDUS_URL=http://gerardus.local:50061 scripts/test.sh -only-testing:CanopyUITests/AerialTreesUITests`.
 final class AerialTreesUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false

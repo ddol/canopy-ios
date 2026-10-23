@@ -32,6 +32,7 @@ send, so you can check it against the code.
 | Changesets | The changes you propose for the shared map, with their state (pending, approved, applied, rejected, conflicted). | Same database |
 | Evidence | Cropped, colourless meshes as GLB files, named by their SHA-256 hash: trunk scans (the trunk plus 0.6 m around it, at most 2 m from its centre) and limb scans (1 m around the limb point). | `blobs/` folder in Application Support |
 | Local player id | A random `local:<uuid>` used for records made before (or without) Game Center sign-in. | User defaults |
+| Gerardus server address | The address you typed in **Me → Settings** (`canopy.gerardusURL`). | User defaults |
 
 The data is protected by iOS file protection. **Me → Reset local data** (debug builds) deletes all of it.
 Debug builds can also share a scan's GLB file or preview it; that only happens when you tap Share or Preview.
@@ -40,8 +41,12 @@ Deleting the app deletes all of it too.
 ## Gerardus align server
 
 Canopy can use a Gerardus align server on your network (Map → Layers → **Load real trees here**, and Census →
-**Register with 3DEP**). The server address is a setting; iOS asks for Local Network permission the first time.
+**Register with 3DEP**). You set its address in **Me → Settings**; until you do, the app contacts no server. iOS
+asks for Local Network permission the first time.
 
+- **Testing the connection** (Me → Settings → **Test connection**) sends one `GET /` and shows what the server
+  answers (its version, commit, uptime and reference layers). The request carries no player id, alias, location
+  or record, and the app keeps only the address, not the answer.
 - **Loading real trees** sends the S2 tile you are looking at and downloads public data for it (USGS 3DEP aerial
   LiDAR, OpenStreetMap, DataSF footprints). Nothing about you is sent.
 - **Registering a scan** happens only when you tap Register and confirm. It uploads the colourless mesh the AR
@@ -50,6 +55,10 @@ Canopy can use a Gerardus align server on your network (Map → Layers → **Loa
   tree, and anyone nearby is in it as a shape, so register when nobody is close. The scan is stored on that server
   under a random sensor id and capture reference, with no player id. The server keeps the scan and the registration
   run.
+
+In every case the server also sees the network address the request comes from. Plain `http://` is allowed only to
+`.local` names, IP addresses and tailnet (`*.ts.net`) hosts; Tailscale encrypts tailnet traffic between devices.
+Any other server must use HTTPS.
 
 ## What will be synced (not yet)
 

@@ -67,7 +67,8 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
-        # Keys the build settings cannot express (App Transport Security), merged with the generated ones.
+        # Keys the build settings cannot express (App Transport Security for Gerardus servers on the local network
+        # or a tailnet, and the Local Network usage string), merged with the generated ones.
         INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Canopy
         # Canopy uses no encryption beyond what iOS provides (SHA-256 hashing only), so TestFlight and App Store

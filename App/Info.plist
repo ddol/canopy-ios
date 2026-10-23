@@ -1,12 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged with the keys Xcode generates from the INFOPLIST_KEY_ settings in project.yml. Only what has no build
+  setting lives here.
+
+  App Transport Security: the Gerardus align server runs on plain HTTP (gRPC over HTTP/1.1, port 50061). Canopy
+  allows that only for local names (.local, unqualified) and for hosts on a Tailscale tailnet (*.ts.net), whose
+  names resolve only inside the tailnet and whose traffic WireGuard already encrypts. Every other host needs HTTPS.
+-->
 <plist version="1.0">
 <dict>
-	<!-- The Gerardus align server runs on the local network over plain HTTP (gRPC over HTTP/1.1). -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Canopy connects to a Gerardus map server on your network for aerial LiDAR trees and to register your scans. Only colourless geometry is sent, never photos.</string>

@@ -71,8 +71,9 @@ final class LaunchTests: XCTestCase {
         let save = app.navigationBars.buttons["Save"].firstMatch
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         save.tap()
-        let saved = app.descendants(matching: .any)["tag-saved"].firstMatch
-        XCTAssertTrue(saved.waitForExistence(timeout: 10))
+        // A typed query: matching any element type snapshots the whole tree, which can time out on CI runners.
+        let saved = app.staticTexts["tag-saved"].firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 30))
         XCTAssertTrue(saved.label.contains("Proposed"), saved.label)
     }
 
@@ -105,6 +106,70 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(text(app, "Pending changes (0)").waitForExistence(timeout: 10))
     }
 
+    @MainActor
+    func testSettingsChecksTheServerAddressAndTestsTheConnection() {
+        let app = launch()
+        app.buttons["Me"].firstMatch.tap()
+        let settings = app.navigationBars.buttons["Settings"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+
+        let address = app.textFields["server-address"].firstMatch
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap()
+        address.typeText("http://host/path")
+        let testButton = app.buttons["Test connection"].firstMatch
+        XCTAssertFalse(testButton.isEnabled)
+
+        // Nothing listens on the discard port, so the test fails fast, and plain http to an IP address passes
+        // App Transport Security.
+        address.clearText()
+        address.typeText("127.0.0.1:9")
+        XCTAssertTrue(testButton.isEnabled)
+        testButton.tap()
+        let status = app.descendants(matching: .any)["connection-status"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 20))
+        XCTAssertTrue(status.label.contains("Not connected"), status.label)
+        let error = app.staticTexts["connection-error"].firstMatch
+        XCTAssertTrue(error.label.contains("127.0.0.1:9"), error.label)
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let row = app.descendants(matching: .any)["server-row"].firstMatch
+        scroll(app, toReveal: row)
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(row.label.contains("127.0.0.1:9"), row.label)
+    }
+
+    /// Against a real Gerardus server, when one is given:
+    /// `TEST_RUNNER_CANOPY_GERARDUS_URL=gerardus.local:50061 scripts/test.sh -only-testing:CanopyUITests`.
+    @MainActor
+    func testConnectingToARealServerShowsItsStatus() throws {
+        guard let server = ProcessInfo.processInfo.environment["CANOPY_GERARDUS_URL"], !server.isEmpty else {
+            throw XCTSkip("no Gerardus server given")
+        }
+        let app = launch()
+        app.buttons["Me"].firstMatch.tap()
+        let settings = app.navigationBars.buttons["Settings"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+        let address = app.textFields["server-address"].firstMatch
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap()
+        address.typeText(server)
+        app.buttons["Test connection"].firstMatch.tap()
+
+        let status = app.descendants(matching: .any)["connection-status"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 20))
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Settings connected"
+        shot.lifetime = .keepAlways
+        add(shot)
+        XCTAssertTrue(status.label.contains("Connected"), status.label)
+        for label in ["Server version", "Commit", "Uptime", "Round trip"] {
+            XCTAssertTrue(text(app, label).exists, "missing \(label)")
+        }
+    }
+
     /// A static text matched without regard to case (iOS 18 upper-cases list section headers).
     @MainActor
     private func text(_ app: XCUIApplication, _ label: String) -> XCUIElement {
@@ -125,5 +190,13 @@ final class LaunchTests: XCTestCase {
         app.launchArguments = ["-ui-testing"]
         app.launch()
         return app
+    }
+}
+
+extension XCUIElement {
+    /// Deletes the text in a focused text field.
+    func clearText() {
+        guard let text = value as? String, !text.isEmpty else { return }
+        typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: text.count))
     }
 }

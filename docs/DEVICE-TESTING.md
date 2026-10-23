@@ -92,9 +92,15 @@ The Milestone 0 walkthrough:
 Location needs to be allowed for the Census and Tag tabs; the camera permission is only for ARKit (no photos are
 taken).
 
-## Reaching services on a tailnet
+## Pointing the app at a Gerardus server
 
-If a test build talks to a server on a Tailscale tailnet (for example a LiDAR data service), the phone needs the
-Tailscale app signed in to the same tailnet. iOS blocks plain `http://` to non-local hosts, so serve it over
-HTTPS (`tailscale serve` on the server gives it a valid `*.ts.net` certificate) rather than adding an App
-Transport Security exception.
+Set the server in **Me → Settings** (the gear, or the Gerardus server row under Sync): a host and port such as
+`gerardus.local:50061`, or a full `http://` or `https://` address without a path. Without a scheme the app uses
+`http://` and, without a port, Gerardus's 50061. **Test connection** reads the server's status page (`GET /`)
+and shows its version, commit, API version, uptime, start time, round trip, whether it accepts scans and its
+reference layers.
+
+App Transport Security (`App/Info.plist`) allows plain `http://` only to local names (`.local`, unqualified),
+IP addresses and Tailscale hosts (`*.ts.net`); any other host needs HTTPS. For a server on a tailnet, the phone
+needs the Tailscale app signed in to the same tailnet; a name it can't find usually means Tailscale is off.
+The first connection to a server on the local network asks for Local Network access.

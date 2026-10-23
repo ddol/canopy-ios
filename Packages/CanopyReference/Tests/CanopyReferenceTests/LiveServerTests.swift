@@ -5,7 +5,7 @@ import Testing
 @testable import CanopyReference
 
 /// Tests against a real Gerardus align server. Opt in with CANOPY_GERARDUS_URL, e.g.
-/// `CANOPY_GERARDUS_URL=http://hydra.local:50061 swift test`. They prepare the Stow Lake site if needed.
+/// `CANOPY_GERARDUS_URL=http://gerardus.local:50061 swift test`. They prepare the Stow Lake site if needed.
 enum Live {
     static let url = ProcessInfo.processInfo.environment["CANOPY_GERARDUS_URL"].flatMap(URL.init(string:))
     static var enabled: Bool { url != nil }

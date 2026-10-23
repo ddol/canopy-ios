@@ -56,8 +56,9 @@ struct LiDARCensusView: View {
         } message: {
             Text(
                 "Uploads the colourless 3D mesh around you (up to 60 m, geometry only, no photos) to "
-                    + "\(model.gerardusURL.host() ?? "the Gerardus server") and matches it to USGS 3DEP aerial "
-                    + "LiDAR, so trees you add or measure land within a few centimetres instead of GPS metres.")
+                    + "\(model.gerardusURL?.host() ?? "the Gerardus server set in Me → Settings") and matches it "
+                    + "to USGS 3DEP aerial LiDAR, so trees you add or measure land within a few centimetres "
+                    + "instead of GPS metres.")
         }
         // The AR session pauses under the result sheet (Quick Look's AR mode needs the camera) and resumes, with
         // the mesh and the scan, when the sheet closes.
