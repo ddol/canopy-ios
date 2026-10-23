@@ -77,6 +77,7 @@ project by editing `project.yml` and re-running `scripts/bootstrap.sh`.
 
 ```
 project.yml          XcodeGen spec: app target Canopy, unit and UI test targets
+Makefile             make version, make bump-version (0.1.0 → 0.1.1, 0.1.1-pre2 → 0.1.1-pre3)
 App/                 SwiftUI app: CanopyApp, tab shell (Map · Census · Tag · Me), screens
 Packages/
   CanopyDesign/      design tokens and base components

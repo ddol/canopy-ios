@@ -25,6 +25,9 @@
 			</dict>
 		</dict>
 	</dict>
+	<!-- The full version, which may be a pre-release (Configs/Version.xcconfig). -->
+	<key>CanopyVersion</key>
+	<string>$(CANOPY_VERSION)</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Canopy connects to a Gerardus map server on your network for aerial LiDAR trees and to register your scans. Only colourless geometry is sent, never photos.</string>
 </dict>

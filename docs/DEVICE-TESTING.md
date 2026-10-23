@@ -56,7 +56,11 @@ Blobs are named by their SHA-256 under `blobs/`; add `.glb` to open one in a glT
    App: platform iOS, a name (it must be unique on the App Store, for example "Canopy Tree Census"; the name
    under the icon stays "Canopy"), bundle id `io.github.ddol.canopy` (it is in the list after the first signed
    build, or register it under Certificates, Identifiers & Profiles), and any SKU such as `canopy-ios`.
-2. **Upload a build:**
+2. **Set the version** when a release needs a new one. The version lives in `Configs/Version.xcconfig`;
+   `make bump-version` moves it on by one (`0.1.0` → `0.1.1`, `0.2.13` → `0.2.14`, and a pre-release
+   `0.1.1-pre2` → `0.1.1-pre3`), and `make version` prints it. App Store Connect accepts only numbers, so a
+   pre-release uploads under its release number (`0.1.1-pre3` as `0.1.1`); the Me tab shows the full version.
+3. **Upload a build:**
 
    ```sh
    scripts/testflight.sh
@@ -64,7 +68,7 @@ Blobs are named by their SHA-256 under `blobs/`; add `.glb` to open one in a glT
 
    It archives a Release build numbered from the current UTC time (for example `20261021.1507`, so every upload
    is newer than the last) and uploads it. `UPLOAD=0` stops after exporting an `.ipa`.
-3. **Add testers.** After processing (usually 5 to 30 minutes), the build appears under TestFlight. Internal
+4. **Add testers.** After processing (usually 5 to 30 minutes), the build appears under TestFlight. Internal
    testers (people on your App Store Connect team) can install it straight away; external testers need a short
    beta review first.
 
