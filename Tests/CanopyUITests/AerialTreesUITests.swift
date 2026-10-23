@@ -15,7 +15,7 @@ final class AerialTreesUITests: XCTestCase {
         // The argument domain overrides the app's server setting for this launch.
         app.launchArguments = ["-ui-testing", "-canopy.gerardusURL", server]
         app.launch()
-        XCTAssertTrue(app.descendants(matching: .any)["Estimated: 200"].firstMatch.waitForExistence(timeout: 90))
+        XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: 90))
 
         app.buttons["Layers"].firstMatch.tap()
         let load = app.buttons["Load real trees here"].firstMatch

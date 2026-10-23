@@ -1,5 +1,7 @@
 import XCTest
 
+/// Queries name the element type (`app.staticTexts`, `app.otherElements`, `app.buttons`): matching any type
+/// snapshots every element on screen, which times out on CI runners while the map shows 200 trees.
 final class LaunchTests: XCTestCase {
     /// The first query against the map snapshots all 200 tree annotations, which takes 15 s or more on CI runners.
     let mapTimeout: TimeInterval = 90
@@ -23,10 +25,10 @@ final class LaunchTests: XCTestCase {
     @MainActor
     func testMapShowsTheSummaryOfTheFixtureCandidates() {
         let app = launch()
-        XCTAssertTrue(app.descendants(matching: .any)["summary-bar"].firstMatch.waitForExistence(timeout: mapTimeout))
+        XCTAssertTrue(app.otherElements["summary-bar"].firstMatch.waitForExistence(timeout: mapTimeout))
         XCTAssertTrue(
-            app.descendants(matching: .any)["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
-        XCTAssertTrue(app.descendants(matching: .any)["Confirmed: 0"].firstMatch.exists)
+            app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
+        XCTAssertTrue(app.otherElements["Confirmed: 0"].firstMatch.exists)
     }
 
     @MainActor
@@ -44,9 +46,9 @@ final class LaunchTests: XCTestCase {
         }
         XCTAssertTrue(opened)
         confirm.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["Proposed"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Proposed"].firstMatch.waitForExistence(timeout: 10))
         app.buttons["Done"].firstMatch.tap()
-        let coverage = app.descendants(matching: .any)["Coverage: 0.5\u{202F}%"].firstMatch
+        let coverage = app.otherElements["Coverage: 0.5\u{202F}%"].firstMatch
         XCTAssertTrue(coverage.waitForExistence(timeout: 10))
     }
 
@@ -55,7 +57,7 @@ final class LaunchTests: XCTestCase {
         // The simulator has no LiDAR, so Census offers the verification list.
         let app = launch()
         app.buttons["Census"].firstMatch.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["no-lidar-message"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["no-lidar-message"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["New tree at my location"].firstMatch.exists)
     }
 
@@ -71,7 +73,6 @@ final class LaunchTests: XCTestCase {
         let save = app.navigationBars.buttons["Save"].firstMatch
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         save.tap()
-        // A typed query: matching any element type snapshots the whole tree, which can time out on CI runners.
         let saved = app.staticTexts["tag-saved"].firstMatch
         XCTAssertTrue(saved.waitForExistence(timeout: 30))
         XCTAssertTrue(saved.label.contains("Proposed"), saved.label)
@@ -86,19 +87,19 @@ final class LaunchTests: XCTestCase {
         confirm.tap()
 
         app.buttons["Me"].firstMatch.tap()
-        let row = app.descendants(matching: .any)["changeset-row"].firstMatch
+        let row = app.staticTexts["changeset-row"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         XCTAssertTrue(row.label.contains("Confirm tree"), row.label)
         XCTAssertTrue(row.label.contains("Pending"), row.label)
 
         app.buttons["Sync now"].firstMatch.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["sync-submitted"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["sync-submitted"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(text(app, "Pending changes (1)").exists)
 
         let approve = app.buttons["Simulate trusted approval"].firstMatch
         scroll(app, toReveal: approve)
         approve.tap()
-        let applied = app.descendants(matching: .any)["On the map"].firstMatch
+        let applied = app.staticTexts["On the map"].firstMatch
         scroll(app, toReveal: applied)
         XCTAssertTrue(applied.waitForExistence(timeout: 10))
         app.swipeDown()
@@ -127,14 +128,14 @@ final class LaunchTests: XCTestCase {
         address.typeText("127.0.0.1:9")
         XCTAssertTrue(testButton.isEnabled)
         testButton.tap()
-        let status = app.descendants(matching: .any)["connection-status"].firstMatch
+        let status = app.staticTexts["connection-status"].firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 20))
         XCTAssertTrue(status.label.contains("Not connected"), status.label)
         let error = app.staticTexts["connection-error"].firstMatch
         XCTAssertTrue(error.label.contains("127.0.0.1:9"), error.label)
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let row = app.descendants(matching: .any)["server-row"].firstMatch
+        let row = app.buttons["server-row"].firstMatch
         scroll(app, toReveal: row)
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         XCTAssertTrue(row.label.contains("127.0.0.1:9"), row.label)
@@ -158,7 +159,7 @@ final class LaunchTests: XCTestCase {
         address.typeText(server)
         app.buttons["Test connection"].firstMatch.tap()
 
-        let status = app.descendants(matching: .any)["connection-status"].firstMatch
+        let status = app.staticTexts["connection-status"].firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 20))
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "Settings connected"
