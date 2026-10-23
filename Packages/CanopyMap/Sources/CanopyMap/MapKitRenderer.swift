@@ -30,8 +30,8 @@ struct MapKitMap: View {
                     .foregroundStyle(Color.canopyBrand.opacity(0.06))
                     .stroke(Color.canopyBrand.opacity(0.5), lineWidth: 1.5)
             }
-            ForEach(layers.cells) { cell in
-                MapPolygon(coordinates: cell.corners.map(CLLocationCoordinate2D.init))
+            ForEach(layers.tiles) { tile in
+                MapPolygon(coordinates: tile.corners.map(CLLocationCoordinate2D.init))
                     .foregroundStyle(.clear)
                     .stroke(Color.canopyLineStrong, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
             }

@@ -30,7 +30,7 @@ send, so you can check it against the code.
 | Observations | What you did (confirmed a tree, measured a trunk, tagged a limb), when, where (S2 cell and position), and your player id. Append-only. | SQLite database in the app's Application Support folder |
 | Current state | Trees and tags derived from the observations. | Same database |
 | Changesets | The changes you propose for the shared map, with their state (pending, approved, applied, rejected, conflicted). | Same database |
-| Evidence | Cropped, colourless meshes as GLB files, named by their SHA-256 hash: trunk scans (1.5 m around the trunk) and limb scans (1 m around the limb point). | `blobs/` folder in Application Support |
+| Evidence | Cropped, colourless meshes as GLB files, named by their SHA-256 hash: trunk scans (the trunk plus 0.6 m around it, at most 2 m from its centre) and limb scans (1 m around the limb point). | `blobs/` folder in Application Support |
 | Local player id | A random `local:<uuid>` used for records made before (or without) Game Center sign-in. | User defaults |
 
 The data is protected by iOS file protection. **Me → Reset local data** (debug builds) deletes all of it.

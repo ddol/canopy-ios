@@ -206,7 +206,7 @@ struct ChangesetRow: View {
             HStack(spacing: Spacing.xs) {
                 Text(changeset.meta.createdAt, style: .relative)
                 Text("·")
-                Text(changeset.cells.map(\.token).joined(separator: " "))
+                Text(verbatim: changeset.tiles.map(\.familyDisplay).joined(separator: " "))
                     .font(CanopyFont.mono(.caption))
                 if !changeset.approvals.isEmpty {
                     Text("·")

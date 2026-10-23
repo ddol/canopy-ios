@@ -17,7 +17,7 @@ enum Sample {
     }
 
     static func meta(_ point: GeoPoint = stowLake, player: PlayerID = player) -> RecordMeta {
-        RecordMeta(createdAt: date, playerID: player, cell: point.chunk)
+        RecordMeta(createdAt: date, playerID: player, chunk: point.chunk)
     }
 
     static func observation(

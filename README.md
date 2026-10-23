@@ -3,10 +3,10 @@
 🌲 Canopy is a shared, living census of every tree in Golden Gate Park, San Francisco.
 
 Players walk the park with an iPhone or iPad. They confirm trees that aerial LiDAR detected, measure
-trunks (diameter at breast height, 1.37 m, and lean), tag limb hazards in 3D, and label routes. A change
+trunks (diameter 1.37 m above the ground, and lean), tag limb hazards in 3D, and label routes. A change
 reaches the shared map only when two players agree and at least one of them is trusted.
 
-Canopy is the second app built on **Gerardus**, an open map spec: S2 level‑16 tiles and level‑19 chunks,
+Canopy is the second app built on **Gerardus**, an open map spec: S2 L16 tiles and L19 chunks,
 immutable evidence, and changesets. The Gerardus Rust core and server do not exist yet; this app talks to
 them through Swift protocols with in‑memory fakes so the real implementations can be swapped in later.
 
@@ -17,8 +17,8 @@ them through Swift protocols with in‑memory fakes so the real implementations 
 
 | Tab | |
 |---|---|
-| **Map** | The park with 200 synthetic aerial candidates: faint dot = detected, dashed ring = proposed, ring = confirmed, solid = verified. Summary bar (Confirmed · Estimated · Coverage), layer toggles (including S2 level-16 tiles), and a tree sheet with Confirm / Not a tree / Tag. |
-| **Census** | With LiDAR: an AR view with the reconstructed mesh, Confirm tree, Not a tree, New tree here, and **Measure trunk** (DBH at 1.37 m with ±, lean, a cropped GLB mesh saved as evidence). Without LiDAR: a verification list of nearby trees. |
+| **Map** | The park with 200 synthetic aerial candidates: faint dot = detected, dashed ring = proposed, ring = confirmed, solid = verified. Summary bar (Confirmed · Estimated · Coverage), layer toggles (including S2 L16 tiles), and a tree sheet with Confirm / Not a tree / Tag. |
+| **Census** | With LiDAR: an AR view with the reconstructed mesh, Confirm tree, Not a tree, New tree here, and **Scan trunk**: walk round the trunk while the app keeps the most detailed mesh it sees, then get the diameter 1.37 m above the ground with ±, the lean, and the trunk's mesh saved as GLB evidence. Without LiDAR: a verification list of nearby trees. |
 | **Tag** | Pick a tree, place the limb point (on the LiDAR mesh within ~5 m, or by height), choose issue, what it could hit, size and urgency. Saved as a proposed tag. |
 | **Me** | Game Center sign-in (falls back to a local id), pending changes, sync with the simulated server, and debug tools: simulate a trusted approval, reset local data. |
 

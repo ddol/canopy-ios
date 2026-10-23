@@ -62,22 +62,52 @@ public struct Changeset: Identifiable, Hashable, Codable, Sendable {
         }
     }
 
-    /// `meta.id` is the client-generated changeset id; `meta.cell` is the chunk of the first op.
+    /// `meta.id` is the client-generated changeset id; `meta.chunk` is the L19 chunk of the first op.
     public var meta: RecordMeta
     public var ops: [ChangeOp]
-    /// The level-16 tiles the changeset touches, sorted.
-    public var cells: [S2CellID]
+    /// The L16 tiles the changeset touches, sorted. Serialised as canonical tokens under `s2_l16_tokens`.
+    public var tiles: [S2CellID]
     public var state: State
     public var approvals: [Approval]
 
     public init(
-        meta: RecordMeta, ops: [ChangeOp], cells: [S2CellID], state: State = .pending, approvals: [Approval] = []
+        meta: RecordMeta, ops: [ChangeOp], tiles: [S2CellID], state: State = .pending, approvals: [Approval] = []
     ) {
         self.meta = meta
         self.ops = ops
-        self.cells = cells
+        self.tiles = tiles
         self.state = state
         self.approvals = approvals
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case meta
+        case ops
+        case tiles = "s2_l16_tokens"
+        case state
+        case approvals
+        /// Before the S2 field names named their level (schema v1).
+        case legacyCells = "cells"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        meta = try container.decode(RecordMeta.self, forKey: .meta)
+        ops = try container.decode([ChangeOp].self, forKey: .ops)
+        tiles =
+            try container.decodeIfPresent([S2CellID].self, forKey: .tiles)
+            ?? container.decode([S2CellID].self, forKey: .legacyCells)
+        state = try container.decode(State.self, forKey: .state)
+        approvals = try container.decode([Approval].self, forKey: .approvals)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(meta, forKey: .meta)
+        try container.encode(ops, forKey: .ops)
+        try container.encode(tiles, forKey: .tiles)
+        try container.encode(state, forKey: .state)
+        try container.encode(approvals, forKey: .approvals)
     }
 
     public var id: UUID { meta.id }

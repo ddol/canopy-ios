@@ -62,9 +62,9 @@ public struct ChangesetBuilder: Sendable {
     public func build() throws -> Changeset {
         guard !ops.isEmpty, let firstChunk else { throw ChangesetBuilderError.empty }
         return Changeset(
-            meta: RecordMeta(id: id, createdAt: createdAt, playerID: author, cell: firstChunk),
+            meta: RecordMeta(id: id, createdAt: createdAt, playerID: author, chunk: firstChunk),
             ops: ops,
-            cells: tiles.sorted(),
+            tiles: tiles.sorted(),
             state: .pending
         )
     }
@@ -114,14 +114,14 @@ protocol SharedEntity: Encodable {
 
 extension SharedEntity {
     /// The entity's fields as JSON, without the record metadata (which the changeset carries) and without
-    /// local-only fields, plus the chunk it is in as `cell`.
+    /// local-only fields, plus the canonical token of its L19 chunk as `s2_l19_token`.
     func sharedFields() throws -> [String: JSONValue] {
         guard var object = try JSONValue(encoding: self).objectValue else { return [:] }
         object["meta"] = nil
         for key in Self.localOnlyKeys {
             object[key] = nil
         }
-        object["cell"] = .string(meta.cell.token)
+        object["s2_l19_token"] = .string(meta.chunk.token)
         return object
     }
 }

@@ -40,16 +40,22 @@ enum Synthetic {
     /// A LiDAR-like scan of one side of a trunk: a cylinder mesh of `radius`, visible over `visibleDegrees`
     /// facing −z (towards the scanner), leaning `leanDegrees` towards +x, standing on a flat ground patch at
     /// y = `ground`. Vertices get Gaussian noise.
+    /// - Parameters:
+    ///   - facingDegrees: direction (in the x–z plane, from +x towards +z) of the middle of the visible side;
+    ///     −90 faces −z.
+    ///   - spacing: vertical and around-the-trunk vertex spacing, in metres: larger is coarser.
+    ///   - includeGround: whether to add the flat ground grid.
     static func scannedTrunk(
         radius: Double, leanDegrees: Double, visibleDegrees: Double = 160, height: Double = 3,
-        ground: Double = 0, noise: Double = 0.003, seed: UInt64 = 1
+        ground: Double = 0, noise: Double = 0.003, seed: UInt64 = 1, facingDegrees: Double = -90,
+        spacing: Double = 0.03, includeGround: Bool = true
     ) -> Mesh {
         var random = SeededRandom(state: seed)
         var mesh = Mesh.empty
-        let rings = Int(height / 0.03)
-        let segments = 40
+        let rings = Int(height / spacing)
+        let segments = max(4, Int(visibleDegrees * .pi / 180 * radius / spacing))
         let tilt = tan(leanDegrees * .pi / 180)
-        let start = -.pi / 2 - visibleDegrees / 2 * .pi / 180
+        let start = (facingDegrees - visibleDegrees / 2) * .pi / 180
         for ring in 0...rings {
             let h = Double(ring) * height / Double(rings)
             for segment in 0...segments {
@@ -70,6 +76,7 @@ enum Synthetic {
                 mesh.indices += [a, c, b, b, c, d]
             }
         }
+        guard includeGround else { return mesh }
         // Ground: a flat grid around the trunk.
         var groundMesh = Mesh.empty
         let cells = 12

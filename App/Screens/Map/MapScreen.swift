@@ -60,7 +60,7 @@ struct MapScreen: View {
             Toggle("Detected candidates", systemImage: "scope", isOn: $visibility.detected)
             Toggle("Hazard tags", systemImage: "exclamationmark.triangle", isOn: $visibility.tags)
             Toggle("Routes", systemImage: "point.topleft.down.to.point.bottomright.curvepath", isOn: $visibility.routes)
-            Toggle("S2 tiles (level 16)", systemImage: "square.grid.3x3", isOn: $visibility.cells)
+            Toggle("S2 L16 tiles", systemImage: "square.grid.3x3", isOn: $visibility.tiles)
             Divider()
             Section("Legend") {
                 ForEach([CountStatus.detected, .proposed, .confirmed, .verified], id: \.self) { status in

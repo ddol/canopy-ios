@@ -60,7 +60,7 @@ everything on the simulator.
 - **Evidence is immutable and content-addressed.** A trunk or limb scan is cropped, written as GLB, stored
   under its SHA-256 and referenced by hash from observations and changesets.
 - **Sync is a boundary, not a feature yet.** `GerardusClient` is the whole contract with the future Rust
-  server: upload blobs, submit changesets, read their state, pull applied changes per level-16 tile. The fake
+  server: upload blobs, submit changesets, read their state, pull applied changes per L16 tile. The fake
   applies the real policy (two players agree, at least one trusted) so the rest of the app can be built and
   tested against it. The fake lives in memory: after a relaunch it has forgotten earlier submissions, and the
   next sync submits open changesets again.
@@ -72,12 +72,22 @@ supported) and `gravityAndHeading` alignment, so world +x is east and −z is no
 RealityKit's scene-understanding debug view. Camera frames stay inside ARKit; the app never reads
 `capturedImage`.
 
-**Measure trunk** raycasts through the screen centre against the mesh (within 6 m), snapshots the mesh anchors
-near the hit, crops a vertical cylinder (radius 1.5 m) centred on the hit, and runs `TrunkAnalysis` off the main
-actor:
+**Scan trunk** raycasts through the screen centre against the mesh (within 6 m) to find a point on the trunk,
+then keeps the scene around it while the player walks round. ARKit keeps refining its reconstruction: the side
+scanned first is re-meshed from further away and loses detail, and mesh anchors are merged or dropped. So, as
+mesh anchors update, a `MeshAccumulator` splits their triangles inside a vertical cylinder (radius 2 m, from 3 m
+below to 4 m above the start point) into 10 cm cells, in each anchor's own coordinates, and keeps for every cell
+the version with the most triangles it has seen: a coarser re-mesh never replaces finer detail, and cells missing
+from a later update are kept. Kept cells follow their anchor's latest transform, so ARKit's drift corrections move
+them too. Where anchors overlap, each cell of space comes from the anchor with the most triangles there, so
+surfaces are not doubled.
+
+About once a second the kept mesh is drawn in translucent lime over the camera view, and a quick fit reports how
+much of the trunk's circumference 1.37 m above the ground is covered (aim for 270° or more). **Finish scan** runs
+`TrunkAnalysis` on the kept mesh off the main actor:
 
 1. **Ground**: the median height of floor-classified faces under the trunk, else the lower quartile of
-   near-horizontal triangles within 1 m. On a slope this lands between the uphill and downhill sides rather
+   near-horizontal triangles within 1.5 m. On a slope this lands between the uphill and downhill sides rather
    than on the uphill side the DBH convention asks for; a Milestone 1 refinement.
 2. **DBH**: the mesh is sliced at five heights around 1.37 m (±4 cm); the edge intersections are pooled and fitted
    with a circle (algebraic start, Levenberg–Marquardt on orthogonal distances, outliers dropped). DBH is twice
@@ -87,9 +97,13 @@ actor:
 3. **Lean**: circles at 0.6 to 2.4 m give stem centres; a straight line through them gives the angle from
    vertical and, with north alignment, its direction.
 
-The cropped mesh (positions and indices only) is the evidence. A trunk's position on the map comes from the
-GPS fix plus the AR offset from the camera to the trunk (`GeoReference`), with the GPS accuracy as its
-uncertainty.
+The evidence is the kept mesh (positions and indices only) re-cropped around the fitted trunk centre: the trunk
+plus 0.6 m around it, at most 2 m. A trunk's position on the map comes from the GPS fix plus the AR offset from
+the camera to the trunk (`GeoReference`), with the GPS accuracy as its uncertainty.
+
+The AR session pauses while the measurement sheet is up (Quick Look's AR preview needs the camera) and resumes
+without resetting, so the mesh and the scan carry on; **Keep scanning** goes back to walking round and measuring
+again, and saving ends the scan.
 
 **Tag** places a limb point by raycasting against the mesh within 5 m; the height above ground uses the same
 ground estimate. Without LiDAR, the player enters the height and the point sits at the tree.

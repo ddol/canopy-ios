@@ -19,14 +19,14 @@ extension AppModel {
         urgency: Tag.Urgency, evidence: LimbEvidence?
     ) async -> Tag? {
         let tagID = UUID()
-        let cell = point.position.chunk
+        let chunk = point.position.chunk
         var evidenceRef: BlobRef?
         do {
             if let evidence {
                 let blob = try store.blobs.put(evidence.glb)
                 try await store.addEvidence(
                     Evidence(
-                        meta: RecordMeta(playerID: player.id, cell: cell),
+                        meta: RecordMeta(playerID: player.id, chunk: chunk),
                         blob: blob,
                         byteCount: evidence.glb.count,
                         kind: .limbScan,
@@ -44,7 +44,7 @@ extension AppModel {
             return nil
         }
         let tag = Tag(
-            meta: RecordMeta(id: tagID, playerID: player.id, cell: cell),
+            meta: RecordMeta(id: tagID, playerID: player.id, chunk: chunk),
             treeID: tree.id,
             point: point,
             issue: issue,

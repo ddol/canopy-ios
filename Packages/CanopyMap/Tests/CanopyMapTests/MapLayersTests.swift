@@ -34,23 +34,23 @@ import Testing
     @Test func layersCanBeHidden() {
         let trees = [tree(.detected, at: a), tree(.confirmed, at: b)]
         let tag = Tag(
-            meta: RecordMeta(playerID: .aerialSurvey, cell: b.chunk), treeID: trees[1].id,
+            meta: RecordMeta(playerID: .aerialSurvey, chunk: b.chunk), treeID: trees[1].id,
             point: Tag.Point(position: trees[1].position, heightAboveGround: Quantity(5, uncertainty: 0.5)),
             issue: .hanger, couldHit: .path, sizeClass: .large, urgency: .immediate)
         let state = CensusState(trees: trees, tags: [tag])
 
-        let all = MapLayers(state: state, visibility: .init(detected: true, tags: true, routes: true, cells: true))
+        let all = MapLayers(state: state, visibility: .init(detected: true, tags: true, routes: true, tiles: true))
         #expect(all.trees.count == 2)
         #expect(all.tags.map(\.id) == [tag.id])
         #expect(all.trees.first { $0.id == trees[1].id }?.hazardCount == 1)
-        #expect(all.cells.map(\.id) == [a.tile, b.tile].sorted())
-        #expect(all.cells.allSatisfy { $0.corners.count == 4 })
+        #expect(all.tiles.map(\.id) == [a.tile, b.tile].sorted())
+        #expect(all.tiles.allSatisfy { $0.corners.count == 4 })
 
         let quiet = MapLayers(
-            state: state, visibility: .init(detected: false, tags: false, routes: false, cells: false))
+            state: state, visibility: .init(detected: false, tags: false, routes: false, tiles: false))
         #expect(quiet.trees.map(\.id) == [trees[1].id])
         #expect(quiet.tags.isEmpty)
-        #expect(quiet.cells.isEmpty)
+        #expect(quiet.tiles.isEmpty)
     }
 
     @Test func everyStatusHasAWordAnIconAndATone() {

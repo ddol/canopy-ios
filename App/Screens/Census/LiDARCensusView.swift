@@ -29,6 +29,9 @@ struct LiDARCensusView: View {
                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.small))
                 }
                 Spacer()
+                if let scan = capture.scan {
+                    ScanProgressCard(progress: scan.progress)
+                }
                 controls
             }
             .padding(Spacing.m)
@@ -41,9 +44,13 @@ struct LiDARCensusView: View {
             capture.pause()
             location.stop()
         }
-        .sheet(item: $measurement) { measurement in
-            MeasurementSheet(measurement: measurement)
-                .presentationDetents([.medium, .large])
+        // The AR session pauses under the result sheet (Quick Look's AR mode needs the camera) and resumes, with
+        // the mesh and the scan, when the sheet closes.
+        .sheet(item: $measurement, onDismiss: resumeCapture) { measurement in
+            MeasurementSheet(measurement: measurement) {
+                capture.cancelScan()
+            }
+            .presentationDetents([.medium, .large])
         }
     }
 
@@ -100,37 +107,55 @@ struct LiDARCensusView: View {
 
     private var controls: some View {
         VStack(spacing: Spacing.s) {
-            HStack(spacing: Spacing.s) {
-                Button("Confirm tree", systemImage: "checkmark.circle") {
-                    guard let target else { return }
-                    Task { await model.confirm(target) }
-                }
-                .buttonStyle(.canopyPrimary)
-                .disabled(target?.effectiveStatus != .detected)
+            if capture.scan == nil {
+                HStack(spacing: Spacing.s) {
+                    Button("Confirm tree", systemImage: "checkmark.circle") {
+                        guard let target else { return }
+                        Task { await model.confirm(target) }
+                    }
+                    .buttonStyle(.canopyPrimary)
+                    .disabled(target?.effectiveStatus != .detected)
 
-                Button("Not a tree", systemImage: "xmark.circle") {
-                    guard let target else { return }
-                    Task { await model.reject(target) }
-                }
-                .buttonStyle(.canopySecondary)
-                .disabled(target?.effectiveStatus != .detected)
+                    Button("Not a tree", systemImage: "xmark.circle") {
+                        guard let target else { return }
+                        Task { await model.reject(target) }
+                    }
+                    .buttonStyle(.canopySecondary)
+                    .disabled(target?.effectiveStatus != .detected)
 
-                Button("New tree here", systemImage: "plus.circle") {
-                    Task { await addTreeAtReticle() }
+                    Button("New tree here", systemImage: "plus.circle") {
+                        Task { await addTreeAtReticle() }
+                    }
+                    .buttonStyle(.canopySecondary)
                 }
-                .buttonStyle(.canopySecondary)
+                .labelStyle(.titleAndIcon)
+                .font(.footnote)
+
+                Button {
+                    startScan()
+                } label: {
+                    Label("Scan trunk", systemImage: "record.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.canopySurvey)
+            } else {
+                HStack(spacing: Spacing.s) {
+                    Button("Cancel", systemImage: "xmark") {
+                        capture.cancelScan()
+                        notice = nil
+                    }
+                    .buttonStyle(.canopySecondary)
+
+                    Button {
+                        Task { await finishScan() }
+                    } label: {
+                        Label(isMeasuring ? "Measuring…" : "Finish scan", systemImage: "checkmark.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.canopySurvey)
+                    .disabled(isMeasuring)
+                }
             }
-            .labelStyle(.titleAndIcon)
-            .font(.footnote)
-
-            Button {
-                Task { await measure() }
-            } label: {
-                Label(isMeasuring ? "Measuring…" : "Measure trunk", systemImage: "record.circle")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.canopySurvey)
-            .disabled(isMeasuring)
         }
     }
 
@@ -152,11 +177,24 @@ struct LiDARCensusView: View {
         notice = "Added a new tree."
     }
 
-    private func measure() async {
+    private func resumeCapture() {
+        capture.start()
+    }
+
+    private func startScan() {
+        do {
+            try capture.startScan()
+            notice = "Walk slowly round the trunk, keeping it in view."
+        } catch {
+            notice = Self.describe(error)
+        }
+    }
+
+    private func finishScan() async {
         isMeasuring = true
         defer { isMeasuring = false }
         do {
-            let result = try await capture.measureTrunk()
+            let result = try await capture.finishScan()
             let position: Position
             if let device = location.geoPoint {
                 position = GeoReference.position(
@@ -169,6 +207,7 @@ struct LiDARCensusView: View {
                 return
             }
             notice = nil
+            capture.pause()
             measurement = Measurement(capture: result, position: position, target: target)
         } catch {
             notice = Self.describe(error)
@@ -178,14 +217,69 @@ struct LiDARCensusView: View {
     static func describe(_ error: Error) -> String {
         switch error {
         case CaptureError.noSurface: "Point the centre of the screen at the trunk, within 6 m."
-        case CaptureError.notEnoughMesh: "Walk slowly around the trunk so the mesh fills in, then try again."
+        case CaptureError.notEnoughMesh: "Walk slowly round the trunk so the mesh fills in, then try again."
         case CaptureError.noGround: "Include some ground at the foot of the trunk in the scan."
-        case TrunkAnalysisError.notEnoughPoints: "Not enough of the trunk at 1.37 m yet. Scan it from closer."
-        case TrunkAnalysisError.arcTooShort: "Scan more of the trunk's side: move a few steps around it."
+        case CaptureError.notScanning: "Start a scan on the trunk first."
+        case TrunkAnalysisError.notEnoughPoints:
+            "Not enough of the trunk 1.37 m above the ground yet. Scan it from closer."
+        case TrunkAnalysisError.arcTooShort: "Scan more of the trunk: keep walking round it."
         case TrunkAnalysisError.implausibleDiameter:
-            "That does not look like a trunk. Aim at the trunk at chest height."
+            "That does not look like a trunk. Start the scan on the trunk, about 1.37 m above the ground."
         default: "Could not measure: \(error.localizedDescription)"
         }
+    }
+}
+
+/// Live feedback while scanning a trunk: how much of its circumference 1.37 m above the ground is covered.
+struct ScanProgressCard: View {
+    let progress: ScanProgress
+    private let format = QuantityFormat()
+
+    var body: some View {
+        HStack(spacing: Spacing.s) {
+            ZStack {
+                Circle().stroke(Color.canopyLine, lineWidth: 5)
+                Circle()
+                    .trim(from: 0, to: min(1, (progress.arcDegrees ?? 0) / 360))
+                    .stroke(
+                        progress.isWellCovered ? Color.canopyBrand : Color.canopySurvey,
+                        style: StrokeStyle(lineWidth: 5, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: 36, height: 36)
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text(headline).font(.subheadline.weight(.semibold))
+                Text(detail)
+                    .font(CanopyFont.mono(.caption))
+                    .foregroundStyle(Color.canopyInkMuted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Spacing.s)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.large))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("scan-progress")
+    }
+
+    private var height: String { format.length(DBH.standardHeight) }
+
+    private var headline: String {
+        guard let arc = progress.arcDegrees else { return "Walk slowly round the trunk" }
+        if progress.isWellCovered { return "Good coverage: finish when ready" }
+        return "Covered " + format.angle(arc, fractionDigits: 0) + " of the trunk " + height + " up"
+    }
+
+    private var detail: String {
+        var parts = [format.count(progress.triangleCount) + " triangles kept"]
+        if let diameter = progress.diameter {
+            parts.append("about " + format.length(diameter, fractionDigits: 2) + " across")
+        } else {
+            parts.append("no trunk found " + height + " up yet")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
