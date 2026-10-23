@@ -71,8 +71,9 @@ final class LaunchTests: XCTestCase {
         let save = app.navigationBars.buttons["Save"].firstMatch
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         save.tap()
-        let saved = app.descendants(matching: .any)["tag-saved"].firstMatch
-        XCTAssertTrue(saved.waitForExistence(timeout: 10))
+        // A typed query: matching any element type snapshots the whole tree, which can time out on CI runners.
+        let saved = app.staticTexts["tag-saved"].firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 30))
         XCTAssertTrue(saved.label.contains("Proposed"), saved.label)
     }
 
