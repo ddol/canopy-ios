@@ -109,7 +109,7 @@ public actor LocalStore {
             chunk = tree.position.chunk
         }
         let observation = FieldObservation(
-            meta: RecordMeta(createdAt: date, playerID: player, cell: chunk),
+            meta: RecordMeta(createdAt: date, playerID: player, chunk: chunk),
             changesetID: UUID(),
             kind: kind
         )
@@ -131,12 +131,12 @@ public actor LocalStore {
         try blobs.put(data, expecting: evidence.blob)
         try db.run(
             """
-            INSERT INTO evidence (id, created_at, player_id, cell, blob, subject_id, kind, payload)
+            INSERT INTO evidence (id, created_at, player_id, s2_l19_token, blob, subject_id, kind, payload)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 .text(evidence.id.uuidString), .integer(Self.milliseconds(evidence.meta.createdAt)),
-                .text(evidence.meta.playerID.rawValue), .text(evidence.meta.cell.token), .text(evidence.blob.rawValue),
+                .text(evidence.meta.playerID.rawValue), .text(evidence.meta.chunk.token), .text(evidence.blob.rawValue),
                 .text(evidence.subjectID.uuidString), .text(evidence.kind.rawValue), .text(try Self.json(evidence)),
             ]
         )
@@ -223,7 +223,7 @@ public actor LocalStore {
         for tree in state.trees.values {
             try db.run(
                 """
-                INSERT INTO trees (id, cell, tile, count_status, proposed_status, version, payload)
+                INSERT INTO trees (id, s2_l19_token, s2_l16_token, count_status, proposed_status, version, payload)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
@@ -236,7 +236,7 @@ public actor LocalStore {
         for tag in state.tags.values {
             try db.run(
                 """
-                INSERT INTO tags (id, tree_id, cell, tile, status, version, payload)
+                INSERT INTO tags (id, tree_id, s2_l19_token, s2_l16_token, status, version, payload)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
@@ -251,12 +251,12 @@ public actor LocalStore {
     private static func insert(_ observation: FieldObservation, in db: SQLiteDatabase) throws {
         try db.run(
             """
-            INSERT INTO observations (id, created_at, player_id, cell, version, kind, subject_id, changeset_id, payload)
+            INSERT INTO observations (id, created_at, player_id, s2_l19_token, version, kind, subject_id, changeset_id, payload)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 .text(observation.id.uuidString), .integer(milliseconds(observation.meta.createdAt)),
-                .text(observation.meta.playerID.rawValue), .text(observation.meta.cell.token),
+                .text(observation.meta.playerID.rawValue), .text(observation.meta.chunk.token),
                 .int(observation.meta.version), .text(observation.kind.name),
                 .text(observation.kind.subject.id.uuidString), .optional(observation.changesetID?.uuidString),
                 .text(try json(observation)),
@@ -267,13 +267,13 @@ public actor LocalStore {
     private static func insert(_ changeset: Changeset, in db: SQLiteDatabase) throws {
         try db.run(
             """
-            INSERT INTO changesets (id, created_at, player_id, cell, state, cells, payload, updated_at)
+            INSERT INTO changesets (id, created_at, player_id, s2_l19_token, state, s2_l16_tokens, payload, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 .text(changeset.id.uuidString), .integer(milliseconds(changeset.meta.createdAt)),
-                .text(changeset.meta.playerID.rawValue), .text(changeset.meta.cell.token),
-                .text(changeset.state.rawValue), .text(changeset.cells.map(\.token).joined(separator: " ")),
+                .text(changeset.meta.playerID.rawValue), .text(changeset.meta.chunk.token),
+                .text(changeset.state.rawValue), .text(changeset.tiles.map(\.token).joined(separator: " ")),
                 .text(try json(changeset)), .integer(milliseconds(changeset.meta.createdAt)),
             ]
         )
@@ -366,7 +366,22 @@ enum Schema {
             payload TEXT NOT NULL
         );
         CREATE INDEX tags_tree ON tags (tree_id);
+        """,
+        // 2: S2 columns name their level and representation (canonical tokens), following the S2 style guide
+        // shared with velocity.report.
         """
+        ALTER TABLE observations RENAME COLUMN cell TO s2_l19_token;
+        ALTER TABLE evidence RENAME COLUMN cell TO s2_l19_token;
+        ALTER TABLE changesets RENAME COLUMN cell TO s2_l19_token;
+        ALTER TABLE changesets RENAME COLUMN cells TO s2_l16_tokens;
+        ALTER TABLE trees RENAME COLUMN cell TO s2_l19_token;
+        ALTER TABLE trees RENAME COLUMN tile TO s2_l16_token;
+        ALTER TABLE tags RENAME COLUMN cell TO s2_l19_token;
+        ALTER TABLE tags RENAME COLUMN tile TO s2_l16_token;
+        DROP INDEX trees_tile;
+        CREATE INDEX trees_s2_l16_token ON trees (s2_l16_token);
+        CREATE INDEX tags_s2_l16_token ON tags (s2_l16_token);
+        """,
     ]
 
     static func migrate(_ db: SQLiteDatabase) throws {

@@ -43,7 +43,7 @@ public struct TreeCandidate: Identifiable, Hashable, Codable, Sendable {
                 id: id,
                 createdAt: surveyedAt,
                 playerID: .aerialSurvey,
-                cell: position.chunk
+                chunk: position.chunk
             ),
             position: position,
             countStatus: .detected,

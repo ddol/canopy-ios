@@ -12,23 +12,48 @@ Every record carries a `RecordMeta`:
 | `id` | UUID | Generated on the device that created the record |
 | `createdAt` | Date | Stored as whole milliseconds since 1970 |
 | `playerID` | `PlayerID` | Game Center `teamPlayerID`, `local:<uuid>` before sign-in, or `gerardus:aerial` for the aerial base layer |
-| `cell` | `S2CellID` | The level-19 chunk the record belongs to |
+| `chunk` | `S2CellID` | The S2 L19 chunk the record belongs to; serialised as its canonical token, `s2_l19_token` |
 | `version` | Int | Entity version for trees, tags and routes (starts at 1, +1 per change, used as `baseVersion`); always 1 for immutable records |
 
 ## S2 cells
 
 `S2CellID` is a minimal port of Google's S2 cell ids: lat/lng → leaf cell, parent at any level, tokens, and
-cell centre and corners. Gerardus uses **level 16 for tiles** (about 150 m across in San Francisco) and
-**level 19 for chunks** (about 20 m). Tokens are lower-case hex without trailing zeros, for example
-`80858745b` (tile) and `80858745afc` (chunk) at the Conservatory of Flowers. The tests check the port against
-Google's Go implementation.
+cell centre and corners. The tests check the port against Google's Go implementation. Gerardus uses two levels,
+both calculated from the WGS 84 position:
+
+| Level | Noun | Size in San Francisco | Example (Conservatory of Flowers) | Family display | Machine field |
+|---|---|---|---|---|---|
+| L16 | tile | about 150 m | `80858745b` | `80858-745b` | `s2_l16_token` |
+| L19 | chunk | about 20 m | `80858745afc` | `80858-745afc` | `s2_l19_token` |
+
+Canopy follows the S2 style guide shared with velocity.report
+([geographic-indexing.md](https://github.com/banshee-data/velocity.report/blob/main/docs/lidar/architecture/geographic-indexing.md)):
+
+- **Canonical token** (`S2CellID.token`): the CellID as lower-case hex with trailing zeros removed. It is the only
+  identifier, and the only form that is stored, used as a key, written to a file or sent. `init?(token:)` accepts
+  canonical tokens only.
+- **Family display** (`S2CellID.familyDisplay`): for people only, in the UI, logs and prose. One hyphen after the
+  family prefix: for every level at or below L10, including Canopy's L16 tiles and L19 chunks, that prefix is the
+  5 hex characters cells under one L10 ancestor always share, hence **5+n** (`80858-745b`). Coarser levels have
+  shorter prefixes (`8085-9` at L8). Removing the hyphen gives the canonical token back. Text a person types
+  goes through `init?(familyDisplay:)`, which accepts either form, checks the hyphen sits at the family boundary,
+  and yields the canonical cell. A family display is never stored.
+- **Scan cue**: the guide's small visual gap inside the family prefix is standardised only for its L10/L13
+  displays, so Canopy shows its L16 and L19 cells without one (`S2CellLabel`).
+- **Hierarchy**: parents come from `parent(level:)` on the CellID, never from cutting or editing token text
+  (the L10 cell `80858-1` has the L8 parent `8085-9`, not `8085-8`).
+- **Field names** say the level and the representation (`s2_l19_token`, `s2_l16_tokens`), never character counts.
+- **Cells are not identities.** A tile or chunk is a geographic index: a tree, a tag or a player's session is
+  identified by its own UUID, and the WGS 84 position stays the authoritative measurement.
+
+Records written before these names (schema v1: `cell`, `cells`, `tile`) are still read.
 
 ## Positions
 
 `Position` holds a point three ways:
 
 - `geo`: WGS 84 latitude and longitude in degrees, plus `altitude` (ellipsoidal height) when known;
-- `enu`: east, north and up in metres from the **centre of the point's level-16 tile**;
+- `enu`: east, north and up in metres from the **centre of the point's L16 tile**;
 - `covariance`: a symmetric 3 × 3 covariance of the ENU offsets, in m².
 
 In Milestone 0 a position comes from Core Location at the moment of the observation (σ is the reported
@@ -139,9 +164,9 @@ A `Changeset` proposes changes to the shared map.
 
 | Field | Notes |
 |---|---|
-| `meta` | `id` is the client-generated changeset UUID; `cell` is the chunk of the first op |
+| `meta` | `id` is the client-generated changeset UUID; `chunk` is the L19 chunk of the first op |
 | `ops` | [`ChangeOp`]: `{op, entity, id, baseVersion, fields}` |
-| `cells` | The level-16 tiles the changeset touches, sorted |
+| `tiles` | The L16 tiles the changeset touches, sorted; serialised as canonical tokens, `s2_l16_tokens` |
 | `state` | `pending`, `approved`, `applied`, `rejected`, `conflicted` |
 | `approvals` | [`{playerID, isTrusted, at}`] |
 
@@ -152,7 +177,8 @@ entity's shared fields before and after:
 - an existing one becomes `update` with only the changed fields, against its current version;
 - several observations about one entity chain their base versions.
 
-Shared fields are the entity's JSON without `meta` and without local-only fields (`proposedStatus`), plus `cell`.
+Shared fields are the entity's JSON without `meta` and without local-only fields (`proposedStatus`), plus the
+canonical token of its L19 chunk as `s2_l19_token`.
 
 **Policy.** A changeset reaches the shared map only when at least two distinct players agree, and at least one
 of them is trusted. The author's submission counts as one agreement (`Changeset.meetsPolicy`).
@@ -175,15 +201,16 @@ enough to hash and compare.
 `CanopyStore.LocalStore` is an actor over one connection to the system SQLite library (`import SQLite3`,
 a thin wrapper, no ORM). The database is `Application Support/Canopy/canopy.sqlite` (WAL mode); blobs are in
 `Application Support/Canopy/blobs/`. Both use iOS file protection
-(`completeUntilFirstUserAuthentication`). The schema is versioned with `PRAGMA user_version`.
+(`completeUntilFirstUserAuthentication`). The schema is versioned with `PRAGMA user_version`; v2 renamed the v1 S2 columns (`cell`, `cells`, `tile`) to
+level-named ones.
 
 | Table | Contents | Mutability |
 |---|---|---|
-| `observations` | `seq` (log order), id, created_at (ms), player_id, cell, version, kind, subject_id, changeset_id, `payload` (JSON) | **Append-only**: triggers abort any `UPDATE` or `DELETE` |
-| `evidence` | id, created_at, player_id, cell, blob (SHA-256), subject_id, kind, `payload` | **Immutable**: same triggers |
-| `changesets` | id, created_at, player_id, cell, state, cells, `payload`, updated_at | State and approvals change with sync |
+| `observations` | `seq` (log order), id, created_at (ms), player_id, s2_l19_token, version, kind, subject_id, changeset_id, `payload` (JSON) | **Append-only**: triggers abort any `UPDATE` or `DELETE` |
+| `evidence` | id, created_at, player_id, s2_l19_token, blob (SHA-256), subject_id, kind, `payload` | **Immutable**: same triggers |
+| `changesets` | id, created_at, player_id, s2_l19_token, state, s2_l16_tokens (space-separated), `payload`, updated_at | State and approvals change with sync |
 | `candidates` | The aerial base layer, one JSON `TreeCandidate` per row | Replaced on import |
-| `trees`, `tags` | Current state: id, cell, tile, status columns, version, `payload` | **Derived**: rewritten on every write |
+| `trees`, `tags` | Current state: id, s2_l19_token, s2_l16_token (indexed), status columns, version, `payload` | **Derived**: rewritten on every write |
 
 Every write runs in one transaction that also re-derives the state (`CensusState.derive`) and rewrites
 `trees` and `tags`, so the derived tables always match the log; opening the store re-derives too.

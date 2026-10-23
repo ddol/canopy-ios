@@ -88,7 +88,7 @@ struct TagScreen: View {
             if let tree {
                 HStack {
                     StatusBadge(tree.displayStatus.presentation)
-                    Text(tree.position.chunk.token).font(CanopyFont.mono(.footnote))
+                    S2CellLabel(tree.position.chunk)
                     Spacer()
                 }
                 if let lastSaved, lastSaved.treeID == tree.id {

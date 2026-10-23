@@ -88,11 +88,11 @@ struct TreeSheet: View {
                         )
                         .font(CanopyFont.mono())
                     }
-                    LabeledContent("Tile (S2 L16)") {
-                        Text(tree.position.tile.token).font(CanopyFont.mono(.footnote))
+                    LabeledContent("S2 L16 tile") {
+                        S2CellLabel(tree.position.tile)
                     }
-                    LabeledContent("Chunk (S2 L19)") {
-                        Text(tree.position.chunk.token).font(CanopyFont.mono(.footnote))
+                    LabeledContent("S2 L19 chunk") {
+                        S2CellLabel(tree.position.chunk)
                     }
                 }
 

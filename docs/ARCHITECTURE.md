@@ -60,7 +60,7 @@ everything on the simulator.
 - **Evidence is immutable and content-addressed.** A trunk or limb scan is cropped, written as GLB, stored
   under its SHA-256 and referenced by hash from observations and changesets.
 - **Sync is a boundary, not a feature yet.** `GerardusClient` is the whole contract with the future Rust
-  server: upload blobs, submit changesets, read their state, pull applied changes per level-16 tile. The fake
+  server: upload blobs, submit changesets, read their state, pull applied changes per L16 tile. The fake
   applies the real policy (two players agree, at least one trusted) so the rest of the app can be built and
   tested against it. The fake lives in memory: after a relaunch it has forgotten earlier submissions, and the
   next sync submits open changesets again.

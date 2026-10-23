@@ -19,9 +19,8 @@ import Testing
     @Test func s2CellFixtureMatchesS2CellID() throws {
         let cells = try ParkFixtures.cells()
         #expect(cells.count == 7)
-        for (token, corners) in cells {
-            let cell = try #require(S2CellID(token: token))
-            #expect([16, 19].contains(cell.level))
+        #expect(Set(cells.map(\.cell.level)) == [16, 19])
+        for (cell, corners) in cells {
             for (vertex, expected) in zip(cell.vertices, corners) {
                 #expect(abs(vertex.latitude - expected.latitude) < 1e-8)
                 #expect(abs(vertex.longitude - expected.longitude) < 1e-8)

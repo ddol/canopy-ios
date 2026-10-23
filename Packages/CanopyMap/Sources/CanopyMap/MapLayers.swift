@@ -8,13 +8,14 @@ public struct MapLayers: Equatable, Sendable {
         public var detected = true
         public var tags = true
         public var routes = true
-        public var cells = false
+        /// S2 L16 tile outlines.
+        public var tiles = false
 
-        public init(detected: Bool = true, tags: Bool = true, routes: Bool = true, cells: Bool = false) {
+        public init(detected: Bool = true, tags: Bool = true, routes: Bool = true, tiles: Bool = false) {
             self.detected = detected
             self.tags = tags
             self.routes = routes
-            self.cells = cells
+            self.tiles = tiles
         }
     }
 
@@ -41,7 +42,8 @@ public struct MapLayers: Equatable, Sendable {
         public var points: [GeoPoint]
     }
 
-    public struct CellOutline: Identifiable, Hashable, Sendable {
+    /// An S2 L16 tile's outline.
+    public struct TileOutline: Identifiable, Hashable, Sendable {
         public var id: S2CellID
         public var corners: [GeoPoint]
     }
@@ -49,7 +51,7 @@ public struct MapLayers: Equatable, Sendable {
     public var trees: [TreeMarker]
     public var tags: [TagMarker]
     public var routes: [RouteLine]
-    public var cells: [CellOutline]
+    public var tiles: [TileOutline]
     /// Park outline: outer rings of the boundary polygons.
     public var boundary: [[GeoPoint]]
     public var visibility: Visibility
@@ -58,19 +60,19 @@ public struct MapLayers: Equatable, Sendable {
         trees: [TreeMarker] = [],
         tags: [TagMarker] = [],
         routes: [RouteLine] = [],
-        cells: [CellOutline] = [],
+        tiles: [TileOutline] = [],
         boundary: [[GeoPoint]] = [],
         visibility: Visibility = Visibility()
     ) {
         self.trees = trees
         self.tags = tags
         self.routes = routes
-        self.cells = cells
+        self.tiles = tiles
         self.boundary = boundary
         self.visibility = visibility
     }
 
-    /// Builds the layers from the census. Removed trees are left out; tiles are those holding a tree.
+    /// Builds the layers from the census. Removed trees are left out; tiles are the L16 tiles holding a tree.
     public init(
         state: CensusState,
         routes: [Route] = [],
@@ -92,15 +94,15 @@ public struct MapLayers: Equatable, Sendable {
             ? state.tags.values.sorted { $0.id.uuidString < $1.id.uuidString }.map { tag in
                 TagMarker(id: tag.id, treeID: tag.treeID, location: tag.point.position.geo, urgency: tag.urgency)
             } : []
-        let cells =
-            visibility.cells
-            ? Set(state.trees.values.map(\.position.tile)).sorted().map { CellOutline(id: $0, corners: $0.vertices) }
+        let tiles =
+            visibility.tiles
+            ? Set(state.trees.values.map(\.position.tile)).sorted().map { TileOutline(id: $0, corners: $0.vertices) }
             : []
         self.init(
             trees: trees,
             tags: tags,
             routes: visibility.routes ? routes.map { RouteLine(id: $0.id, name: $0.name, points: $0.points) } : [],
-            cells: cells,
+            tiles: tiles,
             boundary: boundary,
             visibility: visibility
         )

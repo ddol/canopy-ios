@@ -111,9 +111,11 @@ public actor FakeGerardusClient: GerardusClient {
         }
 
         let now = clock()
-        let tile = entry.changeset.cells.first ?? entry.changeset.meta.cell.parent(level: S2CellID.tileLevel)
+        let tile = entry.changeset.tiles.first ?? entry.changeset.meta.chunk.tile
         for op in entry.changeset.ops {
-            let opTile = op.fields["cell"]?.stringValue.flatMap(S2CellID.init(token:))?.tile ?? tile
+            // `cell` is the field name used before S2 fields named their level.
+            let chunk = (op.fields["s2_l19_token"] ?? op.fields["cell"])?.stringValue.flatMap(S2CellID.init(token:))
+            let opTile = chunk?.tile ?? tile
             log.append(
                 AppliedChange(
                     sequence: Int64(log.count + 1), changesetID: id, tile: opTile, op: op, appliedAt: now))

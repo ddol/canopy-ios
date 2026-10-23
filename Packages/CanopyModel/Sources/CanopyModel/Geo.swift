@@ -10,10 +10,10 @@ public struct GeoPoint: Hashable, Codable, Sendable {
         self.longitude = longitude
     }
 
-    /// The level-19 S2 chunk containing this point.
+    /// The S2 L19 chunk containing this point.
     public var chunk: S2CellID { S2CellID(self, level: S2CellID.chunkLevel) }
 
-    /// The level-16 S2 tile containing this point.
+    /// The S2 L16 tile containing this point.
     public var tile: S2CellID { S2CellID(self, level: S2CellID.tileLevel) }
 }
 
@@ -63,7 +63,7 @@ public struct Covariance3: Hashable, Codable, Sendable {
 }
 
 /// A position as Gerardus records it: geographic coordinates, plus the same point as ENU metres from the
-/// centre of its level-16 tile, with the uncertainty of the ENU offsets.
+/// centre of its S2 L16 tile, with the uncertainty of the ENU offsets.
 public struct Position: Hashable, Codable, Sendable {
     public var geo: GeoPoint
     /// Ellipsoidal height in metres, when known.
@@ -79,10 +79,10 @@ public struct Position: Hashable, Codable, Sendable {
         self.enu = LocalFrame(origin: geo.tile.center).enu(of: geo, altitude: altitude ?? 0)
     }
 
-    /// The level-16 tile whose centre is the ENU origin.
+    /// The S2 L16 tile whose centre is the ENU origin.
     public var tile: S2CellID { geo.tile }
 
-    /// The level-19 chunk containing the position.
+    /// The S2 L19 chunk containing the position.
     public var chunk: S2CellID { geo.chunk }
 }
 

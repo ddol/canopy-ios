@@ -2,9 +2,16 @@ import Foundation
 
 /// An S2 cell id: a 64-bit position on the S2 Hilbert curve that names a cell at some level (0…30).
 ///
-/// Gerardus uses level 16 for map tiles (about 150 m across in San Francisco) and level 19 for chunks
-/// (about 20 m). Ids are written as tokens: lower-case hex with trailing zeros removed, so the level-16
-/// tile around the Conservatory of Flowers is `80858745b`.
+/// Gerardus uses L16 for map tiles (about 150 m across in San Francisco) and L19 for chunks (about 20 m).
+///
+/// Canopy follows the S2 style guide shared with velocity.report
+/// (banshee-data/velocity.report, docs/lidar/architecture/geographic-indexing.md):
+/// - the **canonical token** (`token`, lower-case hex with trailing zeros removed) is the only identifier, and
+///   the only form that is stored, keyed or sent: the L16 tile around the Conservatory of Flowers is
+///   `80858745b`;
+/// - the **family display** (`familyDisplay`) is for people only: one hyphen after the family prefix, so that
+///   tile reads `80858-745b`. For Canopy's levels this is the 5+n form;
+/// - parents come from `parent(level:)`, never from cutting or editing token text.
 ///
 /// This is a minimal port of the parts of Google's S2 library that Canopy needs (lat/lng → cell, parent,
 /// token, centre and corners), following the reference implementations' maths exactly so that tokens match.
@@ -35,7 +42,8 @@ public struct S2CellID: Hashable, Comparable, Sendable {
         self = S2CellID(point).parent(level: level)
     }
 
-    /// Parses a token. Returns nil for anything that is not a valid cell id.
+    /// Parses a canonical token. Returns nil for anything else: invalid cell ids, upper case, trailing zeros, or
+    /// a family display (use `init?(familyDisplay:)` for text a person typed).
     public init?(token: String) {
         guard !token.isEmpty, token.count <= 16, token != "X",
             token.allSatisfy({ $0.isHexDigit && !$0.isUppercase })
@@ -43,7 +51,16 @@ public struct S2CellID: Hashable, Comparable, Sendable {
         let padded = token + String(repeating: "0", count: 16 - token.count)
         guard let value = UInt64(padded, radix: 16) else { return nil }
         let id = S2CellID(rawValue: value)
-        guard id.isValid else { return nil }
+        guard id.isValid, id.token == token else { return nil }
+        self = id
+    }
+
+    /// Parses what a person typed or pasted: a canonical token or a family display. The single presentation
+    /// hyphen must sit at the family boundary; it is removed and the canonical token validated.
+    public init?(familyDisplay text: String) {
+        let parts = text.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count <= 2, let id = S2CellID(token: parts.joined()) else { return nil }
+        if parts.count == 2, parts[0].count != id.familyPrefixLength { return nil }
         self = id
     }
 
@@ -82,16 +99,33 @@ public struct S2CellID: Hashable, Comparable, Sendable {
         return S2CellID(rawValue: (rawValue & (~newLSB &+ 1)) | newLSB)
     }
 
-    /// The Gerardus tile (level 16) containing this cell.
+    /// The Gerardus tile (L16) containing this cell.
     public var tile: S2CellID { parent(level: S2CellID.tileLevel) }
 
-    /// The Gerardus chunk (level 19) containing this cell.
+    /// The Gerardus chunk (L19) containing this cell.
     public var chunk: S2CellID { parent(level: S2CellID.chunkLevel) }
 
     public func contains(_ other: S2CellID) -> Bool {
         other.level >= level && other.parent(level: level) == self
     }
 
+    /// Hex characters in the family prefix: the complete nibbles of the hierarchy bits of L10, or of the cell's
+    /// own level if it is coarser. Cells at L10 or finer that share an L10 ancestor always share these 5
+    /// characters; an L8 cell's own prefix is 4 (`8085-9`).
+    public var familyPrefixLength: Int { (3 + 2 * min(level, 10)) / 4 }
+
+    /// The canonical token with one hyphen after the family prefix, for people: `80858-745b` for the canonical
+    /// token `80858745b`. Presentation only: removing the hyphen gives the canonical token back. Never store,
+    /// key, send or parse hierarchy from it.
+    public var familyDisplay: String {
+        let token = self.token
+        let prefix = familyPrefixLength
+        guard prefix > 0, token.count > prefix else { return token }
+        return token.prefix(prefix) + "-" + token.dropFirst(prefix)
+    }
+
+    /// The canonical token: the S2 CellID as lower-case hex with trailing zeros removed. The identifier for
+    /// storage, keys and interchange.
     public var token: String {
         guard rawValue != 0 else { return "X" }
         let hex = String(rawValue, radix: 16)
@@ -149,8 +183,10 @@ public struct S2CellID: Hashable, Comparable, Sendable {
     }
 }
 
+/// String interpolation (logs, debugging, messages) shows the family display; anything stored, keyed or sent must
+/// use `token`.
 extension S2CellID: CustomStringConvertible {
-    public var description: String { token }
+    public var description: String { familyDisplay }
 }
 
 extension S2CellID: Codable {

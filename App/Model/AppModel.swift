@@ -116,7 +116,7 @@ final class AppModel {
     /// "New tree here": a tree the aerial survey missed, at `position`.
     func addTree(at position: Position) async {
         let tree = Tree(
-            meta: RecordMeta(playerID: player.id, cell: position.chunk),
+            meta: RecordMeta(playerID: player.id, chunk: position.chunk),
             position: position,
             countStatus: .proposed
         )
@@ -168,7 +168,7 @@ extension AppModel {
         var tree = target
         if tree == nil {
             let added = Tree(
-                meta: RecordMeta(playerID: player.id, cell: position.chunk), position: position,
+                meta: RecordMeta(playerID: player.id, chunk: position.chunk), position: position,
                 countStatus: .proposed)
             guard await record(.treeAdded(added)) != nil else { return nil }
             tree = census.trees[added.id]
@@ -177,7 +177,7 @@ extension AppModel {
         do {
             let blob = try store.blobs.put(glb)
             let evidence = Evidence(
-                meta: RecordMeta(playerID: player.id, cell: tree.position.chunk),
+                meta: RecordMeta(playerID: player.id, chunk: tree.position.chunk),
                 blob: blob,
                 byteCount: glb.count,
                 kind: .trunkScan,

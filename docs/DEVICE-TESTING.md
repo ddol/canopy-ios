@@ -84,7 +84,7 @@ The Milestone 0 walkthrough:
 
 | Tab | Check |
 |---|---|
-| Map | The park outline and 200 synthetic candidates show; the summary bar reads 0 · 200 · 0 %. Tap a tree: the sheet shows its height and S2 ids. |
+| Map | The park outline and 200 synthetic candidates show; the summary bar reads 0 · 200 · 0 %. Tap a tree: the sheet shows its height and its S2 L16 tile and L19 chunk in family display (`80858-745b`). |
 | Census | The camera view shows the LiDAR mesh overlay. Near a candidate (in the park), Confirm tree makes it Proposed. Aim the reticle at a trunk about 1.37 m up and tap **Scan trunk**, then walk slowly round it: the captured mesh fills in lime and the card shows how much of the circumference is covered. At “Good coverage”, tap **Finish scan**: the sheet shows the diameter 1.37 m above the ground with ± and the lean. Save, then Share GLB and Preview in Quick Look (close it with Done). Away from the park there is no candidate within 60 m, so Save adds the measurement as a new tree. |
 | Tag | From a tree's sheet, Tag a limb hazard. Place limb point in 3D on a branch within 5 m, pick the hazard details and Save: the tag shows as Proposed. |
 | Me | The pending changes are listed. Sync now submits them; Simulate trusted approval puts them on the map. |

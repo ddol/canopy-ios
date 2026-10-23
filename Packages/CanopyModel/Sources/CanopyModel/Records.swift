@@ -59,16 +59,46 @@ public struct RecordMeta: Hashable, Codable, Sendable {
     public var id: UUID
     public var createdAt: Date
     public var playerID: PlayerID
-    /// The level-19 chunk the record belongs to.
-    public var cell: S2CellID
+    /// The L19 chunk the record belongs to. Serialised as its canonical token under `s2_l19_token`.
+    public var chunk: S2CellID
     public var version: Int
 
-    public init(id: UUID = UUID(), createdAt: Date = .now, playerID: PlayerID, cell: S2CellID, version: Int = 1) {
+    public init(id: UUID = UUID(), createdAt: Date = .now, playerID: PlayerID, chunk: S2CellID, version: Int = 1) {
         self.id = id
         self.createdAt = createdAt.roundedToMilliseconds
         self.playerID = playerID
-        self.cell = cell
+        self.chunk = chunk
         self.version = version
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case createdAt
+        case playerID
+        case chunk = "s2_l19_token"
+        case version
+        /// Before the S2 field names named their level (schema v1).
+        case legacyCell = "cell"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        playerID = try container.decode(PlayerID.self, forKey: .playerID)
+        chunk =
+            try container.decodeIfPresent(S2CellID.self, forKey: .chunk)
+            ?? container.decode(S2CellID.self, forKey: .legacyCell)
+        version = try container.decode(Int.self, forKey: .version)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(playerID, forKey: .playerID)
+        try container.encode(chunk, forKey: .chunk)
+        try container.encode(version, forKey: .version)
     }
 }
 

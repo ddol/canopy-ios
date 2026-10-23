@@ -158,7 +158,7 @@ import Testing
     @Test func recordTimesAreKeptToTheMillisecond() throws {
         let meta = RecordMeta(
             createdAt: Date(timeIntervalSince1970: 1_792_540_800.123456), playerID: Sample.player,
-            cell: Sample.stowLake.chunk)
+            chunk: Sample.stowLake.chunk)
         #expect(meta.createdAt.timeIntervalSince1970 == 1_792_540_800.123)
         let back = try CanopyJSON.decoder.decode(RecordMeta.self, from: CanopyJSON.encoder.encode(meta))
         #expect(back == meta)

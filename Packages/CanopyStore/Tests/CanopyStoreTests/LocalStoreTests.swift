@@ -44,7 +44,7 @@ import Testing
         let (observation, changeset) = try await store.record(.treeConfirmed(treeID: tree), by: player)
 
         #expect(observation.changesetID == changeset.id)
-        #expect(observation.meta.cell == candidates[0].location.chunk)
+        #expect(observation.meta.chunk == candidates[0].location.chunk)
         #expect(changeset.state == .pending)
         #expect(changeset.ops.first?.baseVersion == 1)
         #expect(try await store.observations() == [observation])
@@ -106,7 +106,7 @@ import Testing
         _ = try await store.record(.treeConfirmed(treeID: candidates[0].id), by: player)
         _ = try await store.record(.treeRejected(treeID: candidates[1].id), by: player)
         let added = Tree(
-            meta: RecordMeta(playerID: player, cell: GeoPoint(latitude: 37.771, longitude: -122.47).chunk),
+            meta: RecordMeta(playerID: player, chunk: GeoPoint(latitude: 37.771, longitude: -122.47).chunk),
             position: Position(
                 geo: GeoPoint(latitude: 37.771, longitude: -122.47), covariance: .isotropic(horizontal: 5, vertical: 5)),
             countStatus: .proposed
@@ -149,7 +149,7 @@ import Testing
         let ref = BlobStore.reference(for: mesh)
         let tree = candidates[0]
         let evidence = Evidence(
-            meta: RecordMeta(playerID: player, cell: tree.location.chunk),
+            meta: RecordMeta(playerID: player, chunk: tree.location.chunk),
             blob: ref, byteCount: mesh.count, kind: .trunkScan, subjectID: tree.id,
             cropRadius: 1.5, vertexCount: 3, triangleCount: 1
         )
@@ -161,7 +161,7 @@ import Testing
         }
 
         var wrong = evidence
-        wrong.meta = RecordMeta(playerID: player, cell: tree.location.chunk)
+        wrong.meta = RecordMeta(playerID: player, chunk: tree.location.chunk)
         wrong.blob = BlobStore.reference(for: Data("other".utf8))
         await #expect(throws: BlobStoreError.self) {
             try await store.addEvidence(wrong, data: mesh)

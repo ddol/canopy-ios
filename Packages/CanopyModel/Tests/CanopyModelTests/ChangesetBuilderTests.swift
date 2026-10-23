@@ -15,8 +15,8 @@ import Testing
         #expect(changeset.state == .pending)
         #expect(changeset.approvals.isEmpty)
         #expect(changeset.meta.playerID == Sample.player)
-        #expect(changeset.meta.cell == tree.position.chunk)
-        #expect(changeset.cells == [tree.position.tile])
+        #expect(changeset.meta.chunk == tree.position.chunk)
+        #expect(changeset.tiles == [tree.position.tile])
         #expect(
             changeset.ops == [
                 ChangeOp(op: .update, entity: .tree, id: tree.id, baseVersion: 1, fields: ["countStatus": "confirmed"])
@@ -47,11 +47,11 @@ import Testing
         #expect(op.baseVersion == 0)
         #expect(op.fields["countStatus"] == "confirmed")
         #expect(op.fields["species"] == "Monterey cypress")
-        #expect(op.fields["cell"] == .string(tree.position.chunk.token))
+        #expect(op.fields["s2_l19_token"] == .string(tree.position.chunk.token))
         #expect(op.fields["position"]?.objectValue?["geo"] != nil)
         #expect(op.fields["meta"] == nil)
         #expect(op.fields["proposedStatus"] == nil)
-        #expect(changeset.cells == [Sample.windmill.tile])
+        #expect(changeset.tiles == [Sample.windmill.tile])
     }
 
     @Test func measurementUpdatesDBHLeanEvidenceAndVerifies() throws {
@@ -86,7 +86,7 @@ import Testing
         #expect(Set(changeset.ops[1].fields.keys) == ["dbh", "evidenceRefs", "countStatus"])
     }
 
-    @Test func cellsAreTheSortedDistinctTilesTouched() throws {
+    @Test func tilesAreTheSortedDistinctL16TilesTouched() throws {
         let a = Sample.detectedTree(at: Sample.stowLake)
         let b = Sample.detectedTree(at: Sample.windmill)
         let c = Sample.detectedTree(at: GeoPoint(latitude: 37.76991, longitude: -122.47571))
@@ -95,8 +95,8 @@ import Testing
             try builder.add(Sample.observation(.treeConfirmed(treeID: tree.id), at: tree.position.geo))
         }
         let changeset = try builder.build()
-        #expect(changeset.cells == [Sample.stowLake.tile, Sample.windmill.tile].sorted())
-        #expect(changeset.meta.cell == Sample.windmill.chunk)
+        #expect(changeset.tiles == [Sample.stowLake.tile, Sample.windmill.tile].sorted())
+        #expect(changeset.meta.chunk == Sample.windmill.chunk)
     }
 
     @Test func placingATagCreatesIt() throws {
@@ -150,7 +150,7 @@ import Testing
             author: Sample.player
         )
         let json = try #require(try JSONValue(encoding: changeset).objectValue)
-        #expect(Set(json.keys) == ["meta", "ops", "cells", "state", "approvals"])
+        #expect(Set(json.keys) == ["meta", "ops", "s2_l16_tokens", "state", "approvals"])
         let op = try #require(
             json["ops"].flatMap { value -> JSONValue? in
                 if case .array(let ops) = value { ops.first } else { nil }

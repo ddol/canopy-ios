@@ -15,7 +15,7 @@ import Testing
 
     func changeset(_ kind: FieldObservation.Kind, state: CensusState? = nil) throws -> Changeset {
         let observation = FieldObservation(
-            meta: RecordMeta(playerID: author.id, cell: tree.position.chunk), changesetID: UUID(), kind: kind)
+            meta: RecordMeta(playerID: author.id, chunk: tree.position.chunk), changesetID: UUID(), kind: kind)
         return try ChangesetBuilder.changeset(
             for: observation, in: state ?? CensusState(trees: [tree]), author: author.id)
     }
@@ -70,11 +70,11 @@ import Testing
         var builder = ChangesetBuilder(author: author.id, state: CensusState(trees: [tree]))
         try builder.add(
             FieldObservation(
-                meta: RecordMeta(playerID: author.id, cell: tree.position.chunk), changesetID: nil,
+                meta: RecordMeta(playerID: author.id, chunk: tree.position.chunk), changesetID: nil,
                 kind: .treeConfirmed(treeID: tree.id)))
         try builder.add(
             FieldObservation(
-                meta: RecordMeta(playerID: author.id, cell: tree.position.chunk), changesetID: nil,
+                meta: RecordMeta(playerID: author.id, chunk: tree.position.chunk), changesetID: nil,
                 kind: .trunkMeasured(treeID: tree.id, dbh: dbh, lean: nil, evidence: ref)))
         let both = try builder.build()
 
@@ -127,7 +127,7 @@ import Testing
         let ref = BlobRef(rawValue: SHA256.hash(data: mesh).map { String(format: "%02x", $0) }.joined())!
         let measure = try ChangesetBuilder.changeset(
             for: FieldObservation(
-                meta: RecordMeta(playerID: author.id, cell: tree.position.chunk), changesetID: UUID(),
+                meta: RecordMeta(playerID: author.id, chunk: tree.position.chunk), changesetID: UUID(),
                 kind: .trunkMeasured(
                     treeID: tree.id, dbh: DBH(diameter: Quantity(0.3, uncertainty: 0.01), method: .lidarCircleFit),
                     lean: nil, evidence: ref)),

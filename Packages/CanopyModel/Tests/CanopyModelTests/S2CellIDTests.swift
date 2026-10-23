@@ -12,8 +12,8 @@ import Testing
         #expect(leaf.face == vector.face)
         #expect(leaf.level == 30)
         #expect(leaf.isLeaf)
-        #expect(leaf.tile.token == vector.token16)
-        #expect(leaf.chunk.token == vector.token19)
+        #expect(leaf.tile.token == vector.l16Token)
+        #expect(leaf.chunk.token == vector.l19Token)
         #expect(leaf.tile.level == 16)
         #expect(leaf.chunk.level == 19)
     }
@@ -21,7 +21,7 @@ import Testing
     @Test(arguments: s2Vectors.map(\.name))
     func tileGeometryMatchesReference(name: String) throws {
         let vector = try #require(s2Vectors.first { $0.name == name })
-        let tile = try #require(S2CellID(token: vector.token16))
+        let tile = try #require(S2CellID(token: vector.l16Token))
         let tolerance = 1e-9  // degrees, about 0.1 mm
         #expect(abs(tile.center.latitude - vector.center16.lat) < tolerance)
         #expect(angularDifference(tile.center.longitude, vector.center16.lng) < tolerance)
@@ -34,9 +34,9 @@ import Testing
 
     @Test func tokensRoundTrip() throws {
         for vector in s2Vectors {
-            let tile = try #require(S2CellID(token: vector.token16))
-            #expect(tile.token == vector.token16)
-            let chunk = try #require(S2CellID(token: vector.token19))
+            let tile = try #require(S2CellID(token: vector.l16Token))
+            #expect(tile.token == vector.l16Token)
+            let chunk = try #require(S2CellID(token: vector.l19Token))
             #expect(tile.contains(chunk))
             #expect(!chunk.contains(tile))
             #expect(chunk.parent(level: 16) == tile)

@@ -29,13 +29,14 @@ enum ParkFixtures {
             .compactMap(\.first)
     }
 
-    /// The sample S2 cells, as (token, corners) pairs.
-    static func cells() throws -> [(token: String, corners: [GeoPoint])] {
+    /// The sample S2 cells (L16 tiles and an L19 chunk), with their corners. Each feature carries its canonical
+    /// token under a level-named property, `s2_l16_token` or `s2_l19_token`.
+    static func cells() throws -> [(cell: S2CellID, corners: [GeoPoint])] {
         try GeoJSON.decode(Data(contentsOf: url("s2-cells.geojson"))).features.compactMap { feature in
-            guard let token = feature.properties["token"]?.stringValue,
-                let ring = feature.geometry?.polygons.first?.first
+            let token = (feature.properties["s2_l16_token"] ?? feature.properties["s2_l19_token"])?.stringValue
+            guard let cell = token.flatMap(S2CellID.init(token:)), let ring = feature.geometry?.polygons.first?.first
             else { return nil }
-            return (token, Array(ring.dropLast()))
+            return (cell, Array(ring.dropLast()))
         }
     }
 }

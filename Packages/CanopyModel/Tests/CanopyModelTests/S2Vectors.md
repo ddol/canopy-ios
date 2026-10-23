@@ -5,8 +5,10 @@
 [`scripts/s2-reference`](../../../../scripts/s2-reference). Go is only needed to regenerate the vectors; it is
 not part of the build.
 
-For each point the tool records the face, the leaf cell id, the level-16 and level-19 tokens, and the level-16
-cell's centre and four corners. To regenerate:
+For each point the tool records the face, the leaf cell id, the canonical tokens of its L16 tile and L19 chunk
+(`l16Token`, `l19Token`), and the L16 tile's centre and four corners. Family displays are Canopy's own
+presentation and are tested separately, in `S2FamilyDisplayTests`, against the examples in velocity.report's
+S2 style guide. To regenerate:
 
 ```sh
 cd scripts/s2-reference

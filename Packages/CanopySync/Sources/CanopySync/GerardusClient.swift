@@ -16,7 +16,7 @@ public protocol GerardusClient: Sendable {
     /// The server's view of the given changesets. Ids the server has never seen are left out.
     func changesets(_ ids: [UUID]) async throws -> [Changeset]
 
-    /// Changes applied to the shared map in a level-16 tile after `sequence`, oldest first.
+    /// Changes applied to the shared map in an L16 tile after `sequence`, oldest first.
     func pullChanges(in tile: S2CellID, since sequence: Int64) async throws -> ChangePage
 }
 
