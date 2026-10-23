@@ -45,6 +45,29 @@ public struct QuantityFormat: Sendable {
         return (value < 0 ? "-" : "") + groups.joined(separator: Self.thinSpace)
     }
 
+    /// A duration in the SI-accepted units d, h, min and s, largest first and at most three of them, with seconds
+    /// only under an hour: "1 d 2 h 3 min", "4 min 5 s". Each number is joined to its unit by a narrow no-break space.
+    public func duration(seconds: UInt64) -> String {
+        let units: [(UInt64, String)] = [(86_400, "d"), (3_600, "h"), (60, "min"), (1, "s")]
+        var remaining = seconds
+        var parts: [String] = []
+        for (size, symbol) in units {
+            if symbol == "s", seconds >= 3_600 { break }
+            let amount = remaining / size
+            remaining %= size
+            if amount > 0 || (symbol == "s" && parts.isEmpty) {
+                parts.append(count(Int(amount)) + Self.thinSpace + symbol)
+            }
+            if parts.count == 3 { break }
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// A short time in whole milliseconds, e.g. "42 ms" for a network round trip.
+    public func milliseconds(_ seconds: Double) -> String {
+        withUnit(seconds * 1_000, uncertainty: nil, digits: 0, unit: "ms")
+    }
+
     private func withUnit(_ value: Double, uncertainty: Double?, digits: Int, unit: String) -> String {
         var text = number(value, digits: digits)
         if let uncertainty {

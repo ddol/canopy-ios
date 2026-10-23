@@ -12,8 +12,8 @@ send, so you can check it against the code.
   a shape, so scan when nobody is within a couple of metres of it.
 - **One identity.** Your Game Center player id and alias are the only identity in the data. No email, no
   name, no device identifiers, no advertising ids, no analytics.
-- **Milestone 0 sends nothing.** Sync is a local fake. Nothing leaves your device until the Gerardus server
-  exists, and this page will be updated before it does.
+- **Sync sends nothing yet.** Sync is a local fake. The only network request the app makes is the connection
+  test in **Me → Settings**, and only when you tap it (see below).
 
 ## Permissions
 
@@ -32,10 +32,21 @@ send, so you can check it against the code.
 | Changesets | The changes you propose for the shared map, with their state (pending, approved, applied, rejected, conflicted). | Same database |
 | Evidence | Cropped, colourless meshes as GLB files, named by their SHA-256 hash: trunk scans (the trunk plus 0.6 m around it, at most 2 m from its centre) and limb scans (1 m around the limb point). | `blobs/` folder in Application Support |
 | Local player id | A random `local:<uuid>` used for records made before (or without) Game Center sign-in. | User defaults |
+| Gerardus server address | The address you typed in **Me → Settings** (`canopy.gerardusURL`). | User defaults |
 
 The data is protected by iOS file protection. **Me → Reset local data** (debug builds) deletes all of it.
 Debug builds can also share a scan's GLB file or preview it; that only happens when you tap Share or Preview.
 Deleting the app deletes all of it too.
+
+## The connection test
+
+**Me → Settings → Test connection** sends one `GET /` to the Gerardus server address you entered, and shows
+what the server answers (its version, commit, uptime and reference layers). The request carries no player id,
+alias, location or record; the server sees only the request itself and the network address it comes from. The
+app makes no request until you tap the button, and it keeps only the address, not the answer.
+
+Plain `http://` is allowed only to `.local` names, IP addresses and tailnet (`*.ts.net`) hosts; Tailscale
+encrypts tailnet traffic between devices. Any other server must use HTTPS.
 
 ## What will be synced (not yet)
 

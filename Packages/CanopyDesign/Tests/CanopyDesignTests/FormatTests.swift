@@ -34,6 +34,20 @@ import Testing
         #expect(format.count(-12345) == "-12\(nnbsp)345")
     }
 
+    @Test func durationsUseDHMinAndS() {
+        #expect(format.duration(seconds: 0) == "0\(nnbsp)s")
+        #expect(format.duration(seconds: 42) == "42\(nnbsp)s")
+        #expect(format.duration(seconds: 245) == "4\(nnbsp)min 5\(nnbsp)s")
+        #expect(format.duration(seconds: 3_600) == "1\(nnbsp)h")
+        #expect(format.duration(seconds: 93_784) == "1\(nnbsp)d 2\(nnbsp)h 3\(nnbsp)min")
+        #expect(format.duration(seconds: 90_061) == "1\(nnbsp)d 1\(nnbsp)h 1\(nnbsp)min")
+    }
+
+    @Test func roundTripsInMilliseconds() {
+        #expect(format.milliseconds(0.0424) == "42\(nnbsp)ms")
+        #expect(format.milliseconds(1.5) == "1500\(nnbsp)ms")
+    }
+
     @Test func followsTheLocaleDecimalSeparator() {
         let french = QuantityFormat(locale: Locale(identifier: "fr_FR"))
         #expect(french.length(0.42) == "0,42\(nnbsp)m")
