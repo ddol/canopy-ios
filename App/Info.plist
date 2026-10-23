@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The Gerardus align server runs on the local network over plain HTTP (gRPC over HTTP/1.1). -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Canopy connects to a Gerardus map server on your network for aerial LiDAR trees and to register your scans. Only colourless geometry is sent, never photos.</string>
+</dict>
+</plist>

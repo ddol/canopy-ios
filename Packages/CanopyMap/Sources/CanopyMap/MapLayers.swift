@@ -73,16 +73,35 @@ public struct MapLayers: Equatable, Sendable {
     }
 
     /// Builds the layers from the census. Removed trees are left out; tiles are the L16 tiles holding a tree.
+    ///
+    /// Real aerial data gives thousands of detected trees, more than a map can draw as markers. With a `region`,
+    /// detected trees are drawn only inside it (with a margin), at most `detectedLimit` of them, nearest the centre
+    /// first; trees people have acted on are always drawn.
     public init(
         state: CensusState,
         routes: [Route] = [],
         boundary: [[GeoPoint]] = [],
-        visibility: Visibility = Visibility()
+        visibility: Visibility = Visibility(),
+        region: MapViewport? = nil,
+        detectedLimit: Int = 600
     ) {
         let hazards = Dictionary(grouping: state.tags.values, by: \.treeID).mapValues(\.count)
-        let trees = state.trees.values
+        var shown = state.trees.values
             .filter { $0.displayStatus != .removed }
             .filter { visibility.detected || $0.displayStatus != .detected }
+        if let region {
+            let padded = MapViewport(
+                center: region.center, latitudeDelta: region.latitudeDelta * 1.3,
+                longitudeDelta: region.longitudeDelta * 1.3)
+            let detected = shown.filter { $0.displayStatus == .detected && padded.contains($0.position.geo) }
+            let nearest = detected.sorted {
+                region.squaredDistance(to: $0.position.geo) < region.squaredDistance(to: $1.position.geo)
+            }
+            .prefix(detectedLimit)
+            shown = shown.filter { $0.displayStatus != .detected } + nearest
+        }
+        let trees =
+            shown
             .sorted { ($0.position.geo.latitude, $0.id.uuidString) > ($1.position.geo.latitude, $1.id.uuidString) }
             .map { tree in
                 TreeMarker(
@@ -155,5 +174,12 @@ public struct MapViewport: Equatable, Sendable {
     public func contains(_ point: GeoPoint) -> Bool {
         abs(point.latitude - center.latitude) <= latitudeDelta / 2
             && abs(point.longitude - center.longitude) <= longitudeDelta / 2
+    }
+
+    /// Squared distance from the centre in degrees, longitude scaled by cos(latitude); for ordering only.
+    func squaredDistance(to point: GeoPoint) -> Double {
+        let dLat = point.latitude - center.latitude
+        let dLng = (point.longitude - center.longitude) * cos(center.latitude * .pi / 180)
+        return dLat * dLat + dLng * dLng
     }
 }

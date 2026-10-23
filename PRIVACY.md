@@ -12,8 +12,8 @@ send, so you can check it against the code.
   a shape, so scan when nobody is within a couple of metres of it.
 - **One identity.** Your Game Center player id and alias are the only identity in the data. No email, no
   name, no device identifiers, no advertising ids, no analytics.
-- **Milestone 0 sends nothing.** Sync is a local fake. Nothing leaves your device until the Gerardus server
-  exists, and this page will be updated before it does.
+- **Census sync is still local.** Changesets go to a simulated server on your device. The only data that leaves
+  the device is described under *Gerardus align server* below, and only when you ask for it.
 
 ## Permissions
 
@@ -36,6 +36,20 @@ send, so you can check it against the code.
 The data is protected by iOS file protection. **Me → Reset local data** (debug builds) deletes all of it.
 Debug builds can also share a scan's GLB file or preview it; that only happens when you tap Share or Preview.
 Deleting the app deletes all of it too.
+
+## Gerardus align server
+
+Canopy can use a Gerardus align server on your network (Map → Layers → **Load real trees here**, and Census →
+**Register with 3DEP**). The server address is a setting; iOS asks for Local Network permission the first time.
+
+- **Loading real trees** sends the S2 tile you are looking at and downloads public data for it (USGS 3DEP aerial
+  LiDAR, OpenStreetMap, DataSF footprints). Nothing about you is sent.
+- **Registering a scan** happens only when you tap Register and confirm. It uploads the colourless mesh the AR
+  session has reconstructed within 60 m of where the session started, thinned to one point per 10 cm, with the
+  session's approximate GPS position. It is geometry only (no photos, colours or textures), it is not cropped to a
+  tree, and anyone nearby is in it as a shape, so register when nobody is close. The scan is stored on that server
+  under a random sensor id and capture reference, with no player id. The server keeps the scan and the registration
+  run.
 
 ## What will be synced (not yet)
 

@@ -23,6 +23,10 @@ final class AppModel {
     private(set) var boundary: [[GeoPoint]] = []
     private(set) var lastSync: SyncCoordinator.Report?
     private(set) var isSyncing = false
+    /// Loading real trees from a Gerardus align server (see AppModel+Aerial).
+    var aerial = AerialProgress.idle
+    /// Where each base-layer candidate came from, for the tree sheet: nil for the synthetic sample.
+    private(set) var candidateSources: [UUID: String] = [:]
     /// The last error to show, if any.
     var error: String?
     /// The selected tab, so screens can send the player elsewhere (for example from a tree to Tag).
@@ -97,6 +101,10 @@ final class AppModel {
         census = await store.state()
         summary = await store.summary()
         changesets = (try? await store.changesets()) ?? []
+        let candidates = (try? await store.candidates()) ?? []
+        candidateSources = Dictionary(
+            candidates.compactMap { candidate in candidate.source.map { (candidate.id, $0) } },
+            uniquingKeysWith: { first, _ in first })
     }
 
     // MARK: Census actions

@@ -237,6 +237,25 @@
             return (mesh, floor)
         }
 
+        /// Every vertex of the reconstructed mesh within `range` metres (horizontally) of the session origin, in world
+        /// coordinates: the surroundings to register against aerial data. Geometry only.
+        public func worldPoints(range: Float = 60) -> [SIMD3<Float>] {
+            let anchors = view.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
+            var points: [SIMD3<Float>] = []
+            for anchor in anchors {
+                let transform = anchor.transform
+                let origin = transform.columns.3
+                guard origin.x * origin.x + origin.z * origin.z < (range + 5) * (range + 5) else { continue }
+                let (local, _) = Self.extractLocal(anchor)
+                for p in local.positions {
+                    let w = transform * SIMD4(p, 1)
+                    guard w.x * w.x + w.z * w.z <= range * range else { continue }
+                    points.append(SIMD3(w.x, w.y, w.z))
+                }
+            }
+            return points
+        }
+
         /// Copies an anchor's geometry out of its Metal buffers, in anchor coordinates, with one corner of each
         /// floor-classified face.
         static func extractLocal(_ anchor: ARMeshAnchor) -> (Mesh, [SIMD3<Float>]) {
