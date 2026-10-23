@@ -5,8 +5,8 @@ import Testing
 
 @Suite struct GerardusEndpointTests {
     @Test(arguments: [
-        ("hydra.example.ts.net:50061", "http://hydra.example.ts.net:50061"),
-        ("hydra.example.ts.net", "http://hydra.example.ts.net:50061"),
+        ("gerardus.example.ts.net:50061", "http://gerardus.example.ts.net:50061"),
+        ("gerardus.example.ts.net", "http://gerardus.example.ts.net:50061"),
         ("  http://10.0.0.5:50061/ ", "http://10.0.0.5:50061"),
         ("https://gerardus.example.org", "https://gerardus.example.org"),
         ("HTTP://Host.example:8080", "http://Host.example:8080"),

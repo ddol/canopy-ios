@@ -12,8 +12,8 @@ send, so you can check it against the code.
   a shape, so scan when nobody is within a couple of metres of it.
 - **One identity.** Your Game Center player id and alias are the only identity in the data. No email, no
   name, no device identifiers, no advertising ids, no analytics.
-- **Sync sends nothing yet.** Sync is a local fake. The only network request the app makes is the connection
-  test in **Me → Settings**, and only when you tap it (see below).
+- **Census sync is still local.** Changesets go to a simulated server on your device. The only data that leaves
+  the device is described under *Gerardus align server* below, and only when you ask for it.
 
 ## Permissions
 
@@ -38,15 +38,27 @@ The data is protected by iOS file protection. **Me → Reset local data** (debug
 Debug builds can also share a scan's GLB file or preview it; that only happens when you tap Share or Preview.
 Deleting the app deletes all of it too.
 
-## The connection test
+## Gerardus align server
 
-**Me → Settings → Test connection** sends one `GET /` to the Gerardus server address you entered, and shows
-what the server answers (its version, commit, uptime and reference layers). The request carries no player id,
-alias, location or record; the server sees only the request itself and the network address it comes from. The
-app makes no request until you tap the button, and it keeps only the address, not the answer.
+Canopy can use a Gerardus align server on your network (Map → Layers → **Load real trees here**, and Census →
+**Register with 3DEP**). You set its address in **Me → Settings**; until you do, the app contacts no server. iOS
+asks for Local Network permission the first time.
 
-Plain `http://` is allowed only to `.local` names, IP addresses and tailnet (`*.ts.net`) hosts; Tailscale
-encrypts tailnet traffic between devices. Any other server must use HTTPS.
+- **Testing the connection** (Me → Settings → **Test connection**) sends one `GET /` and shows what the server
+  answers (its version, commit, uptime and reference layers). The request carries no player id, alias, location
+  or record, and the app keeps only the address, not the answer.
+- **Loading real trees** sends the S2 tile you are looking at and downloads public data for it (USGS 3DEP aerial
+  LiDAR, OpenStreetMap, DataSF footprints). Nothing about you is sent.
+- **Registering a scan** happens only when you tap Register and confirm. It uploads the colourless mesh the AR
+  session has reconstructed within 60 m of where the session started, thinned to one point per 10 cm, with the
+  session's approximate GPS position. It is geometry only (no photos, colours or textures), it is not cropped to a
+  tree, and anyone nearby is in it as a shape, so register when nobody is close. The scan is stored on that server
+  under a random sensor id and capture reference, with no player id. The server keeps the scan and the registration
+  run.
+
+In every case the server also sees the network address the request comes from. Plain `http://` is allowed only to
+`.local` names, IP addresses and tailnet (`*.ts.net`) hosts; Tailscale encrypts tailnet traffic between devices.
+Any other server must use HTTPS.
 
 ## What will be synced (not yet)
 

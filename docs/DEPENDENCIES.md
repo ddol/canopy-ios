@@ -19,9 +19,21 @@ file.
 | QuickLook | Debug preview of captured meshes |
 | GameKit | Game Center sign-in |
 | CoreLocation | Device position |
-| CryptoKit | SHA-256 for blob names |
+| CryptoKit | SHA-256 for blob names and aerial tree ids |
+| Foundation (URLSession) | gRPC over HTTP/1.1 to a Gerardus align server; the protobuf codec is hand-written, so there is no gRPC or protobuf library |
 | SQLite3 | The system `libsqlite3` for the local store |
 | CoreText | Registering the bundled font |
+
+## Data sources
+
+Loaded at run time from a Gerardus align server, never bundled. The app shows each source's credit on the map while
+its data is in use.
+
+| Data | Licence | Used for |
+|---|---|---|
+| USGS 3D Elevation Program (3DEP) lidar point cloud, CA_SanFrancisco_1_B23 | Public domain | Tree detection, the ground model, scan registration |
+| OpenStreetMap | ODbL 1.0, © OpenStreetMap contributors | Building outlines masked out of tree detection |
+| DataSF building footprints | PDDL 1.0, City and County of San Francisco | Building outlines masked out of tree detection |
 
 ## Bundled assets
 

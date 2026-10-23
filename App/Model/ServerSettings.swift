@@ -27,11 +27,16 @@ final class ServerSettings {
         endpoint = defaults.string(forKey: Self.urlKey).flatMap(GerardusEndpoint.init)
     }
 
-    /// Settings that start empty and are forgotten when the app quits, for tests.
+    /// Settings that are forgotten when the app quits, for tests. They start empty, or with the server a UI test
+    /// passes as a launch argument (`-canopy.gerardusURL <url>`).
     static func volatile(session: URLSession? = nil) -> ServerSettings {
         let name = "canopy.testing.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defaults.removePersistentDomain(forName: name)
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        if let server = arguments[urlKey] as? String, let endpoint = GerardusEndpoint(server) {
+            defaults.set(endpoint.url.absoluteString, forKey: urlKey)
+        }
         return ServerSettings(defaults: defaults, session: session)
     }
 

@@ -18,7 +18,8 @@ them through Swift protocols with in‑memory fakes so the real implementations 
 | Tab | |
 |---|---|
 | **Map** | The park with 200 synthetic aerial candidates: faint dot = detected, dashed ring = proposed, ring = confirmed, solid = verified. Summary bar (Confirmed · Estimated · Coverage), layer toggles (including S2 L16 tiles), and a tree sheet with Confirm / Not a tree / Tag. |
-| **Census** | With LiDAR: an AR view with the reconstructed mesh, Confirm tree, Not a tree, New tree here, and **Scan trunk**: walk round the trunk while the app keeps the most detailed mesh it sees, then get the diameter 1.37 m above the ground with ±, the lean, and the trunk's mesh saved as GLB evidence. Without LiDAR: a verification list of nearby trees. |
+| **Real trees** | Map → Layers → **Load real trees here** loads the trees found in USGS 3DEP aerial LiDAR for the tile at the map's centre and its neighbours, from the Gerardus align server set in **Me → Settings**, replacing the synthetic sample there. |
+| **Census** | With LiDAR: an AR view with the reconstructed mesh, Confirm tree, Not a tree, New tree here, **Register with 3DEP** (match the session's mesh to aerial LiDAR so positions are good to centimetres instead of GPS metres), and **Scan trunk**: walk round the trunk while the app keeps the most detailed mesh it sees, then get the diameter 1.37 m above the ground with ±, the lean, and the trunk's mesh saved as GLB evidence. Without LiDAR: a verification list of nearby trees. |
 | **Tag** | Pick a tree, place the limb point (on the LiDAR mesh within ~5 m, or by height), choose issue, what it could hit, size and urgency. Saved as a proposed tag. |
 | **Me** | Game Center sign-in (falls back to a local id), pending changes, sync with the simulated server, and debug tools: simulate a trusted approval, reset local data. **Settings** sets the Gerardus server's address and tests the connection: version, commit, uptime and reference layers. |
 
@@ -85,6 +86,7 @@ Packages/
   CanopyMap/         map behind a protocol (MapKit now), layers
   CanopySync/        GerardusClient protocol and an in-memory fake
   CanopyPlayers/     Game Center sign-in wrapper
+  CanopyReference/   Gerardus align client: 3DEP aerial trees, scan registration
 Tests/               app unit tests (Swift Testing) and UI tests (XCTest)
 Configs/             xcconfig files; Local.xcconfig (git-ignored) holds your signing team
 Fixtures/ggp/        sample park boundary, synthetic aerial tree candidates, S2 cells

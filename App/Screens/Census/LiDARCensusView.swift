@@ -2,6 +2,7 @@ import CanopyCapture
 import CanopyDesign
 import CanopyMap
 import CanopyModel
+import CanopyReference
 import SwiftUI
 
 /// Census with LiDAR: the AR view with the reconstructed mesh, the target tree, and the census actions.
@@ -13,6 +14,10 @@ struct LiDARCensusView: View {
     @State private var isMeasuring = false
     @State private var measurement: Measurement?
     @State private var notice: String?
+    /// The session registered against 3DEP: positions come from it instead of GPS while it lasts.
+    @State private var registered: RegisteredScan?
+    @State private var isRegistering = false
+    @State private var confirmingRegistration = false
     private let format = QuantityFormat()
 
     var body: some View {
@@ -43,6 +48,17 @@ struct LiDARCensusView: View {
         .onDisappear {
             capture.pause()
             location.stop()
+        }
+        .confirmationDialog(
+            "Register with aerial LiDAR?", isPresented: $confirmingRegistration, titleVisibility: .visible
+        ) {
+            Button("Upload and register") { Task { await register() } }
+        } message: {
+            Text(
+                "Uploads the colourless 3D mesh around you (up to 60 m, geometry only, no photos) to "
+                    + "\(model.gerardusURL?.host() ?? "the Gerardus server set in Me → Settings") and matches it "
+                    + "to USGS 3DEP aerial LiDAR, so trees you add or measure land within a few centimetres "
+                    + "instead of GPS metres.")
         }
         // The AR session pauses under the result sheet (Quick Look's AR mode needs the camera) and resumes, with
         // the mesh and the scan, when the sheet closes.
@@ -138,6 +154,8 @@ struct LiDARCensusView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.canopySurvey)
+
+                registrationControl
             } else {
                 HStack(spacing: Spacing.s) {
                     Button("Cancel", systemImage: "xmark") {
@@ -159,6 +177,69 @@ struct LiDARCensusView: View {
         }
     }
 
+    @ViewBuilder
+    private var registrationControl: some View {
+        if let registered {
+            HStack {
+                StatusBadge("Registered to 3DEP", systemImage: "scope", tone: .ok)
+                Text("±" + QuantityFormat.thinSpace + format.length(registered.sigma, fractionDigits: 2))
+                    .font(CanopyFont.mono(.footnote))
+                Spacer()
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            Button {
+                confirmingRegistration = true
+            } label: {
+                Label(isRegistering ? "Registering…" : "Register with 3DEP", systemImage: "scope")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.canopySecondary)
+            .font(.footnote)
+            .disabled(isRegistering)
+        }
+    }
+
+    /// Where an AR world point is on the map: from the 3DEP registration when there is one, else GPS.
+    private func position(of point: SIMD3<Float>, camera: SIMD3<Float>, device: GeoPoint) -> Position {
+        if let registered {
+            return registered.position(ofARKit: point)
+        }
+        return GeoReference.position(
+            of: point, camera: camera, device: device, horizontalAccuracy: location.accuracy ?? 10,
+            northAligned: capture.isNorthAligned)
+    }
+
+    private func register() async {
+        guard let gps = location.geoPoint, let camera = capture.cameraPosition else {
+            notice = "Waiting for GPS and AR tracking."
+            return
+        }
+        isRegistering = true
+        defer { isRegistering = false }
+        do {
+            let outcome = try await model.registerScan(
+                arkitPoints: capture.worldPoints(range: 60), gps: gps, camera: camera,
+                groundBelowOrigin: capture.groundHeight(under: .zero), northAligned: capture.isNorthAligned
+            ) { notice = $0 }
+            if let placed = outcome.placed, placed.passedGates {
+                registered = placed
+                notice =
+                    "Registered to 3DEP. New positions are good to "
+                    + format.length(placed.sigma, fractionDigits: 2) + "."
+            } else {
+                let failed = outcome.registration.gates.filter { !$0.passed }.map(\.name)
+                let reason = outcome.registration.failureReason
+                notice =
+                    "No reliable match in 3DEP"
+                    + (failed.isEmpty ? "" : " (failed: \(failed.joined(separator: ", ")))")
+                    + (reason.isEmpty ? "" : ": \(reason)") + ". Still using GPS; look around more and try again."
+            }
+        } catch {
+            notice = "Could not register: \(error.localizedDescription)"
+        }
+    }
+
     private func addTreeAtReticle() async {
         guard let device = location.geoPoint else {
             notice = "Waiting for a GPS fix."
@@ -166,9 +247,7 @@ struct LiDARCensusView: View {
         }
         let position: Position
         if let hit = capture.raycastCenter(maxDistance: 15) {
-            position = GeoReference.position(
-                of: hit.position, camera: hit.cameraPosition, device: device,
-                horizontalAccuracy: location.accuracy ?? 10, northAligned: capture.isNorthAligned)
+            position = self.position(of: hit.position, camera: hit.cameraPosition, device: device)
         } else {
             let sigma = location.accuracy ?? 10
             position = Position(geo: device, covariance: .isotropic(horizontal: sigma, vertical: sigma))
@@ -196,10 +275,10 @@ struct LiDARCensusView: View {
         do {
             let result = try await capture.finishScan()
             let position: Position
-            if let device = location.geoPoint {
-                position = GeoReference.position(
-                    of: result.trunkBase, camera: result.cameraPosition, device: device,
-                    horizontalAccuracy: location.accuracy ?? 10, northAligned: capture.isNorthAligned)
+            if let registered {
+                position = registered.position(ofARKit: result.trunkBase)
+            } else if let device = location.geoPoint {
+                position = self.position(of: result.trunkBase, camera: result.cameraPosition, device: device)
             } else if let target {
                 position = target.position
             } else {

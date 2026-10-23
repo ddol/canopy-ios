@@ -24,6 +24,9 @@ App (SwiftUI)            │ CanopyApp · AppModel · Map · Census ·     │
                            derivation, changesets)
 ```
 
+`CanopyReference` sits beside `CanopySync`: it talks to the Gerardus *align* service (reference data and scan
+registration), where `CanopySync` is the boundary for the census changesets.
+
 `CanopyModel` and `CanopyDesign` depend on nothing. Every other package depends on `CanopyModel`;
 `CanopyMap` also uses `CanopyDesign`. Packages never depend on the app, or on each other sideways: the app is
 where the store, capture, sync and players meet.
@@ -37,6 +40,7 @@ where the store, capture, sync and players meet.
 | `CanopyMap` | iOS | `MapLayers`, the `MapRenderer` protocol, `MapKitRenderer`, status presentation (word, icon, tone) |
 | `CanopySync` | iOS, macOS | `GerardusClient` protocol, `FakeGerardusClient`, `SyncCoordinator`; `GerardusEndpoint` and `GerardusStatusClient` for a real server's status page |
 | `CanopyPlayers` | iOS | `PlayerService` (Game Center sign-in, alias, trusted flag) |
+| `CanopyReference` | iOS, macOS | `AlignClient` for a Gerardus align server (gRPC over HTTP/1.1, hand-written protobuf), `SiteGeoreference`, `TreeDetector`, `AerialTrees`, `ScanRegistration` / `RegisteredScan` |
 
 The packages that build on macOS can be tested with `swift test` in a second or two; the full scheme runs
 everything on the simulator.
@@ -108,6 +112,61 @@ again, and saving ends the scan.
 **Tag** places a limb point by raycasting against the mesh within 5 m; the height above ground uses the same
 ground estimate. Without LiDAR, the player enters the height and the point sits at the tree.
 
+## Aerial data and registration (Gerardus align)
+
+A Gerardus align server (`gerardus.align.v1alpha1`, the one set in Me → Settings) prepares a **site** for
+an L16 tile: the tile and its 8 neighbours, with USGS 3DEP aerial LiDAR points, OpenStreetMap features, building
+footprints and a 1 m ground model, all in a site frame that is east-north-up metres from the tile centre on
+NAD83(2011), with NAVD88 heights. `CanopyReference` is the client.
+
+**Transport.** The server speaks gRPC over HTTP/2 and also accepts HTTP/1.1. URLSession cannot do cleartext
+HTTP/2, so the client sends gRPC over HTTP/1.1 (`URLSessionGRPCTransport`) and decodes the messages itself
+(`Protobuf.swift`, `AlignMessages.swift`); there is no gRPC or protobuf library. HTTP/1.1 trailers are invisible to
+URLSession, so a status the server sends after messages is lost; failures before any message arrive as headers and
+are reported. The message definitions come from the server by gRPC reflection.
+
+**Site frame to the map.** `SiteGeoreference` asks the server (`PoseFromHint`) where a handful of WGS 84 points
+around the site land in the site frame and fits an affine map. Across a site this is exact to well under a
+millimetre (the fit's RMS is reported), and it carries the datum shift (about 1.6 m in San Francisco) without any
+projection or datum code in Canopy.
+
+**Real trees.** `AerialTrees.load` prepares the site if needed, streams the canopy classes (unclassified and
+vegetation; 3DEP's San Francisco tiles leave trees unclassified), the buildings and the ground model, and runs
+`TreeDetector`:
+
+1. a 0.5 m canopy height model: the highest return above the ground model in each cell, single-cell pits filled,
+   smoothed with a 3 × 3 binomial kernel;
+2. tree tops: cells at least 5 m high that are the highest within a radius of 1 m + 0.08 × height (1.5 to 4.5 m);
+3. crowns: every cell at least 2 m high climbs to its highest neighbour until it reaches a top (a suppressed local
+   maximum goes to the nearest kept top);
+4. buildings (OSM and footprints) are masked out, and tops within 8 m of the data's edge are dropped.
+
+Each tree becomes a `TreeCandidate` with its height, crown radius, a confidence from crown size, height and point
+density, the source for attribution, and an id derived from its position, so loading the area again finds the same
+trees. A site answers for its own 9 tiles: `LocalStore.replaceCandidates(inTiles:with:)` swaps the candidates there
+for the new ones, keeping any a player has already acted on (and dropping a new one within 2.5 m of such a kept one).
+On a site with 26 million points this takes under 2 s including download; the dense groves are somewhat over-split,
+which players correct with Not a tree. The Map tab's Layers menu has **Load real trees here** for the tile at the
+centre of the map, and shows the data's credits while real trees are loaded.
+
+If a server has no ground layer, the ground model is built from the ground and water returns instead (lowest return
+per cell, gaps filled from their neighbours).
+
+**Registration.** On a LiDAR device, Census → **Register with 3DEP** (after the player agrees to the upload) takes
+the session's reconstructed mesh within 60 m of where the session started, thins it to one point per 10 cm cube, and
+uploads it as a scan in a z-up sensor frame (ARKit (x, y, z) → (x, −z, y), so +y points north and a north-aligned
+session has heading 0). The pose hint is the session origin's GPS position and its height above the ground. The
+server levels the scan, searches around the hint for where it meets 3DEP's elevated structure, refines with ICP and
+gates the result. When every gate passes, `RegisteredScan` places ARKit points on the map through the pose and the
+site georeference, and the Census screen uses it instead of GPS for the rest of the session: new trees and trunk
+measurements land with the registration's uncertainty instead of the GPS fix's. A synthetic scan cut from 3DEP with
+a known pose registers back to within 9 mm.
+
+**Tests.** Offline tests cover the codec, framing, the client over a mock transport, the georeference fit, detection
+on a synthetic forest and the scan conventions. `CANOPY_GERARDUS_URL=http://… swift test` in
+`Packages/CanopyReference` also runs the live tests against a server, and `TEST_RUNNER_CANOPY_GERARDUS_URL=…` runs
+the app's live UI test.
+
 ## Map
 
 `MapLayers` is a plain description of what to draw, built from `CensusState`. Renderers implement
@@ -121,6 +180,10 @@ as scheme, host and port, and runs the connection test: `GerardusStatusClient` s
 decodes the status JSON (`status`, `service`, `server_version`, `git_sha`, `api_version`, `serve_scans`,
 `started_at`, `uptime_s`, `available_layers`). Only `status` is required, so a newer server with more or
 different fields still passes. **Me → Settings** shows the answer; sync still uses the fake.
+
+The setting is the only source of the server's address: `AppModel.gerardusURL` and `alignClient`, used by Load
+real trees here and Register with 3DEP, read `serverSettings.endpoint` and are nil until a server is set, when
+those actions say to set one. UI tests can pass a server as the launch argument `-canopy.gerardusURL <url>`.
 
 ## Players
 

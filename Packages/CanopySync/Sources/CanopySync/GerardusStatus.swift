@@ -1,12 +1,12 @@
 import Foundation
 
-/// Where a Gerardus server is, from what a person typed: `hydra.example.ts.net:50061`,
+/// Where a Gerardus server is, from what a person typed: `gerardus.example.ts.net:50061`,
 /// `http://10.0.0.5:50061` or `https://gerardus.example.org`. A missing scheme means `http`, and a plain-HTTP
 /// address without a port gets Gerardus's default, 50061.
 public struct GerardusEndpoint: Hashable, Sendable, CustomStringConvertible {
     public static let defaultPort = 50061
 
-    /// Scheme, host and port only, such as `http://hydra.example.ts.net:50061`.
+    /// Scheme, host and port only, such as `http://gerardus.example.ts.net:50061`.
     public let url: URL
 
     public init?(_ input: String) {

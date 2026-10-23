@@ -1,3 +1,5 @@
+import CanopyModel
+import CanopyStore
 import CanopySync
 import Foundation
 import Testing
@@ -54,12 +56,26 @@ import Testing
         await settings.testConnection()
         #expect(settings.check == .failed("Something answered, but it is not a Gerardus server."))
 
-        let endpoint = try #require(GerardusEndpoint("hydra.example.ts.net"))
+        let endpoint = try #require(GerardusEndpoint("gerardus.example.ts.net"))
         #expect(
             ServerSettings.describe(URLError(.cannotConnectToHost), endpoint: endpoint)
-                == "Nothing is answering at hydra.example.ts.net:50061.")
+                == "Nothing is answering at gerardus.example.ts.net:50061.")
         #expect(
             ServerSettings.describe(URLError(.cannotFindHost), endpoint: endpoint).contains("Tailscale"))
+    }
+
+    @Test func theAerialActionsUseOnlyTheServerFromSettings() async throws {
+        let model = AppModel(
+            store: try LocalStore.inMemory(),
+            player: Player(id: PlayerID(rawValue: "T:_test"), alias: "Test", source: .gameCenter))
+        #expect(model.gerardusURL == nil)
+        #expect(model.alignClient == nil)
+        await model.loadAerialTrees(around: GeoPoint(latitude: 37.7694, longitude: -122.4862))
+        #expect(model.aerial == .failed("Set the Gerardus server in Me → Settings."))
+
+        model.serverSettings.save(GerardusEndpoint("gerardus.local"))
+        #expect(model.gerardusURL?.absoluteString == "http://gerardus.local:50061")
+        #expect(model.alignClient != nil)
     }
 }
 
