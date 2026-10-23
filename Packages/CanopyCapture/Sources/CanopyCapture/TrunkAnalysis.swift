@@ -3,7 +3,7 @@ import Foundation
 import simd
 
 public enum TrunkAnalysisError: Error, Equatable {
-    /// Not enough of the trunk was scanned at breast height.
+    /// Not enough of the trunk was scanned 1.37 m above the ground.
     case notEnoughPoints(Int)
     /// The scan covers too little of the trunk's circumference to fit a circle.
     case arcTooShort(degrees: Double)
@@ -11,7 +11,7 @@ public enum TrunkAnalysisError: Error, Equatable {
     case implausibleDiameter(Double)
 }
 
-/// Measures a trunk from a cropped LiDAR mesh: DBH from a circle fitted to slices at breast height, and lean
+/// Measures a trunk from a cropped LiDAR mesh: DBH from a circle fitted to slices 1.37 m above the ground, and lean
 /// from the line through circle centres fitted up the stem.
 ///
 /// The mesh must be in metres with y up, cropped around the trunk (see `Mesh.cropped`), and `groundHeight` is
@@ -21,13 +21,13 @@ public struct TrunkAnalysis: Sendable {
         public var dbh: DBH
         public var lean: Lean?
         public var circle: FittedCircle
-        /// Trunk centre at breast height, in the mesh frame (x, z).
+        /// Trunk centre 1.37 m above the ground, in the mesh frame (x, z).
         public var center: SIMD2<Double>
         /// Centres of the circles used for the lean, as (height above ground, x, z).
         public var stemCenters: [SIMD3<Double>]
     }
 
-    /// Heights above and below breast height that are sliced and pooled for the DBH fit, in metres.
+    /// Offsets from 1.37 m above the ground that are sliced and pooled for the DBH fit, in metres.
     public var sliceOffsets: [Double] = [-0.04, -0.02, 0, 0.02, 0.04]
     /// Heights above ground of the slices used for lean, in metres.
     public var leanHeights: [Double] = [0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4]
@@ -44,8 +44,8 @@ public struct TrunkAnalysis: Sendable {
     ///   - northAligned: true when the mesh frame's −z axis points to true north (ARKit's `gravityAndHeading`),
     ///     so the lean's direction can be reported.
     public func measure(_ mesh: Mesh, groundHeight: Double, northAligned: Bool = false) throws -> Result {
-        let breast = groundHeight + DBH.standardHeight
-        let points = sliceOffsets.flatMap { mesh.slice(atHeight: Float(breast + $0)) }
+        let dbhHeight = groundHeight + DBH.standardHeight
+        let points = sliceOffsets.flatMap { mesh.slice(atHeight: Float(dbhHeight + $0)) }
         guard points.count >= 12 else { throw TrunkAnalysisError.notEnoughPoints(points.count) }
         let circle: FittedCircle
         do {

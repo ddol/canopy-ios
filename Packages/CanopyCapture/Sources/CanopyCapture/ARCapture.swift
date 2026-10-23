@@ -1,7 +1,9 @@
 #if os(iOS)
     import ARKit
     import Foundation
+    import Observation
     import RealityKit
+    import UIKit
     import simd
 
     /// Whether this device can reconstruct a LiDAR mesh. Devices without it get the map, tagging and
@@ -23,21 +25,46 @@
     }
 
     /// Owns the AR view: world tracking with LiDAR scene reconstruction, the mesh overlay, raycasts against the
-    /// mesh, and mesh snapshots for evidence. Camera frames stay inside ARKit; nothing here reads or keeps an
-    /// image.
+    /// mesh, trunk scans, and mesh snapshots for evidence. Camera frames stay inside ARKit; nothing here reads or
+    /// keeps an image.
     @MainActor
-    public final class CaptureSession {
-        public let view: ARView
+    @Observable
+    public final class CaptureSession: NSObject, ARSessionDelegate {
+        /// A trunk scan in progress.
+        public struct Scan: Equatable, Sendable {
+            /// The point on the trunk where the scan started.
+            public var center: SIMD3<Float>
+            public var progress: ScanProgress
+        }
+
+        @ObservationIgnored public let view: ARView
         /// True once the session runs with gravity-and-heading alignment (−z is true north).
         public private(set) var isNorthAligned = false
+        /// The trunk scan in progress, if any.
+        public private(set) var scan: Scan?
 
-        public init() {
+        @ObservationIgnored private var hasRun = false
+        @ObservationIgnored private var accumulator: MeshAccumulator?
+        @ObservationIgnored private var lastIngest: [UUID: TimeInterval] = [:]
+        @ObservationIgnored private var refreshTask: Task<Void, Never>?
+        @ObservationIgnored private let overlayAnchor = AnchorEntity(world: .zero)
+        @ObservationIgnored private let overlay = ModelEntity()
+
+        /// Minimum time between two ingests of the same mesh anchor, in seconds.
+        static let ingestInterval: TimeInterval = 0.3
+
+        public override init() {
             view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
+            super.init()
             view.renderOptions.insert(.disableMotionBlur)
             view.environment.sceneUnderstanding.options = [.collision, .occlusion]
             view.debugOptions.insert(.showSceneUnderstanding)
+            view.session.delegate = self
+            overlayAnchor.addChild(overlay)
+            view.scene.addAnchor(overlayAnchor)
         }
 
+        /// Starts the session, or resumes it with the mesh and any scan it already has.
         public func start() {
             guard LiDAR.isAvailable else { return }
             let configuration = ARWorldTrackingConfiguration()
@@ -48,7 +75,8 @@
             configuration.planeDetection = [.horizontal]
             configuration.environmentTexturing = .none
             isNorthAligned = true
-            view.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+            view.session.run(configuration, options: hasRun ? [] : [.resetTracking, .removeExistingAnchors])
+            hasRun = true
         }
 
         public func pause() {
@@ -77,6 +105,115 @@
             raycast(at: CGPoint(x: view.bounds.midX, y: view.bounds.midY), maxDistance: maxDistance)
         }
 
+        // MARK: Trunk scans
+
+        /// Starts scanning the trunk under the centre of the view (within 6 m). While the scan runs, the most
+        /// detailed version of every part of the mesh around the trunk is kept and drawn in lime, and `scan.progress`
+        /// says how much of the circumference is covered.
+        public func startScan() throws {
+            guard let hit = raycastCenter(maxDistance: 6) else { throw CaptureError.noSurface }
+            accumulator = MeshAccumulator(
+                center: hit.position, radius: TrunkScan.radius, below: TrunkScan.below, above: TrunkScan.above)
+            lastIngest = [:]
+            scan = Scan(center: hit.position, progress: ScanProgress(triangleCount: 0))
+            for anchor in view.session.currentFrame?.anchors ?? [] {
+                if let mesh = anchor as? ARMeshAnchor {
+                    ingest(mesh, force: true)
+                }
+            }
+            refreshTask?.cancel()
+            refreshTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    await self?.refresh()
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+        }
+
+        /// Stops the scan and forgets what it captured.
+        public func cancelScan() {
+            refreshTask?.cancel()
+            refreshTask = nil
+            accumulator = nil
+            scan = nil
+            overlay.model = nil
+        }
+
+        /// Measures the trunk from everything the scan has captured. The scan keeps running, so the player can carry
+        /// on and measure again; call `cancelScan()` when done.
+        public func finishScan() async throws -> TrunkCapture {
+            guard let accumulator, let scan else { throw CaptureError.notScanning }
+            let camera = cameraPosition ?? scan.center
+            let aligned = isNorthAligned
+            return try await Task.detached(priority: .userInitiated) {
+                try TrunkScan.analyse(
+                    world: accumulator.mesh(), floorHeights: accumulator.floorHeights(), center: scan.center,
+                    camera: camera, northAligned: aligned)
+            }.value
+        }
+
+        /// Recomputes the overlay and the progress from the accumulated mesh, off the main actor.
+        private func refresh() async {
+            guard let accumulator, let center = scan?.center else { return }
+            let (mesh, progress) = await Task.detached(priority: .utility) {
+                let mesh = accumulator.mesh()
+                return (
+                    mesh,
+                    TrunkScan.progress(world: mesh, floorHeights: accumulator.floorHeights(), center: center)
+                )
+            }.value
+            guard self.scan?.center == center else { return }  // cancelled or restarted meanwhile
+            self.scan?.progress = progress
+            drawOverlay(mesh)
+        }
+
+        private func drawOverlay(_ mesh: Mesh) {
+            guard !mesh.isEmpty, mesh.triangleCount <= 150_000 else { return }
+            var descriptor = MeshDescriptor(name: "scan")
+            descriptor.positions = MeshBuffer(mesh.positions)
+            descriptor.primitives = .triangles(mesh.indices)
+            guard let resource = try? MeshResource.generate(from: [descriptor]) else { return }
+            var material = UnlitMaterial(color: UIColor(red: 0.61, green: 0.82, blue: 0.29, alpha: 1))
+            material.blending = .transparent(opacity: 0.45)
+            material.faceCulling = .none
+            overlay.model = ModelComponent(mesh: resource, materials: [material])
+        }
+
+        // MARK: Session delegate
+
+        public nonisolated func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+            MainActor.assumeIsolated { receive(anchors) }
+        }
+
+        public nonisolated func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+            MainActor.assumeIsolated { receive(anchors) }
+        }
+
+        private func receive(_ anchors: [ARAnchor]) {
+            guard accumulator != nil else { return }
+            for anchor in anchors {
+                if let mesh = anchor as? ARMeshAnchor {
+                    ingest(mesh, force: false)
+                }
+            }
+        }
+
+        /// Adds an anchor's current geometry to the scan, if it can reach the scan region.
+        private func ingest(_ anchor: ARMeshAnchor, force: Bool) {
+            guard var accumulator, let center = scan?.center else { return }
+            let origin = anchor.transform.columns.3
+            // Mesh anchors cover a few metres; skip ones that cannot reach the region.
+            guard simd_distance(SIMD3(origin.x, origin.y, origin.z), center) < TrunkScan.radius + 5 else { return }
+            let now = Date.timeIntervalSinceReferenceDate
+            if !force, let last = lastIngest[anchor.identifier], now - last < Self.ingestInterval { return }
+            lastIngest[anchor.identifier] = now
+            let (mesh, floor) = Self.extractLocal(anchor)
+            accumulator.add(mesh, anchor: anchor.identifier, transform: anchor.transform, floor: floor)
+            self.accumulator = accumulator
+        }
+
+        // MARK: Snapshots
+
         /// The reconstructed mesh from the anchors near `point`, in world coordinates, plus the heights of the
         /// faces ARKit classified as floor within `radius` metres of `point` horizontally.
         public func meshSnapshot(around point: SIMD3<Float>, radius: Float) -> (mesh: Mesh, floorHeights: [Float]) {
@@ -85,29 +222,32 @@
             let anchors = view.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
             for anchor in anchors {
                 let origin = anchor.transform.columns.3
-                // Mesh anchors cover a few metres; skip ones that cannot reach the crop.
                 guard simd_distance(SIMD3(origin.x, origin.y, origin.z), point) < radius + 5 else { continue }
-                let (part, partFloor) = Self.extract(anchor)
-                mesh.append(part)
-                floor += partFloor.filter { simd_distance(SIMD2($0.x, $0.z), SIMD2(point.x, point.z)) <= radius }
+                let (local, localFloor) = Self.extractLocal(anchor)
+                let transform = anchor.transform
+                func world(_ p: SIMD3<Float>) -> SIMD3<Float> {
+                    let w = transform * SIMD4(p, 1)
+                    return SIMD3(w.x, w.y, w.z)
+                }
+                mesh.append(Mesh(positions: local.positions.map(world), indices: local.indices))
+                floor += localFloor.map(world)
+                    .filter { simd_distance(SIMD2($0.x, $0.z), SIMD2(point.x, point.z)) <= radius }
                     .map(\.y)
             }
             return (mesh, floor)
         }
 
-        /// Copies an anchor's geometry out of its Metal buffers into world coordinates, with one corner of each
+        /// Copies an anchor's geometry out of its Metal buffers, in anchor coordinates, with one corner of each
         /// floor-classified face.
-        static func extract(_ anchor: ARMeshAnchor) -> (Mesh, [SIMD3<Float>]) {
+        static func extractLocal(_ anchor: ARMeshAnchor) -> (Mesh, [SIMD3<Float>]) {
             let geometry = anchor.geometry
-            let transform = anchor.transform
             let vertices = geometry.vertices
             let vertexBase = vertices.buffer.contents().advanced(by: vertices.offset)
             var positions: [SIMD3<Float>] = []
             positions.reserveCapacity(vertices.count)
             for i in 0..<vertices.count {
                 let local = vertexBase.advanced(by: i * vertices.stride).assumingMemoryBound(to: Float.self)
-                let world = transform * SIMD4(local[0], local[1], local[2], 1)
-                positions.append(SIMD3(world.x, world.y, world.z))
+                positions.append(SIMD3(local[0], local[1], local[2]))
             }
 
             let faces = geometry.faces
@@ -135,61 +275,8 @@
             }
             return (Mesh(positions: positions, indices: indices), floor)
         }
-    }
 
-    /// The result of measuring a trunk: the analysis, the cropped evidence mesh and its GLB bytes.
-    public struct TrunkCapture: Sendable {
-        public var analysis: TrunkAnalysis.Result
-        /// Cropped mesh, centred on the hit point.
-        public var evidence: Mesh
-        public var glb: Data
-        public var cropRadius: Double
-        /// World position of the trunk centre at ground level.
-        public var trunkBase: SIMD3<Float>
-        public var cameraPosition: SIMD3<Float>
-    }
-
-    extension CaptureSession {
-        public nonisolated static let trunkCropRadius: Float = 1.5
-
-        /// Measures the trunk at the centre of the view: raycast, snapshot, crop, fit, encode.
-        public func measureTrunk(northAligned: Bool? = nil) async throws -> TrunkCapture {
-            guard let hit = raycastCenter(maxDistance: 6) else { throw CaptureError.noSurface }
-            let (world, floorHeights) = meshSnapshot(around: hit.position, radius: Self.trunkCropRadius + 0.5)
-            let aligned = northAligned ?? isNorthAligned
-            return try await Task.detached(priority: .userInitiated) {
-                try Self.analyse(world: world, floorHeights: floorHeights, hit: hit, northAligned: aligned)
-            }.value
-        }
-
-        nonisolated static func analyse(
-            world: Mesh, floorHeights: [Float], hit: MeshHit, northAligned: Bool
-        ) throws
-            -> TrunkCapture
-        {
-            let radius = trunkCropRadius
-            let cropped = world.cropped(around: hit.position, radius: radius, below: 3, above: 4)
-            guard cropped.triangleCount > 50 else { throw CaptureError.notEnoughMesh }
-            let ground: Double
-            if !floorHeights.isEmpty {
-                let sorted = floorHeights.map { Double($0 - hit.position.y) }.sorted()
-                ground = sorted[sorted.count / 2]
-            } else if let estimate = cropped.groundHeight(near: .zero, radius: 1.0) {
-                ground = estimate
-            } else {
-                throw CaptureError.noGround
-            }
-            let analysis = try TrunkAnalysis().measure(cropped, groundHeight: ground, northAligned: northAligned)
-            let base = hit.position + SIMD3(Float(analysis.center.x), Float(ground), Float(analysis.center.y))
-            return TrunkCapture(
-                analysis: analysis,
-                evidence: cropped,
-                glb: try GLB.data(for: cropped),
-                cropRadius: Double(radius),
-                trunkBase: base,
-                cameraPosition: hit.cameraPosition
-            )
-        }
+        // MARK: Limbs
 
         /// The mesh around a point (for limb evidence), cropped and encoded.
         public func captureLimb(at hit: MeshHit, radius: Float = 1.0) throws -> (mesh: Mesh, glb: Data) {
@@ -208,12 +295,5 @@
             }
             return world.groundHeight(near: SIMD2(point.x, point.z), radius: 2).map(Float.init)
         }
-    }
-
-    public enum CaptureError: Error, Equatable {
-        /// Nothing in the mesh under the centre of the view.
-        case noSurface
-        case notEnoughMesh
-        case noGround
     }
 #endif

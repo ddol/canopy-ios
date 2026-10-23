@@ -14,7 +14,7 @@ public enum CountStatus: String, Codable, Sendable, CaseIterable {
     case removed
 }
 
-/// Diameter at breast height, measured 1.37 m above ground.
+/// Trunk diameter 1.37 m above the ground (DBH).
 public struct DBH: Hashable, Codable, Sendable {
     public enum Method: String, Codable, Sendable {
         /// Circle fitted to a LiDAR mesh slice.

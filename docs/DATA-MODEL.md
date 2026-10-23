@@ -114,7 +114,7 @@ shares it, and a `kind`:
 | `treeConfirmed(treeID)` | Census → Confirm tree |
 | `treeAdded(Tree)` | Census → New tree here |
 | `treeRejected(treeID)` | Census → Not a tree |
-| `trunkMeasured(treeID, dbh, lean, evidence)` | Census → Measure trunk |
+| `trunkMeasured(treeID, dbh, lean, evidence)` | Census → Scan trunk |
 | `tagPlaced(Tag)` | Tag |
 
 ## Deriving the current state

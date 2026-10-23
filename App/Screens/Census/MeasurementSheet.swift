@@ -8,12 +8,14 @@ import SwiftUI
 /// The result of a trunk measurement: DBH and lean with uncertainties, fit quality, and Save.
 struct MeasurementSheet: View {
     let measurement: Measurement
+    /// Called once the measurement is saved.
+    var onSaved: () -> Void = {}
 
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var saved: Tree?
     @State private var shareURL: URL?
-    @State private var preview: PreviewFile?
+    @State private var previewURL: URL?
     private let format = QuantityFormat()
 
     private var analysis: TrunkAnalysis.Result { measurement.capture.analysis }
@@ -23,7 +25,7 @@ struct MeasurementSheet: View {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: Spacing.xs) {
-                        Text("DBH at 1.37 m")
+                        Text("Trunk diameter " + format.length(analysis.dbh.height) + " above the ground")
                             .font(.subheadline)
                             .foregroundStyle(Color.canopyInkMuted)
                         Text(format.length(analysis.dbh.diameter.value, uncertainty: analysis.dbh.diameter.uncertainty))
@@ -38,7 +40,8 @@ struct MeasurementSheet: View {
                 }
 
                 Section("Fit") {
-                    LabeledContent("Points at breast height", value: "\(analysis.circle.pointCount)")
+                    LabeledContent(
+                        "Points at " + format.length(analysis.dbh.height), value: "\(analysis.circle.pointCount)")
                     LabeledContent("Circumference covered") {
                         Text(format.angle(analysis.circle.arc * 180 / .pi, fractionDigits: 0)).font(CanopyFont.mono())
                     }
@@ -65,12 +68,14 @@ struct MeasurementSheet: View {
                         ) {
                             Task { await save() }
                         }
-                        Button("Retake", systemImage: "arrow.counterclockwise", role: .cancel) {
+                        Button("Keep scanning", systemImage: "arrow.counterclockwise", role: .cancel) {
                             dismiss()
                         }
                     }
                 } footer: {
-                    Text("Saves the colourless, cropped mesh as evidence. No photo is taken.")
+                    Text(
+                        "Saves the colourless mesh of the trunk as evidence. No photo is taken. "
+                            + "Keep scanning to walk round more of the trunk and measure again.")
                 }
 
                 #if DEBUG || TESTING_TOOLS
@@ -81,8 +86,7 @@ struct MeasurementSheet: View {
                             }
                         }
                         Button("Preview in Quick Look", systemImage: "cube") {
-                            preview = (try? QuickLookPreview.usdz(for: measurement.capture.evidence)).map(
-                                PreviewFile.init)
+                            previewURL = try? QuickLookPreview.usdz(for: measurement.capture.evidence)
                         }
                     }
                 #endif
@@ -94,10 +98,9 @@ struct MeasurementSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .sheet(item: $preview) { file in
-                QuickLookView(url: file.url)
-                    .ignoresSafeArea()
-            }
+            // SwiftUI's own Quick Look presentation has a Done button; Quick Look's 3D viewer takes the swipe that
+            // would close a sheet.
+            .quickLookPreview($previewURL)
         }
     }
 
@@ -122,41 +125,7 @@ struct MeasurementSheet: View {
         )
         if saved != nil {
             shareURL = try? model.shareableGLB(BlobStore.reference(for: capture.glb))
+            onSaved()
         }
     }
-}
-
-/// Quick Look for a local file.
-struct QuickLookView: UIViewControllerRepresentable {
-    let url: URL
-
-    func makeUIViewController(context: Context) -> UINavigationController {
-        let controller = QLPreviewController()
-        controller.dataSource = context.coordinator
-        return UINavigationController(rootViewController: controller)
-    }
-
-    func updateUIViewController(_ controller: UINavigationController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
-
-    final class Coordinator: NSObject, QLPreviewControllerDataSource {
-        let url: URL
-
-        init(url: URL) {
-            self.url = url
-        }
-
-        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
-
-        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-            url as NSURL
-        }
-    }
-}
-
-/// A file to preview, identified by its URL.
-struct PreviewFile: Identifiable {
-    let url: URL
-    var id: URL { url }
 }
