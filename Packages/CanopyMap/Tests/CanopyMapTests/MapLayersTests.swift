@@ -53,6 +53,28 @@ import Testing
         #expect(quiet.tiles.isEmpty)
     }
 
+    @Test func detectedTreesAreLimitedToTheRegionNearestFirst() {
+        let centre = GeoPoint(latitude: 37.7699, longitude: -122.4757)
+        // 50 detected trees in a line going north, 1e-4 degrees (11 m) apart (offset half a step, so none sits on the
+        // region's edge), and one far-away confirmed tree.
+        let detected = (0..<50).map { k in
+            tree(
+                .detected,
+                at: GeoPoint(latitude: centre.latitude + (Double(k) + 0.5) * 1e-4, longitude: centre.longitude))
+        }
+        let confirmed = tree(.confirmed, at: GeoPoint(latitude: 37.80, longitude: -122.40))
+        let region = MapViewport(center: centre, latitudeDelta: 0.002, longitudeDelta: 0.002)
+        let layers = MapLayers(
+            state: CensusState(trees: detected + [confirmed]), region: region, detectedLimit: 5)
+        let ids = Set(layers.trees.map(\.id))
+        #expect(ids.count == 6)
+        #expect(ids.contains(confirmed.id), "trees people acted on are always drawn")
+        #expect(ids.isSuperset(of: detected.prefix(5).map(\.id)), "the nearest five")
+        let unlimited = MapLayers(state: CensusState(trees: detected + [confirmed]), region: region, detectedLimit: 100)
+        // Inside the region plus a 30 % margin: up to 0.0013 degrees north of the centre, so the first 13.
+        #expect(unlimited.trees.count == 13 + 1)
+    }
+
     @Test func everyStatusHasAWordAnIconAndATone() {
         let presentations =
             CountStatus.allCases.map(\.presentation) + Tag.Urgency.allCases.map(\.presentation)

@@ -71,11 +71,42 @@ public actor LocalStore {
         }
     }
 
+    /// The aerial base layer.
+    public func candidates() throws -> [TreeCandidate] {
+        try db.query("SELECT payload FROM candidates ORDER BY id") { row in
+            try CanopyJSON.decoder.decode(TreeCandidate.self, from: Data(row.string(0).utf8))
+        }
+    }
+
     public func candidateCount() throws -> Int {
         try db.query("SELECT count(*) FROM candidates") { $0.int(0) }.first ?? 0
     }
 
     // MARK: Writing
+
+    /// Replaces the candidates in the given L16 tiles with new ones (such as the aerial trees found there), keeping
+    /// every candidate elsewhere. A candidate in those tiles that a player has already observed stays, so their work
+    /// is not orphaned, and a replacement within `duplicateRadius` metres of one it keeps is dropped as the same tree.
+    /// Returns how many candidates were removed.
+    @discardableResult
+    public func replaceCandidates(
+        inTiles tiles: Set<S2CellID>, with replacements: [TreeCandidate], duplicateRadius: Double = 2.5
+    ) throws -> Int {
+        let current = try candidates()
+        let observed = Set(
+            try db.query("SELECT DISTINCT subject_id FROM observations") { UUID(uuidString: $0.string(0)) }
+                .compactMap { $0 })
+        let kept = current.filter { !tiles.contains($0.location.tile) || observed.contains($0.id) }
+        let keptInTiles = kept.filter { tiles.contains($0.location.tile) }
+        let keptIDs = Set(kept.map(\.id))
+        let added = replacements.filter { replacement in
+            guard !keptIDs.contains(replacement.id) else { return false }
+            let frame = LocalFrame(origin: replacement.location)
+            return !keptInTiles.contains { frame.enu(of: $0.location).horizontalDistance < duplicateRadius }
+        }
+        try importCandidates(kept + added)
+        return current.count - kept.count
+    }
 
     /// Replaces the aerial base layer.
     public func importCandidates(_ candidates: [TreeCandidate]) throws {

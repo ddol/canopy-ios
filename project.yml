@@ -36,6 +36,8 @@ packages:
     path: Packages/CanopySync
   CanopyPlayers:
     path: Packages/CanopyPlayers
+  CanopyReference:
+    path: Packages/CanopyReference
 
 targets:
   Canopy:
@@ -43,6 +45,9 @@ targets:
     platform: iOS
     sources:
       - path: App
+        # Merged into the generated Info.plist through INFOPLIST_FILE, so not a resource.
+        excludes:
+          - Info.plist
       - path: Fixtures/ggp
         type: folder
         buildPhase: resources
@@ -62,6 +67,8 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
+        # Keys the build settings cannot express (App Transport Security), merged with the generated ones.
+        INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Canopy
         # Canopy uses no encryption beyond what iOS provides (SHA-256 hashing only), so TestFlight and App Store
         # uploads need no export compliance documents.
@@ -88,6 +95,7 @@ targets:
       - package: CanopyMap
       - package: CanopySync
       - package: CanopyPlayers
+      - package: CanopyReference
 
   CanopyTests:
     type: bundle.unit-test
@@ -136,6 +144,7 @@ schemes:
         - package: CanopyStore/CanopyStoreTests
         - package: CanopyCapture/CanopyCaptureTests
         - package: CanopyMap/CanopyMapTests
+        - package: CanopyReference/CanopyReferenceTests
         - package: CanopySync/CanopySyncTests
         - package: CanopyPlayers/CanopyPlayersTests
     profile:

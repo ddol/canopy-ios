@@ -12,6 +12,9 @@ public struct TreeCandidate: Identifiable, Hashable, Codable, Sendable {
     public var confidence: Double
     /// True for made-up sample data.
     public var isSynthetic: Bool
+    /// Where the candidate came from, for attribution, such as `USGS 3DEP lidar point cloud, sf-b23 (public-domain)`.
+    /// Nil for the bundled sample data.
+    public var source: String?
 
     public init(
         id: UUID,
@@ -19,7 +22,8 @@ public struct TreeCandidate: Identifiable, Hashable, Codable, Sendable {
         height: Double? = nil,
         crownRadius: Double? = nil,
         confidence: Double,
-        isSynthetic: Bool
+        isSynthetic: Bool,
+        source: String? = nil
     ) {
         self.id = id
         self.location = location
@@ -27,6 +31,7 @@ public struct TreeCandidate: Identifiable, Hashable, Codable, Sendable {
         self.crownRadius = crownRadius
         self.confidence = confidence
         self.isSynthetic = isSynthetic
+        self.source = source
     }
 
     /// Typical horizontal error of an aerial crown-centre detection, in metres.

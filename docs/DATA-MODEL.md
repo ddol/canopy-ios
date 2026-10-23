@@ -196,6 +196,15 @@ of them is trusted. The author's submission counts as one agreement (`Changeset.
 `CanopyJSON` encodes with sorted keys and dates as integer milliseconds since 1970, so encodings are stable
 enough to hash and compare.
 
+## Aerial candidates
+
+The base layer is a set of `TreeCandidate`s: position, height and crown radius from the aerial survey, a detection
+confidence, `isSynthetic` for the bundled sample, and `source` (for example `USGS 3DEP lidar point cloud, sf-b23
+(public-domain)`) for real ones. Real candidates come from a Gerardus align server, one site (an L16 tile and its 8
+neighbours) at a time; their ids are derived from the position rounded to 1e-5 degrees, so reloading gives the same
+ids. Loading a site replaces the candidates in its 9 tiles, except those a player has observed (see
+docs/ARCHITECTURE.md, *Aerial data and registration*).
+
 ## Storage
 
 `CanopyStore.LocalStore` is an actor over one connection to the system SQLite library (`import SQLite3`,

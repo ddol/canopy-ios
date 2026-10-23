@@ -88,6 +88,30 @@ import Testing
         #expect(derived.dbh == nil)
     }
 
+    @Test func replacingCandidatesInTilesKeepsObservedOnesAndOthers() async throws {
+        let store = try await makeStore()
+        let observed = candidates[0]
+        _ = try await store.record(.treeConfirmed(treeID: observed.id), by: player)
+        let tiles: Set = [candidates[0].location.tile, candidates[1].location.tile]
+        let real = [
+            // 1.5 m from the observed candidate: the same tree.
+            TreeCandidate(
+                id: UUID(), location: GeoPoint(latitude: 37.76991, longitude: -122.47571), height: 21,
+                crownRadius: 4, confidence: 0.9, isSynthetic: false, source: "USGS 3DEP"),
+            TreeCandidate(
+                id: UUID(), location: GeoPoint(latitude: 37.7705, longitude: -122.5091), height: 14, crownRadius: 3,
+                confidence: 0.8, isSynthetic: false, source: "USGS 3DEP"),
+        ]
+        let removed = try await store.replaceCandidates(inTiles: tiles, with: real)
+        #expect(removed == 1)  // the unobserved candidate in those tiles
+        let ids = Set(try await store.candidates().map(\.id))
+        #expect(ids == [observed.id, candidates[2].id, real[1].id])
+        let state = await store.state()
+        #expect(state.trees[observed.id]?.proposedStatus == .confirmed)
+        #expect(state.trees[real[1].id]?.countStatus == .detected)
+        #expect(try await store.candidates().first { $0.id == real[1].id }?.source == "USGS 3DEP")
+    }
+
     @Test func observationsAreAppendOnly() async throws {
         let store = try await makeStore()
         _ = try await store.record(.treeRejected(treeID: candidates[1].id), by: player)

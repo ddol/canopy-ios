@@ -7,18 +7,26 @@ import SwiftUI
 public struct MapKitRenderer: MapRenderer {
     public init() {}
 
-    public func makeBody(layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport) -> some View {
-        MapKitMap(layers: layers, selection: selection, viewport: viewport)
+    public func makeBody(
+        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport,
+        onViewportChange: @escaping @MainActor (MapViewport) -> Void
+    ) -> some View {
+        MapKitMap(layers: layers, selection: selection, viewport: viewport, onViewportChange: onViewportChange)
     }
 }
 
 struct MapKitMap: View {
     let layers: MapLayers
+    let onViewportChange: @MainActor (MapViewport) -> Void
     @Binding var selection: UUID?
     @State private var position: MapCameraPosition
 
-    init(layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport) {
+    init(
+        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport,
+        onViewportChange: @escaping @MainActor (MapViewport) -> Void
+    ) {
         self.layers = layers
+        self.onViewportChange = onViewportChange
         self._selection = selection
         self._position = State(initialValue: .region(MKCoordinateRegion(viewport)))
     }
@@ -67,6 +75,13 @@ struct MapKitMap: View {
         .mapControls {
             MapUserLocationButton()
             MapCompass()
+        }
+        .onMapCameraChange(frequency: .onEnd) { context in
+            let region = context.region
+            onViewportChange(
+                MapViewport(
+                    center: GeoPoint(latitude: region.center.latitude, longitude: region.center.longitude),
+                    latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta))
         }
     }
 }

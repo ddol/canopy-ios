@@ -102,7 +102,7 @@ struct TreeSheet: View {
                     }
                     LabeledContent("Version", value: "\(tree.meta.version)")
                     if tree.meta.playerID == .aerialSurvey {
-                        LabeledContent("Source", value: "Aerial LiDAR (synthetic sample)")
+                        LabeledContent("Source", value: model.candidateSources[tree.id] ?? "Synthetic sample")
                     }
                 }
             }
