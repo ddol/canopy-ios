@@ -1,3 +1,4 @@
+import CanopyMap
 import CanopyModel
 import CanopyPlayers
 import CanopyStore
@@ -25,6 +26,8 @@ final class AppModel {
     private(set) var isSyncing = false
     /// Loading real trees from a Gerardus align server (see AppModel+Aerial).
     var aerial = AerialProgress.idle
+    /// The last loaded area's own data (canopy heights, outlines), for the Gerardus map. In memory only.
+    var aerialReference: MapLayers.Reference?
     /// Where each base-layer candidate came from, for the tree sheet: nil for the synthetic sample.
     private(set) var candidateSources: [UUID: String] = [:]
     /// The last error to show, if any.
@@ -40,18 +43,36 @@ final class AppModel {
     private(set) var server: FakeGerardusClient
     /// The real Gerardus server's address, set in Settings.
     let serverSettings: ServerSettings
+    /// Flags for checking the data, for admins only.
+    let adminSettings: AdminSettings
+    /// Where screens keep their `@AppStorage` choices (such as the base map). Forgotten when the app quits under tests,
+    /// so every UI test starts from the defaults.
+    let preferences: UserDefaults
 
     /// Who records are attributed to: the Game Center player once signed in, the local id before.
     var player: Player { players.player }
 
+    /// Whether Settings shows the admin flags to this player.
+    var isAdmin: Bool { adminSettings.isAdmin(player) }
+
     init(
         store: LocalStore, players: PlayerService, server: FakeGerardusClient = FakeGerardusClient(),
-        serverSettings: ServerSettings = .volatile()
+        serverSettings: ServerSettings = .volatile(), adminSettings: AdminSettings = .volatile(),
+        preferences: UserDefaults = AppModel.volatilePreferences()
     ) {
         self.store = store
         self.players = players
         self.server = server
         self.serverSettings = serverSettings
+        self.adminSettings = adminSettings
+        self.preferences = preferences
+    }
+
+    static func volatilePreferences() -> UserDefaults {
+        let name = "canopy.testing.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
     }
 
     convenience init(store: LocalStore, player: Player) {
@@ -70,10 +91,12 @@ final class AppModel {
                 for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             return AppModel(
                 store: try LocalStore(directory: support.appending(path: "Canopy")), players: players,
-                serverSettings: ServerSettings())
+                serverSettings: ServerSettings(), adminSettings: .live(), preferences: .standard)
         } catch {
             // Fall back to memory so the app still opens, and say why.
-            let model = AppModel(store: try! LocalStore.inMemory(), players: players, serverSettings: ServerSettings())
+            let model = AppModel(
+                store: try! LocalStore.inMemory(), players: players, serverSettings: ServerSettings(),
+                adminSettings: .live(), preferences: .standard)
             model.error = "Could not open local data: \(error.localizedDescription)"
             return model
         }

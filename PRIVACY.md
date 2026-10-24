@@ -48,7 +48,8 @@ asks for Local Network permission the first time.
   answers (its version, commit, uptime and reference layers). The request carries no player id, alias, location
   or record, and the app keeps only the address, not the answer.
 - **Loading real trees** sends the S2 tile you are looking at and the circle of the map in view (its centre and
-  radius) and downloads public data for it (USGS 3DEP aerial LiDAR, OpenStreetMap, DataSF footprints). The map
+  radius) and downloads public data for it (USGS 3DEP aerial LiDAR and DataSF footprints, plus OpenStreetMap for an
+  admin who turned it on). The map
   position is where you are looking, not where you are, and nothing about you is sent.
 - **Registering a scan** happens only when you tap Register and confirm. It uploads the colourless mesh the AR
   session has reconstructed within 60 m of where the session started, thinned to one point per 10 cm, with the

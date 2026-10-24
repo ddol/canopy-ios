@@ -1,4 +1,5 @@
 import CanopyDesign
+import CanopyMap
 import CanopyModel
 import CanopyReference
 import Foundation
@@ -64,10 +65,12 @@ extension AppModel {
         }
         do {
             let result = try await AerialTrees.load(
-                tile: centre.tile, area: area, label: "canopy-ggp", client: client
+                tile: centre.tile, area: area, osm: isAdmin && adminSettings.useOSM, label: "canopy-ggp",
+                client: client
             ) { stageSink.yield($0) }
             let removed = try await store.replaceCandidates(where: { result.covers($0) }, with: result.candidates)
             UserDefaults.standard.set(result.attribution, forKey: Self.attributionKey)
+            aerialReference = Self.reference(result)
             await refresh()
             let format = QuantityFormat()
             aerial = .done(
@@ -79,6 +82,42 @@ extension AppModel {
         } catch {
             aerial = .failed("Could not load aerial trees: \(error.localizedDescription)")
         }
+    }
+
+    /// What the Gerardus map draws for a loaded area: canopy heights and outlines, on the map.
+    nonisolated static func reference(_ result: AerialTrees.SiteResult) -> MapLayers.Reference? {
+        guard let georeference = result.georeference else { return nil }
+        let canopy = result.canopy.map { chm in
+            // The points are thinned to 1 m, so a 0.5 m grid is speckled: draw the highest of each 2 × 2 cells.
+            let factor = chm.cellSize < 1 ? 2 : 1
+            let nx = chm.nx / factor
+            let ny = chm.ny / factor
+            var heights = [Float](repeating: 0, count: nx * ny)
+            for j in 0..<(ny * factor) {
+                for i in 0..<(nx * factor) {
+                    let k = (j / factor) * nx + i / factor
+                    heights[k] = max(heights[k], chm.heights[j * chm.nx + i])
+                }
+            }
+            let size = chm.cellSize * Double(factor)
+            return MapLayers.Reference.Raster(
+                southWest: georeference.geo(x: chm.origin.x, y: chm.origin.y),
+                northEast: georeference.geo(
+                    x: chm.origin.x + Double(nx) * size, y: chm.origin.y + Double(ny) * size),
+                nx: nx, ny: ny, heights: heights)
+        }
+        let lines = result.lines.map { line in
+            let kind: MapLayers.Reference.LineKind =
+                switch line.kind {
+                case .building: .building
+                case .road: .road
+                case .path: .path
+                default: .other
+                }
+            return MapLayers.Reference.Line(
+                kind: kind, points: line.points.map { georeference.geo(x: $0.x, y: $0.y) }, closed: line.closed)
+        }
+        return MapLayers.Reference(canopy: canopy, lines: lines)
     }
 
     nonisolated static func describe(_ stage: AerialTrees.Stage) -> String {

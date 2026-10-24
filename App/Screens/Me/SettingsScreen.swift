@@ -19,6 +19,7 @@ struct SettingsScreen: View {
         Form {
             serverSection
             resultSections
+            adminSection
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
@@ -84,6 +85,35 @@ struct SettingsScreen: View {
     private func forget() {
         address = ""
         settings.save(nil)
+    }
+
+    // MARK: Admin
+
+    @ViewBuilder
+    private var adminSection: some View {
+        if model.isAdmin {
+            Section {
+                Toggle(isOn: Binding(get: { model.adminSettings.useOSM }, set: { model.adminSettings.useOSM = $0 })) {
+                    Label("Use OpenStreetMap", systemImage: "map")
+                }
+                .accessibilityIdentifier("admin-use-osm")
+                LabeledContent("Your player id") {
+                    Text(verbatim: model.player.id.rawValue)
+                        .font(CanopyFont.mono(.footnote))
+                        .textSelection(.enabled)
+                }
+            } header: {
+                Text("Admin")
+            } footer: {
+                Text(
+                    """
+                    For checking Canopy's data. These show to the Game Center players in CANOPY_ADMIN_PLAYER_IDS, and to \
+                    everyone in a debug build. OpenStreetMap masks buildings out of tree detection and adds roads and \
+                    paths to the Gerardus map. Trees found with it are marked as for checking only: the shared tree \
+                    layer takes nothing from OpenStreetMap.
+                    """)
+            }
+        }
     }
 
     // MARK: Result

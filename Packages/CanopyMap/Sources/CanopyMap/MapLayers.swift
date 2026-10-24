@@ -5,14 +5,20 @@ import Foundation
 /// MapKit, so a MapLibre renderer can draw the same layers.
 public struct MapLayers: Equatable, Sendable {
     public struct Visibility: Equatable, Sendable {
-        public var detected = true
+        /// The statuses a tree can have on the map; removed trees are never drawn.
+        public static let treeStatuses: [CountStatus] = [.detected, .proposed, .confirmed, .verified]
+
+        /// Which trees to draw, by `Tree.displayStatus`.
+        public var statuses: Set<CountStatus>
         public var tags = true
         public var routes = true
         /// S2 L16 tile outlines.
         public var tiles = false
 
-        public init(detected: Bool = true, tags: Bool = true, routes: Bool = true, tiles: Bool = false) {
-            self.detected = detected
+        public init(
+            statuses: Set<CountStatus> = Set(treeStatuses), tags: Bool = true, routes: Bool = true, tiles: Bool = false
+        ) {
+            self.statuses = statuses
             self.tags = tags
             self.routes = routes
             self.tiles = tiles
@@ -48,6 +54,53 @@ public struct MapLayers: Equatable, Sendable {
         public var corners: [GeoPoint]
     }
 
+    /// Gerardus's own data for the area last loaded: canopy heights from the aerial point cloud, and outlines and lines.
+    /// Drawn by `GerardusRenderer` in place of a base map. A class, so comparing layers does not compare every height.
+    public final class Reference: Equatable, Sendable {
+        public enum LineKind: Sendable {
+            case building, road, path, other
+        }
+
+        public struct Line: Sendable {
+            public var kind: LineKind
+            public var points: [GeoPoint]
+            public var closed: Bool
+
+            public init(kind: LineKind, points: [GeoPoint], closed: Bool) {
+                self.kind = kind
+                self.points = points
+                self.closed = closed
+            }
+        }
+
+        /// Canopy height above the ground on a north-up grid, row by row from the south-west, in metres.
+        public struct Raster: Sendable {
+            public var southWest: GeoPoint
+            public var northEast: GeoPoint
+            public var nx: Int
+            public var ny: Int
+            public var heights: [Float]
+
+            public init(southWest: GeoPoint, northEast: GeoPoint, nx: Int, ny: Int, heights: [Float]) {
+                self.southWest = southWest
+                self.northEast = northEast
+                self.nx = nx
+                self.ny = ny
+                self.heights = heights
+            }
+        }
+
+        public let canopy: Raster?
+        public let lines: [Line]
+
+        public init(canopy: Raster?, lines: [Line]) {
+            self.canopy = canopy
+            self.lines = lines
+        }
+
+        public static func == (lhs: Reference, rhs: Reference) -> Bool { lhs === rhs }
+    }
+
     public var trees: [TreeMarker]
     public var tags: [TagMarker]
     public var routes: [RouteLine]
@@ -55,6 +108,7 @@ public struct MapLayers: Equatable, Sendable {
     /// Park outline: outer rings of the boundary polygons.
     public var boundary: [[GeoPoint]]
     public var visibility: Visibility
+    public var reference: Reference?
 
     public init(
         trees: [TreeMarker] = [],
@@ -62,7 +116,8 @@ public struct MapLayers: Equatable, Sendable {
         routes: [RouteLine] = [],
         tiles: [TileOutline] = [],
         boundary: [[GeoPoint]] = [],
-        visibility: Visibility = Visibility()
+        visibility: Visibility = Visibility(),
+        reference: Reference? = nil
     ) {
         self.trees = trees
         self.tags = tags
@@ -70,6 +125,7 @@ public struct MapLayers: Equatable, Sendable {
         self.tiles = tiles
         self.boundary = boundary
         self.visibility = visibility
+        self.reference = reference
     }
 
     /// Builds the layers from the census. Removed trees are left out; tiles are the L16 tiles holding a tree.
@@ -83,12 +139,12 @@ public struct MapLayers: Equatable, Sendable {
         boundary: [[GeoPoint]] = [],
         visibility: Visibility = Visibility(),
         region: MapViewport? = nil,
-        detectedLimit: Int = 600
+        detectedLimit: Int = 600,
+        reference: Reference? = nil
     ) {
         let hazards = Dictionary(grouping: state.tags.values, by: \.treeID).mapValues(\.count)
         var shown = state.trees.values
-            .filter { $0.displayStatus != .removed }
-            .filter { visibility.detected || $0.displayStatus != .detected }
+            .filter { $0.displayStatus != .removed && visibility.statuses.contains($0.displayStatus) }
         if let region {
             let padded = MapViewport(
                 center: region.center, latitudeDelta: region.latitudeDelta * 1.3,
@@ -123,7 +179,8 @@ public struct MapLayers: Equatable, Sendable {
             routes: visibility.routes ? routes.map { RouteLine(id: $0.id, name: $0.name, points: $0.points) } : [],
             tiles: tiles,
             boundary: boundary,
-            visibility: visibility
+            visibility: visibility,
+            reference: reference
         )
     }
 }

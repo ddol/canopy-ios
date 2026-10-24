@@ -82,6 +82,12 @@ import Testing
         #expect(result.candidates.count > 1000)
         #expect(result.tiles.count == 9)
         #expect(result.attribution.contains { $0.contains("3D Elevation Program") })
+        // OpenStreetMap only when asked for: no credit, no roads or paths.
+        #expect(!result.attribution.contains { $0.contains("OpenStreetMap") })
+        #expect(!result.lines.contains { $0.kind == .road || $0.kind == .path })
+        let canopy = try #require(result.canopy)
+        #expect(canopy.heights.count == canopy.nx * canopy.ny)
+        #expect(canopy.heights.contains { $0 > 20 })
         #expect(result.candidates.allSatisfy { !$0.isSynthetic && $0.source?.contains("3DEP") == true })
         #expect(Set(result.candidates.map(\.id)).count == result.candidates.count)
         // A site answers for its own tiles only.
@@ -100,6 +106,12 @@ import Testing
         #expect(result.candidates.allSatisfy { area.contains($0.location) })
         // Points come from the area and its margin only, a 100 m circle: a fraction of the 9-tile bundle.
         #expect(result.pointCount * 3 < whole.pointCount)
+
+        let checking = try await AerialTrees.load(
+            tile: stowLake, area: area, osm: true, label: "ggp-stow-lake", client: Live.client)
+        #expect(checking.attribution.contains { $0.contains("OpenStreetMap") })
+        #expect(checking.lines.contains { $0.kind == .path })
+        #expect(checking.candidates.allSatisfy { $0.source?.contains("for checking only") == true })
     }
 
     final class Stages: @unchecked Sendable {

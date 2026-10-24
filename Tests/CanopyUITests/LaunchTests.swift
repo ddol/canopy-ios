@@ -53,6 +53,43 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
+    func testTreesFilterByStatusAndTheMapCanLeaveOutAppleMaps() {
+        let app = launch()
+        let tree = app.buttons[firstTreeID].firstMatch
+        XCTAssertTrue(tree.waitForExistence(timeout: mapTimeout))
+        let detected = app.buttons["status-filter-detected"].firstMatch
+        XCTAssertTrue(detected.waitForExistence(timeout: 10))
+        XCTAssertEqual(detected.value as? String, "Shown")
+        detected.tap()
+        XCTAssertEqual(detected.value as? String, "Hidden")
+        XCTAssertTrue(tree.waitForNonExistence(timeout: 10))
+        detected.tap()
+        XCTAssertTrue(tree.waitForExistence(timeout: 30))
+
+        app.buttons["Layers"].firstMatch.tap()
+        let gerardus = app.buttons["Gerardus only"].firstMatch
+        XCTAssertTrue(gerardus.waitForExistence(timeout: 10))
+        gerardus.tap()
+        // The Gerardus map draws trees itself, so there are no marker views to snapshot.
+        XCTAssertTrue(app.descendants(matching: .any)["gerardus-map"].firstMatch.waitForExistence(timeout: 10))
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Gerardus only"
+        shot.lifetime = .keepAlways
+        add(shot)
+        app.buttons["Layers"].firstMatch.tap()
+        app.buttons["Apple Maps"].firstMatch.tap()
+        XCTAssertTrue(tree.waitForExistence(timeout: mapTimeout))
+
+        // Debug builds show the admin flags to everyone; OpenStreetMap is off until turned on.
+        app.buttons["Me"].firstMatch.tap()
+        app.navigationBars.buttons["Settings"].firstMatch.tap()
+        let osm = app.switches["admin-use-osm"].firstMatch
+        scroll(app, toReveal: osm)
+        XCTAssertTrue(osm.waitForExistence(timeout: 10))
+        XCTAssertEqual(osm.value as? String, "0")
+    }
+
+    @MainActor
     func testCensusExplainsWhenThereIsNoLiDAR() {
         // The simulator has no LiDAR, so Census offers the verification list.
         let app = launch()

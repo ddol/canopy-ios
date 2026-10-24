@@ -39,7 +39,7 @@ import Testing
             issue: .hanger, couldHit: .path, sizeClass: .large, urgency: .immediate)
         let state = CensusState(trees: trees, tags: [tag])
 
-        let all = MapLayers(state: state, visibility: .init(detected: true, tags: true, routes: true, tiles: true))
+        let all = MapLayers(state: state, visibility: .init(tags: true, routes: true, tiles: true))
         #expect(all.trees.count == 2)
         #expect(all.tags.map(\.id) == [tag.id])
         #expect(all.trees.first { $0.id == trees[1].id }?.hazardCount == 1)
@@ -47,10 +47,25 @@ import Testing
         #expect(all.tiles.allSatisfy { $0.corners.count == 4 })
 
         let quiet = MapLayers(
-            state: state, visibility: .init(detected: false, tags: false, routes: false, tiles: false))
+            state: state, visibility: .init(statuses: [.confirmed], tags: false, routes: false, tiles: false))
         #expect(quiet.trees.map(\.id) == [trees[1].id])
         #expect(quiet.tags.isEmpty)
         #expect(quiet.tiles.isEmpty)
+    }
+
+    @Test func treesCanBeFilteredByStatus() {
+        let trees = [
+            tree(.detected, at: a), tree(.proposed, at: b), tree(.confirmed, at: a), tree(.verified, at: b),
+            tree(.removed, at: a),
+        ]
+        let state = CensusState(trees: trees)
+        let statuses = { (shown: Set<CountStatus>) in
+            Set(MapLayers(state: state, visibility: .init(statuses: shown)).trees.map(\.status))
+        }
+        #expect(statuses(Set(MapLayers.Visibility.treeStatuses)) == [.detected, .proposed, .confirmed, .verified])
+        #expect(statuses([.proposed, .verified]) == [.proposed, .verified])
+        #expect(statuses([]).isEmpty)
+        #expect(statuses([.removed]).isEmpty)  // removed trees are never drawn
     }
 
     @Test func detectedTreesAreLimitedToTheRegionNearestFirst() {

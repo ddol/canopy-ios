@@ -105,11 +105,13 @@ struct TagScreen: View {
             Picker("Choose a tree", selection: $treeID) {
                 Text("None").tag(UUID?.none)
                 ForEach(nearby, id: \.0.id) { tree, distance in
-                    Text("\(tree.displayStatus.presentation.label), \(format.length(distance, fractionDigits: 0))")
-                        .tag(UUID?.some(tree.id))
+                    Text(
+                        "\(tree.name): \(tree.displayStatus.presentation.label.lowercased()), \(format.length(distance, fractionDigits: 0))"
+                    )
+                    .tag(UUID?.some(tree.id))
                 }
                 if let tree, !nearby.contains(where: { $0.0.id == tree.id }) {
-                    Text("Selected tree").tag(UUID?.some(tree.id))
+                    Text(tree.name).tag(UUID?.some(tree.id))
                 }
             }
             .pickerStyle(.navigationLink)
