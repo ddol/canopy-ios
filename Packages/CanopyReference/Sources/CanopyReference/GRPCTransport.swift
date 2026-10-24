@@ -26,6 +26,8 @@ public enum GRPCTransportError: Error, Equatable, LocalizedError {
     case notGRPC(String)
     case compressedMessage
     case noResponse
+    /// The call ran past its time limit and was cancelled.
+    case timedOut(seconds: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -33,6 +35,7 @@ public enum GRPCTransportError: Error, Equatable, LocalizedError {
         case .notGRPC(let type): "The server did not answer with gRPC (\(type))."
         case .compressedMessage: "The server sent a compressed message, which Canopy does not support."
         case .noResponse: "The server closed the call without an answer."
+        case .timedOut(let seconds): "The server did not finish within \(seconds)\u{202F}s."
         }
     }
 }
@@ -52,8 +55,9 @@ public final class URLSessionGRPCTransport: GRPCTransport {
     private let router: Router
 
     /// - Parameter idleTimeout: how long a call may go without receiving data. Site preparation and
-    ///   registration stream progress, so this is the gap between messages, not the length of the call.
-    public init(baseURL: URL, idleTimeout: TimeInterval = 300) {
+    ///   registration stream progress, so this is the gap between messages, not the length of the call;
+    ///   `AlignClient.Timeouts` limits the length.
+    public init(baseURL: URL, idleTimeout: TimeInterval = 30) {
         self.baseURL = baseURL
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = idleTimeout

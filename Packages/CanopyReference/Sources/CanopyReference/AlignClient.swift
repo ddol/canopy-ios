@@ -6,10 +6,35 @@ public struct AlignClient: Sendable {
     public static let site = "/gerardus.align.v1alpha1.SiteService/"
     public static let registration = "/gerardus.align.v1alpha1.RegistrationService/"
 
-    public let transport: any GRPCTransport
+    /// How long each kind of call may take before it fails with `GRPCTransportError.timedOut`. The server keeps
+    /// preparing a site after the call that asked for it gives up, so asking again later finds it ready.
+    public struct Timeouts: Sendable {
+        /// Calls with one answer: server info, sites, poses.
+        public var unary: Duration
+        /// Preparing a site; a new site takes about 15 s on a server with its 3DEP data on hand.
+        public var prepare: Duration
+        /// Streaming reference layers.
+        public var reference: Duration
+        /// Uploading a scan, and registering it.
+        public var registration: Duration
 
-    public init(transport: any GRPCTransport) {
+        public init(
+            unary: Duration = .seconds(10), prepare: Duration = .seconds(30), reference: Duration = .seconds(45),
+            registration: Duration = .seconds(180)
+        ) {
+            self.unary = unary
+            self.prepare = prepare
+            self.reference = reference
+            self.registration = registration
+        }
+    }
+
+    public let transport: any GRPCTransport
+    public var timeouts: Timeouts
+
+    public init(transport: any GRPCTransport, timeouts: Timeouts = Timeouts()) {
         self.transport = transport
+        self.timeouts = timeouts
     }
 
     public init(baseURL: URL) {
@@ -49,7 +74,7 @@ public struct AlignClient: Sendable {
         request.string(1, l16Token)
         request.string(2, label)
         request.bool(3, refresh)
-        return map(transport.call(Self.site + "PrepareSite", requests: [request.data])) { fields in
+        return map(call(Self.site + "PrepareSite", [request.data], limit: timeouts.prepare)) { fields in
             for f in fields {
                 if f.number == 1 { return .progress(Progress(fields: try ProtoReader.fields(f.bytes))) }
                 if f.number == 2 { return .ready(try Site(f)) }
@@ -73,7 +98,7 @@ public struct AlignClient: Sendable {
 
     /// Streams reference geometry for a prepared site, in the site frame.
     public func reference(_ request: StreamReferenceRequest) -> AsyncThrowingStream<ReferenceChunk, any Error> {
-        map(transport.call(Self.site + "StreamReference", requests: [request.serialized])) { fields in
+        map(call(Self.site + "StreamReference", [request.serialized], limit: timeouts.reference)) { fields in
             var layer = ReferenceLayer.unspecified
             var chunk: ReferenceChunk?
             var complete = false
@@ -146,7 +171,7 @@ public struct AlignClient: Sendable {
         }
         var scan: Scan?
         var already = false
-        for try await data in transport.call(Self.registration + "UploadScan", requests: messages) {
+        for try await data in call(Self.registration + "UploadScan", messages, limit: timeouts.registration) {
             for f in try ProtoReader.fields(ArraySlice([UInt8](data))) {
                 if f.number == 1 { scan = Scan(fields: try ProtoReader.fields(f.bytes)) }
                 if f.number == 2 { already = f.bool }
@@ -165,7 +190,7 @@ public struct AlignClient: Sendable {
         if let initialPose { request.message(2, initialPose) }
         if let hint { request.message(3, hint) }
         if let options { request.message(4, options) }
-        return map(transport.call(Self.registration + "Register", requests: [request.data])) { fields in
+        return map(call(Self.registration + "Register", [request.data], limit: timeouts.registration)) { fields in
             for f in fields {
                 switch f.number {
                 case 1: return .progress(Progress(fields: try ProtoReader.fields(f.bytes)))
@@ -180,8 +205,31 @@ public struct AlignClient: Sendable {
 
     // MARK: Plumbing
 
+    /// The messages of a call. Once `limit` has passed the stream fails with `timedOut` and the call is cancelled.
+    func call(_ path: String, _ requests: [Data], limit: Duration) -> AsyncThrowingStream<Data, any Error> {
+        let messages = transport.call(path, requests: requests)
+        return AsyncThrowingStream { continuation in
+            let reader = Task {
+                do {
+                    for try await message in messages { continuation.yield(message) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            let timer = Task {
+                try await Task.sleep(for: limit)
+                continuation.finish(throwing: GRPCTransportError.timedOut(seconds: Int(limit.components.seconds)))
+            }
+            continuation.onTermination = { _ in
+                reader.cancel()
+                timer.cancel()
+            }
+        }
+    }
+
     func unaryFields(_ path: String, _ request: Data) async throws -> [ProtoField] {
-        for try await data in transport.call(path, requests: [request]) {
+        for try await data in call(path, [request], limit: timeouts.unary) {
             return try ProtoReader.fields(ArraySlice([UInt8](data)))
         }
         throw GRPCTransportError.noResponse

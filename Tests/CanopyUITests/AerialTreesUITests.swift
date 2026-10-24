@@ -17,14 +17,19 @@ final class AerialTreesUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["Estimated: 200"].firstMatch.waitForExistence(timeout: 90))
 
-        app.buttons["Layers"].firstMatch.tap()
-        let load = app.buttons["Load real trees here"].firstMatch
-        XCTAssertTrue(load.waitForExistence(timeout: 10))
-        load.tap()
-
-        // Preparing a new site on the server can take a few minutes; a prepared one, seconds.
+        // A prepared site loads in seconds. A new one may first fail as still preparing; the server carries on, so
+        // the second try finds it ready.
         let result = app.descendants(matching: .any)["aerial-result"].firstMatch
-        XCTAssertTrue(result.waitForExistence(timeout: 600))
+        for attempt in 1...2 {
+            app.buttons["Layers"].firstMatch.tap()
+            let load = app.buttons["Load real trees in view"].firstMatch
+            XCTAssertTrue(load.waitForExistence(timeout: 10))
+            load.tap()
+            XCTAssertTrue(result.waitForExistence(timeout: 120))
+            guard attempt == 1, result.label.contains("still preparing") else { break }
+            app.buttons["Dismiss"].firstMatch.tap()
+            sleep(20)
+        }
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.lifetime = .keepAlways
         add(shot)

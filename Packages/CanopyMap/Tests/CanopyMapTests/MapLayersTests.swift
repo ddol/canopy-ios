@@ -94,4 +94,11 @@ import Testing
         #expect(viewport.contains(GeoPoint(latitude: 37.7638, longitude: -122.5098)))  // Lincoln & Great Hwy
         #expect(!viewport.contains(GeoPoint(latitude: 37.7793, longitude: -122.4193)))  // City Hall
     }
+
+    @Test func cornerDistanceIsTheRadiusRoundTheRegion() {
+        // 0.002° of latitude is 222 m; 0.002° of longitude at 37.77° N is 176 m.
+        let viewport = MapViewport(
+            center: GeoPoint(latitude: 37.77, longitude: -122.47), latitudeDelta: 0.002, longitudeDelta: 0.002)
+        #expect(abs(viewport.cornerDistance - 141.7) < 1)
+    }
 }

@@ -200,10 +200,10 @@ enough to hash and compare.
 
 The base layer is a set of `TreeCandidate`s: position, height and crown radius from the aerial survey, a detection
 confidence, `isSynthetic` for the bundled sample, and `source` (for example `USGS 3DEP lidar point cloud, sf-b23
-(public-domain)`) for real ones. Real candidates come from a Gerardus align server, one site (an L16 tile and its 8
-neighbours) at a time; their ids are derived from the position rounded to 1e-5 degrees, so reloading gives the same
-ids. Loading a site replaces the candidates in its 9 tiles, except those a player has observed (see
-docs/ARCHITECTURE.md, *Aerial data and registration*).
+(public-domain)`) for real ones. Real candidates come from a Gerardus align server, for the part of the map in view (at
+most 150 m from its centre) within one site (an L16 tile and its 8 neighbours); their ids are derived from the
+position rounded to 1e-5 degrees, so reloading gives the same ids. Loading replaces the candidates in that area,
+except those a player has observed (see docs/ARCHITECTURE.md, *Aerial data and registration*).
 
 ## Storage
 

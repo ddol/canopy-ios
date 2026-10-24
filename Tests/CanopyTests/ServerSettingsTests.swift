@@ -70,7 +70,7 @@ import Testing
             player: Player(id: PlayerID(rawValue: "T:_test"), alias: "Test", source: .gameCenter))
         #expect(model.gerardusURL == nil)
         #expect(model.alignClient == nil)
-        await model.loadAerialTrees(around: GeoPoint(latitude: 37.7694, longitude: -122.4862))
+        await model.loadAerialTrees(around: GeoPoint(latitude: 37.7694, longitude: -122.4862), radius: 100)
         #expect(model.aerial == .failed("Set the Gerardus server in Me → Settings."))
 
         model.serverSettings.save(GerardusEndpoint("gerardus.local"))

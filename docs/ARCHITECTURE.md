@@ -123,16 +123,22 @@ NAD83(2011), with NAVD88 heights. `CanopyReference` is the client.
 HTTP/2, so the client sends gRPC over HTTP/1.1 (`URLSessionGRPCTransport`) and decodes the messages itself
 (`Protobuf.swift`, `AlignMessages.swift`); there is no gRPC or protobuf library. HTTP/1.1 trailers are invisible to
 URLSession, so a status the server sends after messages is lost; failures before any message arrive as headers and
-are reported. The message definitions come from the server by gRPC reflection.
+are reported. The message definitions come from the server by gRPC reflection. Every call has a time limit
+(`AlignClient.Timeouts`: 10 s for single answers, 30 s to prepare a site, 45 s to stream reference layers, 180 s for
+registration) and a call that receives nothing for 30 s fails, so a slow server or link shows an error instead of
+a spinner. The server keeps preparing a site after the call that asked for it gives up, so the app says the area is
+still being prepared and the next try finds it ready.
 
 **Site frame to the map.** `SiteGeoreference` asks the server (`PoseFromHint`) where a handful of WGS 84 points
 around the site land in the site frame and fits an affine map. Across a site this is exact to well under a
 millimetre (the fit's RMS is reported), and it carries the datum shift (about 1.6 m in San Francisco) without any
 projection or datum code in Canopy.
 
-**Real trees.** `AerialTrees.load` prepares the site if needed, streams the canopy classes (unclassified and
-vegetation; 3DEP's San Francisco tiles leave trees unclassified), the buildings and the ground model, and runs
-`TreeDetector`:
+**Real trees.** `AerialTrees.load` prepares the site if needed and streams the canopy classes (unclassified and
+vegetation; 3DEP's San Francisco tiles leave trees unclassified), the buildings and the ground model. Given an
+`Area` it streams only a circle (`StreamReferenceRequest`'s centre and radius, in the site frame) plus a 20 m margin
+so edge crowns are whole; the app asks for the map's visible region, at most 150 m from its centre, which is about
+4 MB at 1 m voxels instead of 15 MB for the whole site. Then it runs `TreeDetector`:
 
 1. a 0.5 m canopy height model: the highest return above the ground model in each cell, single-cell pits filled,
    smoothed with a 3 × 3 binomial kernel;
@@ -143,11 +149,12 @@ vegetation; 3DEP's San Francisco tiles leave trees unclassified), the buildings 
 
 Each tree becomes a `TreeCandidate` with its height, crown radius, a confidence from crown size, height and point
 density, the source for attribution, and an id derived from its position, so loading the area again finds the same
-trees. A site answers for its own 9 tiles: `LocalStore.replaceCandidates(inTiles:with:)` swaps the candidates there
-for the new ones, keeping any a player has already acted on (and dropping a new one within 2.5 m of such a kept one).
+trees. A result answers for the part of its area inside the site's own 9 tiles (`SiteResult.covers`):
+`LocalStore.replaceCandidates(where:with:)` swaps the candidates there for the new ones, keeping any a player has
+already acted on (and dropping a new one within 2.5 m of such a kept one).
 On a site with 26 million points this takes under 2 s including download; the dense groves are somewhat over-split,
-which players correct with Not a tree. The Map tab's Layers menu has **Load real trees here** for the tile at the
-centre of the map, and shows the data's credits while real trees are loaded.
+which players correct with Not a tree. The Map tab's Layers menu has **Load real trees in view**, and the map shows
+the data's credits while real trees are loaded. Reducing the data further is on the [backlog](BACKLOG.md).
 
 If a server has no ground layer, the ground model is built from the ground and water returns instead (lowest return
 per cell, gaps filled from their neighbours).

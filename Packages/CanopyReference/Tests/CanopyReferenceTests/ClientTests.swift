@@ -24,6 +24,13 @@ final class MockTransport: GRPCTransport, @unchecked Sendable {
     }
 }
 
+/// A server that never answers.
+struct SilentTransport: GRPCTransport {
+    func call(_ path: String, requests: [Data]) -> AsyncThrowingStream<Data, any Error> {
+        AsyncThrowingStream { _ in }
+    }
+}
+
 @Suite struct ClientTests {
     @Test func framesSplitAcrossChunksAreReassembled() async throws {
         let (stream, continuation) = AsyncThrowingStream<Data, any Error>.makeStream()
@@ -169,5 +176,18 @@ final class MockTransport: GRPCTransport, @unchecked Sendable {
         #expect(registration.state == .candidate)
         #expect(registration.best?.pose?.translation == Vector3(x: 1, y: 2, z: 3))
         #expect(registration.gates.first?.passed == true)
+    }
+
+    @Test func callsGiveUpAtTheirTimeLimit() async throws {
+        let timeouts = AlignClient.Timeouts(unary: .milliseconds(50), prepare: .seconds(1))
+        let client = AlignClient(transport: SilentTransport(), timeouts: timeouts)
+        let start = ContinuousClock.now
+        await #expect(throws: GRPCTransportError.timedOut(seconds: 0)) {
+            _ = try await client.site("8085876c1")
+        }
+        #expect(ContinuousClock.now - start < .seconds(5))
+        await #expect(throws: GRPCTransportError.timedOut(seconds: 1)) {
+            _ = try await client.preparedSite("8085876c1", label: "test")
+        }
     }
 }

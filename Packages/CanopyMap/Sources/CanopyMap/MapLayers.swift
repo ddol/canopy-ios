@@ -176,6 +176,13 @@ public struct MapViewport: Equatable, Sendable {
             && abs(point.longitude - center.longitude) <= longitudeDelta / 2
     }
 
+    /// Metres from the centre to a corner: the radius of the smallest circle round the region.
+    public var cornerDistance: Double {
+        let corner = GeoPoint(
+            latitude: center.latitude + latitudeDelta / 2, longitude: center.longitude + longitudeDelta / 2)
+        return LocalFrame(origin: center).enu(of: corner).horizontalDistance
+    }
+
     /// Squared distance from the centre in degrees, longitude scaled by cos(latitude); for ordering only.
     func squaredDistance(to point: GeoPoint) -> Double {
         let dLat = point.latitude - center.latitude

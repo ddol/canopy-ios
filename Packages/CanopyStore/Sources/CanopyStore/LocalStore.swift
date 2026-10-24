@@ -84,25 +84,26 @@ public actor LocalStore {
 
     // MARK: Writing
 
-    /// Replaces the candidates in the given L16 tiles with new ones (such as the aerial trees found there), keeping
-    /// every candidate elsewhere. A candidate in those tiles that a player has already observed stays, so their work
-    /// is not orphaned, and a replacement within `duplicateRadius` metres of one it keeps is dropped as the same tree.
-    /// Returns how many candidates were removed.
+    /// Replaces the candidates in an area (where `covers` is true) with new ones, such as the aerial trees found there,
+    /// keeping every candidate elsewhere. A candidate in the area that a player has already observed stays, so their
+    /// work is not orphaned, and a replacement within `duplicateRadius` metres of one it keeps is dropped as the same
+    /// tree. Returns how many candidates were removed.
     @discardableResult
     public func replaceCandidates(
-        inTiles tiles: Set<S2CellID>, with replacements: [TreeCandidate], duplicateRadius: Double = 2.5
+        where covers: @Sendable (GeoPoint) -> Bool, with replacements: [TreeCandidate],
+        duplicateRadius: Double = 2.5
     ) throws -> Int {
         let current = try candidates()
         let observed = Set(
             try db.query("SELECT DISTINCT subject_id FROM observations") { UUID(uuidString: $0.string(0)) }
                 .compactMap { $0 })
-        let kept = current.filter { !tiles.contains($0.location.tile) || observed.contains($0.id) }
-        let keptInTiles = kept.filter { tiles.contains($0.location.tile) }
+        let kept = current.filter { !covers($0.location) || observed.contains($0.id) }
+        let keptInArea = kept.filter { covers($0.location) }
         let keptIDs = Set(kept.map(\.id))
         let added = replacements.filter { replacement in
             guard !keptIDs.contains(replacement.id) else { return false }
             let frame = LocalFrame(origin: replacement.location)
-            return !keptInTiles.contains { frame.enu(of: $0.location).horizontalDistance < duplicateRadius }
+            return !keptInArea.contains { frame.enu(of: $0.location).horizontalDistance < duplicateRadius }
         }
         try importCandidates(kept + added)
         return current.count - kept.count
