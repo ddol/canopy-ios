@@ -125,9 +125,10 @@ struct MapScreen: View {
             Toggle("S2 L16 tiles", systemImage: "square.grid.3x3", isOn: $visibility.tiles)
             Divider()
             Section("Aerial LiDAR") {
-                Button("Load real trees here", systemImage: "tree") {
+                Button("Load real trees in view", systemImage: "tree") {
                     let centre = viewport?.center ?? MapViewport.goldenGatePark.center
-                    Task { await model.loadAerialTrees(around: centre) }
+                    let radius = viewport?.cornerDistance ?? AppModel.aerialRadiusLimit
+                    Task { await model.loadAerialTrees(around: centre, radius: radius) }
                 }
                 .disabled(model.aerial.isWorking)
             }

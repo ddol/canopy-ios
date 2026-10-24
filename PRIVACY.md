@@ -40,15 +40,16 @@ Deleting the app deletes all of it too.
 
 ## Gerardus align server
 
-Canopy can use a Gerardus align server on your network (Map → Layers → **Load real trees here**, and Census →
+Canopy can use a Gerardus align server on your network (Map → Layers → **Load real trees in view**, and Census →
 **Register with 3DEP**). You set its address in **Me → Settings**; until you do, the app contacts no server. iOS
 asks for Local Network permission the first time.
 
 - **Testing the connection** (Me → Settings → **Test connection**) sends one `GET /` and shows what the server
   answers (its version, commit, uptime and reference layers). The request carries no player id, alias, location
   or record, and the app keeps only the address, not the answer.
-- **Loading real trees** sends the S2 tile you are looking at and downloads public data for it (USGS 3DEP aerial
-  LiDAR, OpenStreetMap, DataSF footprints). Nothing about you is sent.
+- **Loading real trees** sends the S2 tile you are looking at and the circle of the map in view (its centre and
+  radius) and downloads public data for it (USGS 3DEP aerial LiDAR, OpenStreetMap, DataSF footprints). The map
+  position is where you are looking, not where you are, and nothing about you is sent.
 - **Registering a scan** happens only when you tap Register and confirm. It uploads the colourless mesh the AR
   session has reconstructed within 60 m of where the session started, thinned to one point per 10 cm, with the
   session's approximate GPS position. It is geometry only (no photos, colours or textures), it is not cropped to a

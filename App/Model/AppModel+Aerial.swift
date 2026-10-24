@@ -35,30 +35,47 @@ extension AppModel {
         return UserDefaults.standard.stringArray(forKey: Self.attributionKey) ?? []
     }
 
-    /// Replaces the candidates in the 9 L16 tiles around `point` with the trees found in 3DEP there.
-    func loadAerialTrees(around point: GeoPoint) async {
+    /// The farthest from the map centre trees are loaded, in metres. A zoomed-out map loads only its middle, which keeps
+    /// the download to a few megabytes.
+    static let aerialRadiusLimit = 150.0
+
+    /// Replaces the candidates within `radius` metres of `centre` (at most `aerialRadiusLimit`) with the trees found
+    /// in 3DEP there.
+    func loadAerialTrees(around centre: GeoPoint, radius: Double) async {
         guard !aerial.isWorking else { return }
         guard let client = alignClient, let host = gerardusURL?.host() else {
             aerial = .failed(NoServerSet().errorDescription!)
             return
         }
         aerial = .working("Asking \(host)…")
-        let tile = point.tile
-        do {
-            let result = try await AerialTrees.load(tile: tile, label: "canopy-ggp", client: client) { stage in
-                Task { @MainActor [weak self] in
-                    // A late update must not overwrite the result.
-                    guard let self, aerial.isWorking else { return }
-                    aerial = .working(Self.describe(stage))
-                }
+        let area = AerialTrees.Area(centre: centre, radius: min(radius, Self.aerialRadiusLimit))
+        // Progress arrives off the main actor; one consumer applies it in order.
+        let (stages, stageSink) = AsyncStream.makeStream(of: AerialTrees.Stage.self)
+        let updates = Task { [weak self] in
+            for await stage in stages {
+                // A late update must not overwrite the result.
+                guard let self, aerial.isWorking else { return }
+                aerial = .working(Self.describe(stage))
             }
-            let removed = try await store.replaceCandidates(inTiles: result.tiles, with: result.candidates)
+        }
+        defer {
+            stageSink.finish()
+            updates.cancel()
+        }
+        do {
+            let result = try await AerialTrees.load(
+                tile: centre.tile, area: area, label: "canopy-ggp", client: client
+            ) { stageSink.yield($0) }
+            let removed = try await store.replaceCandidates(where: { result.covers($0) }, with: result.candidates)
             UserDefaults.standard.set(result.attribution, forKey: Self.attributionKey)
             await refresh()
             let format = QuantityFormat()
             aerial = .done(
-                "\(format.count(result.candidates.count)) trees from aerial LiDAR around tile \(tile.familyDisplay)"
+                "\(format.count(result.candidates.count)) trees from aerial LiDAR within "
+                    + "\(format.length(area.radius, fractionDigits: 0)) of the map centre"
                     + (removed > 0 ? ", replacing \(format.count(removed)) sample candidates." : "."))
+        } catch let error as AerialTrees.Failure {
+            aerial = .failed(error.localizedDescription)
         } catch {
             aerial = .failed("Could not load aerial trees: \(error.localizedDescription)")
         }
@@ -66,9 +83,10 @@ extension AppModel {
 
     nonisolated static func describe(_ stage: AerialTrees.Stage) -> String {
         switch stage {
-        case .preparing(let progress):
-            let stage = progress.stage.isEmpty ? "site" : progress.stage
-            return "Preparing the \(stage) data on the server…"
+        case .preparing(let progress) where progress.stage == "aerial" && (0...1).contains(progress.fraction):
+            return "Preparing aerial LiDAR on the server: \(QuantityFormat().percent(Double(progress.fraction)))…"
+        case .preparing:
+            return "Preparing the site on the server…"
         case .downloading(let points):
             return "Downloading \(QuantityFormat().count(points)) aerial points…"
         case .detecting:
@@ -116,7 +134,11 @@ extension AppModel {
         if let prepared = try await client.site(tile.token) {
             site = prepared
         } else {
-            site = try await client.preparedSite(tile.token, label: "canopy-ggp")
+            do {
+                site = try await client.preparedSite(tile.token, label: "canopy-ggp")
+            } catch GRPCTransportError.timedOut {
+                throw AerialTrees.Failure.stillPreparing
+            }
         }
         let georeference = try await SiteGeoreference.fetch(for: site, client: client)
 

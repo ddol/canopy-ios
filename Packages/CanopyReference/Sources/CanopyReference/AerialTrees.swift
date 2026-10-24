@@ -5,15 +5,39 @@ import Foundation
 /// Real tree candidates for an area: prepares the Gerardus site for an L16 tile (the tile and its 8 neighbours),
 /// streams its 3DEP points, buildings and ground model, finds the trees and places them on the map.
 public enum AerialTrees {
-    /// The candidates found for one site.
+    /// A circle on the ground: the part of a site to load.
+    public struct Area: Equatable, Sendable {
+        public var centre: GeoPoint
+        /// Metres.
+        public var radius: Double
+
+        public init(centre: GeoPoint, radius: Double) {
+            self.centre = centre
+            self.radius = radius
+        }
+
+        public func contains(_ point: GeoPoint) -> Bool {
+            LocalFrame(origin: centre).enu(of: point).horizontalDistance <= radius
+        }
+    }
+
+    /// The candidates found for one site, or the part of it in an area.
     public struct SiteResult: Sendable {
         public var site: Site
         public var candidates: [TreeCandidate]
-        /// The L16 tiles the site covers; candidates there can be replaced by `candidates`.
+        /// The L16 tiles the site covers.
         public var tiles: Set<S2CellID>
+        /// The part of the site that was loaded; nil: all of it.
+        public var area: Area?
         /// Who to credit, one line per source: "U.S. Geological Survey, 3D Elevation Program (public domain)".
         public var attribution: [String]
         public var pointCount: Int
+
+        /// Whether the result answers for a point: in the site's tiles and the area. Candidates there can be
+        /// replaced by `candidates`.
+        public func covers(_ point: GeoPoint) -> Bool {
+            tiles.contains(point.tile) && area?.contains(point) != false
+        }
     }
 
     public enum Stage: Sendable, Equatable {
@@ -24,12 +48,26 @@ public enum AerialTrees {
         case placing
     }
 
+    public enum Failure: Error, Equatable, LocalizedError {
+        /// Preparing the site ran past its time limit. The server carries on, so the site is usually ready soon.
+        case stillPreparing
+
+        public var errorDescription: String? {
+            "The server is still preparing this area. Try again in a minute."
+        }
+    }
+
     /// Classes that can be canopy in 3DEP: unclassified and the vegetation classes. Buildings (6), bridges (17),
     /// noise (7, 18), ground (2) and water (9) are left out.
     public static let canopyClasses: [UInt32] = [1, 3, 4, 5]
 
+    /// How far past an area points are streamed, in metres, so the crowns of trees on its edge are whole.
+    public static let areaMargin = 20.0
+
+    /// Finds the trees in the site for `tile`, or only in `area` (which should be centred in `tile`), so less data
+    /// comes down.
     public static func load(
-        tile: S2CellID, label: String, client: AlignClient, voxelSize: Float = 1.0,
+        tile: S2CellID, area: Area? = nil, label: String, client: AlignClient, voxelSize: Float = 1.0,
         detector: TreeDetector = TreeDetector(), progress: @Sendable (Stage) -> Void = { _ in }
     ) async throws -> SiteResult {
         let token = tile.parent(level: S2CellID.tileLevel).token
@@ -37,17 +75,27 @@ public enum AerialTrees {
         if let prepared = try await client.site(token) {
             site = prepared
         } else {
-            site = try await client.preparedSite(token, label: label) { progress(.preparing($0)) }
+            do {
+                site = try await client.preparedSite(token, label: label) { progress(.preparing($0)) }
+            } catch GRPCTransportError.timedOut {
+                throw Failure.stillPreparing
+            }
+        }
+        let georeference = try await SiteGeoreference.fetch(for: site, client: client)
+        let centre = area.map { georeference.site(of: $0.centre) }
+        func request(_ layers: [ReferenceLayer], classes: [UInt32]) -> StreamReferenceRequest {
+            StreamReferenceRequest(
+                l16Token: token, layers: layers, centre: centre.map { Vector3(x: $0.x, y: $0.y, z: 0) },
+                radius: area.map { Float($0.radius + areaMargin) } ?? 0, voxelSize: voxelSize, aerialClasses: classes)
         }
 
         var blocks: [PointBlock] = []
         var ground: Heightfield?
         var buildings: [[SIMD2<Double>]] = []
         var count = 0
-        let request = StreamReferenceRequest(
-            l16Token: token, layers: [.aerialPoints, .osm, .footprints, .groundMesh], voxelSize: voxelSize,
-            aerialClasses: canopyClasses)
-        for try await chunk in client.reference(request) {
+        for try await chunk in client.reference(
+            request([.aerialPoints, .osm, .footprints, .groundMesh], classes: canopyClasses))
+        {
             switch chunk {
             case .points(_, let block):
                 blocks.append(block)
@@ -64,9 +112,7 @@ public enum AerialTrees {
         if ground == nil {
             // Older servers have no ground layer: build one from the ground and water returns.
             var groundBlocks: [PointBlock] = []
-            let groundRequest = StreamReferenceRequest(
-                l16Token: token, layers: [.aerialPoints], voxelSize: voxelSize, aerialClasses: [2, 9])
-            for try await chunk in client.reference(groundRequest) {
+            for try await chunk in client.reference(request([.aerialPoints], classes: [2, 9])) {
                 if case .points(_, let block) = chunk { groundBlocks.append(block) }
             }
             ground = Heightfield(groundPoints: groundBlocks, cellSize: 1)
@@ -76,24 +122,23 @@ public enum AerialTrees {
         progress(.detecting)
         let trees = detector.detect(points: blocks, ground: ground, buildings: buildings)
         progress(.placing)
-        let georeference = try await SiteGeoreference.fetch(for: site, client: client)
         let aerialSource = site.sources.first { $0.layer == .aerialPoints }
         let source = aerialSource.map { "\($0.name) (\($0.licence))" } ?? "Gerardus aerial points"
         // The bundle is the bounding box of its 9 tiles, which reaches past them; a site answers for its tiles only, so
         // loading the neighbouring site later neither duplicates nor drops a tree.
-        let tiles = Set(site.coveringL16Tokens.compactMap(S2CellID.init(token:)))
-        return SiteResult(
-            site: site,
-            candidates: candidates(trees, georeference: georeference, source: source).filter {
-                tiles.contains($0.location.tile)
-            },
-            tiles: tiles,
+        var result = SiteResult(
+            site: site, candidates: [], tiles: Set(site.coveringL16Tokens.compactMap(S2CellID.init(token:))),
+            area: area,
             attribution: site.sources.map { source in
                 let licence = source.licence == "public-domain" ? "public domain" : source.licence
                 return "\(source.attribution.isEmpty ? source.name : source.attribution) (\(licence))"
             },
             pointCount: count
         )
+        result.candidates = candidates(trees, georeference: georeference, source: source).filter {
+            result.covers($0.location)
+        }
+        return result
     }
 
     /// Detected trees as candidates. Ids come from the position (rounded to about a metre), so finding the same tree

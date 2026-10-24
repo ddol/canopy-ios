@@ -50,6 +50,26 @@ import Testing
         #expect(abs((field.height(x: 2.5, y: 2.5) ?? 0) - 80.2) < 0.06)
         #expect(abs((field.height(x: 5, y: 5) ?? 0) - 80.5) < 0.15)
     }
+
+    @Test func aResultAnswersForItsTilesWithinItsArea() throws {
+        let centre = GeoPoint(latitude: 37.769652, longitude: -122.475737)
+        let frame = LocalFrame(origin: centre)
+        let at = { (e: Double, n: Double) in frame.geoPoint(of: ENU(east: e, north: n, up: 0)).point }
+        let area = AerialTrees.Area(centre: centre, radius: 100)
+        #expect(area.contains(at(70, 70)))
+        #expect(!area.contains(at(80, 80)))
+
+        let site = try Site(fields: [])
+        let tiles: Set = [centre.tile]
+        var result = AerialTrees.SiteResult(
+            site: site, candidates: [], tiles: tiles, area: area, attribution: [], pointCount: 0)
+        #expect(result.covers(centre))
+        #expect(!result.covers(at(0, 101)))
+        #expect(!result.covers(at(0, 300)))  // outside the area and the tile
+        result.area = nil
+        #expect(result.covers(at(10, 10)) == tiles.contains(at(10, 10).tile))
+        #expect(!result.covers(at(0, 300)))
+    }
 }
 
 @Suite(.enabled(if: Live.enabled), .serialized) struct LiveAerialTreesTests {
@@ -67,6 +87,19 @@ import Testing
         // A site answers for its own tiles only.
         #expect(result.candidates.allSatisfy { result.tiles.contains($0.location.tile) })
         #expect(stages.values.contains(.detecting))
+    }
+
+    @Test func loadsOnlyTheAreaAsked() async throws {
+        let stowLake = try #require(S2CellID(token: Live.stowLake))
+        let area = AerialTrees.Area(centre: stowLake.center, radius: 80)
+        let result = try await AerialTrees.load(
+            tile: stowLake, area: area, label: "ggp-stow-lake", client: Live.client)
+        let whole = try await AerialTrees.load(tile: stowLake, label: "ggp-stow-lake", client: Live.client)
+        print("AERIAL AREA \(result.candidates.count) candidates, \(result.pointCount) of \(whole.pointCount) points")
+        #expect(result.candidates.count > 20)
+        #expect(result.candidates.allSatisfy { area.contains($0.location) })
+        // Points come from the area and its margin only, a 100 m circle: a fraction of the 9-tile bundle.
+        #expect(result.pointCount * 3 < whole.pointCount)
     }
 
     final class Stages: @unchecked Sendable {

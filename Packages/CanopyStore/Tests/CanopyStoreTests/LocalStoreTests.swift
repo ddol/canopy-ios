@@ -88,7 +88,7 @@ import Testing
         #expect(derived.dbh == nil)
     }
 
-    @Test func replacingCandidatesInTilesKeepsObservedOnesAndOthers() async throws {
+    @Test func replacingCandidatesInAnAreaKeepsObservedOnesAndOthers() async throws {
         let store = try await makeStore()
         let observed = candidates[0]
         _ = try await store.record(.treeConfirmed(treeID: observed.id), by: player)
@@ -102,7 +102,7 @@ import Testing
                 id: UUID(), location: GeoPoint(latitude: 37.7705, longitude: -122.5091), height: 14, crownRadius: 3,
                 confidence: 0.8, isSynthetic: false, source: "USGS 3DEP"),
         ]
-        let removed = try await store.replaceCandidates(inTiles: tiles, with: real)
+        let removed = try await store.replaceCandidates(where: { tiles.contains($0.tile) }, with: real)
         #expect(removed == 1)  // the unobserved candidate in those tiles
         let ids = Set(try await store.candidates().map(\.id))
         #expect(ids == [observed.id, candidates[2].id, real[1].id])
