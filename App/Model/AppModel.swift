@@ -246,14 +246,19 @@ extension AppModel {
 // MARK: - Sync
 
 extension AppModel {
-    /// Pushes open changesets to the (fake) Gerardus server and brings back their state.
+    /// Where sync sends changesets: the Gerardus server in Settings, or the simulated one when none is set.
+    var syncClient: any GerardusClient { mapClient ?? server }
+
+    /// Pushes open changesets to the Gerardus server (or the simulated one) and brings back their state.
     func sync() async {
         isSyncing = true
         defer { isSyncing = false }
         let blobs = store.blobs
         do {
-            let report = try await SyncCoordinator(client: server).sync(
-                changesets.filter(\.state.isOpen), author: player
+            // A server takes changesets only from their author: ones made under another id (before a Game Center
+            // sign-in) stay on the phone.
+            let report = try await SyncCoordinator(client: syncClient).sync(
+                changesets.filter { $0.state.isOpen && $0.meta.playerID == player.id }, author: player
             ) { ref in try blobs.data(for: ref) }
             for changeset in report.updated {
                 try await store.updateChangeset(changeset)
@@ -271,8 +276,14 @@ extension AppModel {
         id: PlayerID(rawValue: "gerardus:fake-ranger"), alias: "Ranger (simulated)", isTrusted: true,
         source: .gameCenter)
 
-    /// Has the simulated trusted ranger approve every open changeset on the fake server, then syncs.
+    /// Has the simulated trusted ranger approve every open changeset on the fake server, then syncs. Only without a
+    /// real server: on one, a second player has to agree.
     func simulateTrustedApproval() async {
+        guard mapClient == nil else {
+            error =
+                "The simulated ranger only approves on the simulated server. Forget the server in Settings to use it."
+            return
+        }
         await sync()
         do {
             for id in await server.openChangesetIDs() {

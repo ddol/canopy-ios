@@ -38,11 +38,15 @@ public enum AerialTrees {
         public var georeference: SiteGeoreference?
         public var canopy: TreeDetector.CanopyHeightModel?
         public var lines: [LineFeature]
+        /// OpenStreetMap was asked for and the server sent it; the candidates are then for checking only.
+        public var usedOSM: Bool
+        /// OpenStreetMap was asked for and the server refused: it sends OSM only to its admins.
+        public var osmRefused: Bool
 
         public init(
             site: Site, candidates: [TreeCandidate], tiles: Set<S2CellID>, area: Area? = nil, attribution: [String],
             pointCount: Int, georeference: SiteGeoreference? = nil, canopy: TreeDetector.CanopyHeightModel? = nil,
-            lines: [LineFeature] = []
+            lines: [LineFeature] = [], usedOSM: Bool = false, osmRefused: Bool = false
         ) {
             self.site = site
             self.candidates = candidates
@@ -53,6 +57,8 @@ public enum AerialTrees {
             self.georeference = georeference
             self.canopy = canopy
             self.lines = lines
+            self.usedOSM = usedOSM
+            self.osmRefused = osmRefused
         }
 
         /// Whether the result answers for a point: in the site's tiles and the area. Candidates there can be
@@ -117,7 +123,7 @@ public enum AerialTrees {
         var ground: Heightfield?
         var lines: [LineFeature] = []
         var count = 0
-        let layers: [ReferenceLayer] = [.aerialPoints, .footprints, .groundMesh] + (osm ? [.osm] : [])
+        var layers: [ReferenceLayer] = [.aerialPoints, .footprints, .groundMesh]
         for try await chunk in client.reference(request(layers, classes: canopyClasses)) {
             switch chunk {
             case .points(_, let block):
@@ -132,6 +138,20 @@ public enum AerialTrees {
                 break
             }
         }
+        // OpenStreetMap on its own call: the server refuses a whole stream that names it for anyone but its admins, and
+        // detection must work either way.
+        var osmRefused = false
+        if osm {
+            do {
+                for try await chunk in client.reference(request([.osm], classes: [])) {
+                    if case .lines(_, let more) = chunk { lines += more }
+                }
+                layers.append(.osm)
+            } catch let error as GRPCStatusError where error.code == GRPCStatusError.permissionDenied {
+                osmRefused = true
+            }
+        }
+        let usedOSM = layers.contains(.osm)
         if ground == nil {
             // Older servers have no ground layer: build one from the ground and water returns.
             var groundBlocks: [PointBlock] = []
@@ -149,7 +169,7 @@ public enum AerialTrees {
         let aerialSource = site.sources.first { $0.layer == .aerialPoints }
         let source =
             (aerialSource.map { "\($0.name) (\($0.licence))" } ?? "Gerardus aerial points")
-            + (osm ? "; buildings masked with OpenStreetMap, for checking only" : "")
+            + (usedOSM ? "; buildings masked with OpenStreetMap, for checking only" : "")
         // The bundle is the bounding box of its 9 tiles, which reaches past them; a site answers for its tiles only, so
         // loading the neighbouring site later neither duplicates nor drops a tree.
         var result = SiteResult(
@@ -162,7 +182,9 @@ public enum AerialTrees {
             pointCount: count,
             georeference: georeference,
             canopy: detector.canopyHeightModel(points: blocks, ground: ground),
-            lines: lines
+            lines: lines,
+            usedOSM: usedOSM,
+            osmRefused: osmRefused
         )
         result.candidates = candidates(trees, georeference: georeference, source: source).filter {
             result.covers($0.location)

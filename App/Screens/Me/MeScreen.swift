@@ -163,7 +163,10 @@ struct MeScreen: View {
         } header: {
             Text("Sync")
         } footer: {
-            Text("Sync uses a simulated server on this device; changes are not sent over the network yet.")
+            Text(
+                model.mapClient == nil
+                    ? "No server is set, so sync uses a simulated server on this device."
+                    : "Sync sends your changes to this Gerardus server's shared map.")
         }
     }
 
@@ -184,7 +187,7 @@ struct MeScreen: View {
                 Button("Simulate trusted approval", systemImage: "checkmark.shield") {
                     Task { await model.simulateTrustedApproval() }
                 }
-                .disabled(open.isEmpty)
+                .disabled(open.isEmpty || model.mapClient != nil)
                 Button("Reset local data", systemImage: "trash", role: .destructive) {
                     confirmingReset = true
                 }
@@ -193,7 +196,9 @@ struct MeScreen: View {
             } header: {
                 Text("Debug")
             } footer: {
-                Text("A simulated trusted ranger approves every pending change on the fake server.")
+                Text(
+                    "A simulated trusted ranger approves every pending change on the simulated server, when no "
+                        + "server is set.")
             }
         }
     #endif
