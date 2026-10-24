@@ -124,6 +124,26 @@ public struct GerardusMapClient: GerardusClient {
         return try MapMessages.changeset(try ProtoReader.fields(view.bytes))
     }
 
+    /// An open changeset waiting for agreement, with its author as the server knows them.
+    public struct OpenChangeset: Sendable {
+        public var changeset: Changeset
+        public var authorAlias: String
+        public var authorTrusted: Bool
+    }
+
+    /// The open changesets that touch a tile, oldest first: the review queue.
+    public func openChangesets(in tile: S2CellID) async throws -> [OpenChangeset] {
+        var request = ProtoWriter()
+        request.string(1, tile.token)
+        return try await call("ListOpenChangesets", request).filter { $0.number == 1 }.map { field in
+            let fields = try ProtoReader.fields(field.bytes)
+            return OpenChangeset(
+                changeset: try MapMessages.changeset(fields),
+                authorAlias: fields.first { $0.number == 10 }?.string ?? "",
+                authorTrusted: fields.first { $0.number == 11 }?.bool ?? false)
+        }
+    }
+
     // MARK: Tiles
 
     /// A tile's current entities and the sequence to pull from next.
@@ -133,8 +153,19 @@ public struct GerardusMapClient: GerardusClient {
             public var id: UUID
             public var version: Int
             public var fields: [String: JSONValue]
+            public var tile: S2CellID?
+            public var createdBy = PlayerID(rawValue: "")
+            public var createdAt = Date(timeIntervalSince1970: 0)
             /// Trees: the S2 L22 cell the tree stands in.
             public var occupancy: S2CellID?
+
+            /// The entity as the store keeps it, or nil when it is of a kind Canopy does not know.
+            public var record: SharedRecord? {
+                guard let kind, let tile else { return nil }
+                return SharedRecord(
+                    kind: kind, id: id, version: version, tile: tile, createdBy: createdBy, createdAt: createdAt,
+                    fields: fields)
+            }
         }
 
         public var entities: [Entity]
@@ -153,6 +184,9 @@ public struct GerardusMapClient: GerardusClient {
                 case 2: entity.id = UUID(uuidString: f.string) ?? entity.id
                 case 3: entity.version = f.int
                 case 4: entity.fields = try MapMessages.fields(f.string)
+                case 5: entity.tile = S2CellID(token: f.string)
+                case 6: entity.createdBy = PlayerID(rawValue: f.string)
+                case 7: entity.createdAt = MapMessages.date(try ProtoReader.fields(f.bytes))
                 case 10: entity.occupancy = S2CellID(token: f.string)
                 default: break
                 }
@@ -339,6 +373,7 @@ enum MapMessages {
             case 3: change.tile = S2CellID(token: f.string) ?? change.tile
             case 4: change.op = try op(try ProtoReader.fields(f.bytes))
             case 5: change.appliedAt = date(try ProtoReader.fields(f.bytes))
+            case 7: change.author = PlayerID(rawValue: f.string)
             default: break
             }
         }

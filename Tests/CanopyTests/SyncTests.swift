@@ -1,3 +1,4 @@
+import CanopyMap
 import CanopyModel
 import CanopyPlayers
 import CanopyReference
@@ -58,5 +59,69 @@ struct SyncTests {
         #expect(model.error == nil)
         #expect(model.changesets.first { $0.id == changeset.id }?.state == .applied)
         #expect(model.tree(candidate.id)?.countStatus == .confirmed)
+    }
+
+    @Test func otherPlayersChangesShowUpAndCanBeReviewed() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let address = try #require(environment["CANOPY_GERARDUS_MAP_URL"])
+        let endpoint = try #require(GerardusEndpoint(address))
+        func phone(_ player: Player) throws -> AppModel {
+            let settings = ServerSettings.volatile()
+            settings.save(endpoint)
+            return AppModel(
+                store: try LocalStore.inMemory(), players: PlayerService(local: player), serverSettings: settings)
+        }
+        let walker = Player(
+            id: PlayerID(rawValue: "T:_canopy-walker-\(UUID().uuidString.prefix(8))"), alias: "Walker",
+            source: .gameCenter)
+        let admin = Player(
+            id: PlayerID(rawValue: environment["CANOPY_GERARDUS_ADMIN"] ?? "T:_canopy-admin"), alias: "Ranger",
+            source: .gameCenter)
+        let a = try phone(walker)
+        let b = try phone(admin)
+        await a.load()
+        await b.load()
+
+        // The walker loads a tree and confirms it.
+        let location = GeoPoint(
+            latitude: 37.7690 + Double.random(in: 0...0.002), longitude: -122.4850 + Double.random(in: 0...0.01))
+        let candidate = TreeCandidate(
+            id: AerialTrees.stableID(location), location: location, height: 20, crownRadius: 4, confidence: 0.8,
+            isSynthetic: false, source: "USGS 3DEP lidar point cloud (public-domain)")
+        try await a.store.replaceCandidates(where: { _ in false }, with: [candidate])
+        await a.refresh()
+        _ = await a.saveDetectedTrees(
+            AerialTrees.SiteResult(
+                site: try Site(fields: []), candidates: [candidate], tiles: [location.tile], attribution: [],
+                pointCount: 0))
+        await a.confirm(try #require(a.tree(candidate.id)))
+        await a.sync()
+        let proposal = try #require(a.changesets.first { $0.ops.contains { $0.id == candidate.id } })
+        #expect(proposal.state == .pending)
+
+        // The ranger looks at that spot and syncs: the tree arrives from the shared map, and the walker's change waits
+        // for review.
+        let view = MapViewport(center: location, latitudeDelta: 0.002, longitudeDelta: 0.002)
+        b.mapViewport = view
+        #expect(b.tree(candidate.id) == nil)
+        await b.sync()
+        #expect(b.error == nil)
+        #expect(b.tree(candidate.id)?.countStatus == .detected)
+        #expect(b.serverPlayer?.isTrusted == true)
+        let item = try #require(b.reviewQueue.first { $0.changeset.id == proposal.id })
+        #expect(item.authorAlias == "Walker")
+
+        await b.review(item, approve: true)
+        #expect(b.error == nil)
+        #expect(!b.reviewQueue.contains { $0.changeset.id == proposal.id })
+        #expect(b.tree(candidate.id)?.countStatus == .confirmed)
+
+        // The walker syncs: applied, and the shared map agrees.
+        a.mapViewport = view
+        await a.sync()
+        #expect(a.changesets.first { $0.id == proposal.id }?.state == .applied)
+        let confirmed = try #require(a.tree(candidate.id))
+        #expect(confirmed.countStatus == .confirmed && confirmed.proposedStatus == nil)
+        #expect(confirmed.meta.version == 2)
     }
 }

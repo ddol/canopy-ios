@@ -33,13 +33,12 @@ To investigate:
 
 ## The shared census
 
-Sync now pushes changesets to the server's map service, and loaded trees are saved to its trees layer. Still to do:
+Sync pushes changesets, pulls the shared map for the tiles in view and those followed before, and fills the
+review queue. Loaded trees are saved to the server's trees layer. Still to do:
 
-- **Pulling.** Take each tile's snapshot (`GetTile`), then apply `PullChanges` to the local store, so other players'
-  trees and approvals show up, and the server's trees come back after a reinstall. `GerardusMapClient` has both
-  calls; `LocalStore` needs a way to apply them.
-- **Reviewing.** A queue of other players' open changesets (`ListOpenChangesets`), with Agree and, for trusted
-  players, Reject (`ReviewChangeset`).
+- **Syncing without being asked.** Sync runs only from Me → **Sync now**. Pull when the map settles on new tiles, and
+  push after each change, when a server is set.
+- **Forgetting tiles.** Followed tiles are never dropped, so a sync grows with every area looked at.
 - **Verified identity.** The server trusts the player id header. It should check Game Center's identity signature
   (a server follow-up), and the app should send it.
 - **Changesets from before sign-in** carry the `local:` id. A server takes changesets only from their author, so

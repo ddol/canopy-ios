@@ -153,4 +153,44 @@ import Testing
         #expect(request.first { $0.number == 2 }?.string == "USGS 3DEP")
         #expect(request.first { $0.number == 3 }?.string == tile.token)
     }
+
+    @Test func theReviewQueueAndSnapshotsCarryWhoAndWhere() async throws {
+        var open = ProtoWriter()
+        open.message(1) { w in
+            MapMessages.encode(changeset(), to: &w)
+            w.enumValue(7, 1)
+            w.string(10, "Walker")
+            w.bool(11, true)
+        }
+        var snapshot = ProtoWriter()
+        snapshot.message(1) { entity in
+            entity.enumValue(1, 1)
+            entity.string(2, "6f9619ff-8b86-d011-b42d-00c04fc964ff")
+            entity.uint(3, 4)
+            entity.string(4, #"{"countStatus":"confirmed","s2_l19_token":"8085876c3c"}"#)
+            entity.string(5, tile.token)
+            entity.string(6, "gerardus:aerial")
+            entity.message(7) { $0.uint(1, 1_761_200_000) }
+        }
+        snapshot.uint(2, 42)
+        let mock = MockTransport()
+        mock.responses[GerardusMapClient.service + "ListOpenChangesets"] = .success([open.data])
+        mock.responses[GerardusMapClient.service + "GetTile"] = .success([snapshot.data])
+        let client = GerardusMapClient(transport: mock)
+
+        let queue = try await client.openChangesets(in: tile)
+        #expect(queue.map(\.changeset.id) == [changeset().id])
+        #expect(queue.first?.authorAlias == "Walker")
+        #expect(queue.first?.authorTrusted == true)
+
+        let tileSnapshot = try await client.tile(tile)
+        #expect(tileSnapshot.latestSequence == 42)
+        let record = try #require(tileSnapshot.entities.first?.record)
+        #expect(record.kind == .tree)
+        #expect(record.version == 4)
+        #expect(record.tile == tile)
+        #expect(record.createdBy == .aerialSurvey)
+        #expect(record.createdAt == Date(timeIntervalSince1970: 1_761_200_000))
+        #expect(record.fields["countStatus"] == "confirmed")
+    }
 }

@@ -174,7 +174,8 @@ shares it, and a `kind`:
 ## Deriving the current state
 
 `CensusState.derive` builds the current trees and tags from the aerial base layer (candidates as `detected`
-trees) and the observation log. It folds the observations twice:
+trees), the shared map pulled from a Gerardus server (`SharedRecord`s, which win over candidates with the same id and
+add other players' trees), and the observation log. It folds the observations twice:
 
 - the **shared** fold uses observations whose changesets are `applied`;
 - the **local** fold uses observations whose changesets are `pending`, `approved` or `applied`.
@@ -182,7 +183,8 @@ trees) and the observation log. It folds the observations twice:
 Each tree's `countStatus` comes from the shared fold (`proposed` if the tree exists only locally) and its
 `proposedStatus` is the local fold's status where they differ. Everything else, such as a new DBH, comes from the
 local fold, so players see their own work straight away. Observations in `rejected` or `conflicted` changesets
-drop out of both folds, which is how a rejected change disappears.
+drop out of both folds, which is how a rejected change disappears. An applied observation about an entity the
+shared map already has is skipped, since the server's copy (with its version) already includes it.
 
 Folding an observation sets the status it argues for: confirm → `confirmed`, add → `confirmed`, not a tree →
 `removed`, measure → `verified`; a placed tag → `confirmed`.
@@ -240,8 +242,8 @@ except those a player has observed (see docs/ARCHITECTURE.md, *Aerial data and r
 `CanopyStore.LocalStore` is an actor over one connection to the system SQLite library (`import SQLite3`,
 a thin wrapper, no ORM). The database is `Application Support/Canopy/canopy.sqlite` (WAL mode); blobs are in
 `Application Support/Canopy/blobs/`. Both use iOS file protection
-(`completeUntilFirstUserAuthentication`). The schema is versioned with `PRAGMA user_version`; v2 renamed the v1 S2 columns (`cell`, `cells`, `tile`) to
-level-named ones.
+(`completeUntilFirstUserAuthentication`). The schema is versioned with `PRAGMA user_version`. v2 renamed the v1 S2
+columns (`cell`, `cells`, `tile`) to level-named ones, and v3 added the shared map.
 
 | Table | Contents | Mutability |
 |---|---|---|
@@ -249,6 +251,8 @@ level-named ones.
 | `evidence` | id, created_at, player_id, s2_l19_token, blob (SHA-256), subject_id, kind, `payload` | **Immutable**: same triggers |
 | `changesets` | id, created_at, player_id, s2_l19_token, state, s2_l16_tokens (space-separated), `payload`, updated_at | State and approvals change with sync |
 | `candidates` | The aerial base layer, one JSON `TreeCandidate` per row | Replaced on import |
+| `shared` | The shared map as last pulled: id, kind, version, s2_l16_token (indexed), created_by, created_at, `fields` (the entity's shared fields as JSON) | Rewritten by pulls |
+| `shared_tiles` | Each pulled tile's s2_l16_token, the sequence to pull from next, and when it was pulled | Moved on by pulls |
 | `trees`, `tags` | Current state: id, s2_l19_token, s2_l16_token (indexed), status columns, version, `payload` | **Derived**: rewritten on every write |
 
 Every write runs in one transaction that also re-derives the state (`CensusState.derive`) and rewrites

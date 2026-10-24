@@ -86,13 +86,19 @@ struct MapScreen: View {
         switch baseMap {
         case .apple:
             CanopyMapView(layers: layers, selection: $selection, viewport: viewport ?? .goldenGatePark)
-                .onViewportChange { viewport = $0 }
+                .onViewportChange {
+                    viewport = $0
+                    model.mapViewport = $0
+                }
         case .gerardus:
             CanopyMapView(
                 renderer: GerardusRenderer(), layers: layers, selection: $selection,
                 viewport: viewport ?? .goldenGatePark
             )
-            .onViewportChange { viewport = $0 }
+            .onViewportChange {
+                viewport = $0
+                model.mapViewport = $0
+            }
         }
     }
 

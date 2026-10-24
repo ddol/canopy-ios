@@ -1,6 +1,7 @@
 import CanopyMap
 import CanopyModel
 import CanopyPlayers
+import CanopyReference
 import CanopyStore
 import CanopySync
 import Foundation
@@ -26,6 +27,12 @@ final class AppModel {
     private(set) var isSyncing = false
     /// Loading real trees from a Gerardus align server (see AppModel+Aerial).
     var aerial = AerialProgress.idle
+    /// The map's visible region, as the Map tab last reported it: sync pulls the shared map's tiles here.
+    var mapViewport: MapViewport?
+    /// Other players' open changesets near the tiles this device follows, for the player to agree with or reject.
+    var reviewQueue: [GerardusMapClient.OpenChangeset] = []
+    /// The player as the Gerardus server sees them (trusted, admin), after a sync.
+    var serverPlayer: GerardusMapClient.PlayerInfo?
     /// The last loaded area's own data (canopy heights, outlines), for the Gerardus map. In memory only.
     var aerialReference: MapLayers.Reference?
     /// Where each base-layer candidate came from, for the tree sheet: nil for the synthetic sample.
@@ -262,6 +269,10 @@ extension AppModel {
             ) { ref in try blobs.data(for: ref) }
             for changeset in report.updated {
                 try await store.updateChangeset(changeset)
+            }
+            if let client = mapClient {
+                try await pullSharedMap(client)
+                try await refreshReviewQueue(client)
             }
             lastSync = report
             await refresh()

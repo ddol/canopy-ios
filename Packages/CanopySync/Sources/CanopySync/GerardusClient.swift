@@ -28,13 +28,18 @@ public struct AppliedChange: Hashable, Codable, Sendable {
     public var tile: S2CellID
     public var op: ChangeOp
     public var appliedAt: Date
+    /// The changeset's author, when the server says.
+    public var author: PlayerID?
 
-    public init(sequence: Int64, changesetID: UUID, tile: S2CellID, op: ChangeOp, appliedAt: Date) {
+    public init(
+        sequence: Int64, changesetID: UUID, tile: S2CellID, op: ChangeOp, appliedAt: Date, author: PlayerID? = nil
+    ) {
         self.sequence = sequence
         self.changesetID = changesetID
         self.tile = tile
         self.op = op
         self.appliedAt = appliedAt
+        self.author = author
     }
 }
 

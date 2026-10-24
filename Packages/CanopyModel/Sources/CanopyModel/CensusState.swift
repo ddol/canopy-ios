@@ -1,15 +1,18 @@
 import Foundation
 
-/// The current trees and tags, derived from the aerial base layer and the observation log.
+/// The current trees and tags, derived from the aerial base layer, the shared map pulled from a server, and the
+/// observation log.
 ///
-/// Derivation folds observations over the base layer twice:
+/// The starting point is the base layer with the shared map's trees and tags over it: what the server has wins.
+/// Derivation then folds observations over that twice:
 /// - the **shared** fold uses only observations whose changesets were applied to the shared map;
 /// - the **local** fold uses every observation whose changeset is still open or applied.
 ///
 /// A tree's `countStatus` comes from the shared fold (`proposed` if it exists only locally), and its
 /// `proposedStatus` is the local fold's status when that differs. Everything else comes from the local fold,
 /// so a player sees their own measurements straight away. Observations in rejected or conflicted changesets
-/// drop out of both folds.
+/// drop out of both folds. An applied observation about an entity the shared map already has is left out, since the
+/// server's copy includes it.
 public struct CensusState: Hashable, Sendable {
     public private(set) var trees: [UUID: Tree]
     public private(set) var tags: [UUID: Tag]
@@ -21,16 +24,28 @@ public struct CensusState: Hashable, Sendable {
 
     public static func derive(
         base: [Tree],
+        shared records: [SharedRecord] = [],
         observations: [FieldObservation],
         changesetStates: [UUID: Changeset.State]
     ) -> CensusState {
-        let baseState = CensusState(trees: base)
+        var baseState = CensusState(trees: base)
+        var onServer: Set<UUID> = []
+        for record in records {
+            if let tree = record.tree() {
+                baseState.trees[tree.id] = tree
+                onServer.insert(tree.id)
+            } else if let tag = record.tag() {
+                baseState.tags[tag.id] = tag
+                onServer.insert(tag.id)
+            }
+        }
         var shared = baseState
         var local = baseState
         for observation in observations {
             let state = observation.changesetID.flatMap { changesetStates[$0] }
             switch state {
             case .applied:
+                guard !onServer.contains(observation.kind.subject.id) else { continue }
                 shared.apply(observation)
                 local.apply(observation)
             case .pending, .approved:

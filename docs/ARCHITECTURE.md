@@ -68,8 +68,8 @@ everything on the simulator.
   blobs, submit changesets, read their state, and pull applied changes per L16 tile. With a server set in Settings,
   `GerardusMapClient` speaks the server's map service (see *Shared census*). Without one, `FakeGerardusClient`
   applies the same policy in memory (two players agree, at least one trusted), so the app works offline and in
-  tests. The fake forgets everything on relaunch, and the next sync submits open changesets again. Sync pushes
-  only so far: applying other players' changes to the local store is on the backlog.
+  tests. The fake forgets everything on relaunch, and the next sync submits open changesets again. With a real
+  server, sync also pulls the shared map and the review queue (see *Shared census*).
 
 ## Capture
 
@@ -202,6 +202,22 @@ on the id, which it does not verify yet. A changeset's author must be the caller
 that are already occupied. This has to happen before anyone confirms them, because a change to a tree the server
 has never seen comes back conflicted. Candidates found with OpenStreetMap stay on the phone, and the server refuses
 them anyway.
+
+**Pulling the shared map.** After pushing, sync brings this device's copy of the shared map up to date
+(`AppModel.pullSharedMap`). It follows every tile pulled before, plus the tiles in view when the map shows at most
+400 m from centre to corner. A tile it has never pulled gets a snapshot (`GetTile`); the rest get the ops applied since
+their cursor (`PullChanges`). If the server's log goes backwards (its database was replaced), or an update names a
+tree the device has never seen, the tile gets a fresh snapshot.
+
+Everything lands in one store transaction (`LocalStore.applyShared`), in the `shared` and `shared_tiles` tables.
+Derivation then starts from the shared map, so the server's trees and tags win over the aerial candidates and other
+players' trees appear. This device's applied observations are folded only for entities the server has not sent yet,
+so nothing is counted twice, and its open proposals still show on top as `proposedStatus`.
+
+**Reviewing.** The review queue (Me → **Review**) lists other players' open changesets in the followed tiles
+(`ListOpenChangesets`), leaving out the player's own changes and ones they have already agreed with. **Agree**
+records an approval (`ReviewChangeset`). A trusted player (`GetPlayer`) can also **Reject**, with a reason. The server
+applies a change once two players agree and one of them is trusted, and the next sync brings it back.
 
 **OpenStreetMap.** The server sends OSM only to its admins (its own `--admin` list). Anyone else who names the layer
 is refused the whole stream, so `AerialTrees` asks for OSM in a separate call after the main stream. A refusal is
