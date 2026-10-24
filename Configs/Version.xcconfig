@@ -1,0 +1,9 @@
+// Canopy's version. `make bump-version` (scripts/bump-version.sh) moves it on by one: 0.1.0 → 0.1.1,
+// 0.1.1-pre2 → 0.1.1-pre3. The build number comes from scripts/testflight.sh.
+
+// The full version, shown on the Me tab.
+CANOPY_VERSION = 0.1.1
+
+// CFBundleShortVersionString. App Store Connect accepts only up to three integers, so a pre-release ships under
+// its release number (0.1.1-pre3 as 0.1.1) and TestFlight tells its builds apart by build number.
+MARKETING_VERSION = 0.1.1

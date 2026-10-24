@@ -64,9 +64,9 @@ which is `xcodebuild test -project Canopy.xcodeproj -scheme Canopy -destination 
 packages that do not need UIKit (`CanopyModel`, `CanopyStore`, `CanopySync`, `CanopyCapture`'s geometry) also
 build on macOS, so `swift test` inside one of them is the quickest loop.
 
-To run on an iPhone or iPad, or ship a TestFlight build, see [docs/DEVICE-TESTING.md](docs/DEVICE-TESTING.md):
-set your `DEVELOPMENT_TEAM` in `Configs/Local.xcconfig` (git-ignored), then `scripts/device.sh` or
-`scripts/testflight.sh`. LiDAR features need an iPhone 12 Pro or later Pro model, or an iPad Pro with LiDAR.
+To run on an iPhone or iPad, or ship to TestFlight or the App Store, see
+[docs/DEVICE-TESTING.md](docs/DEVICE-TESTING.md): set your `DEVELOPMENT_TEAM` in `Configs/Local.xcconfig`
+(git-ignored), then `scripts/device.sh`, `make testflight` or `make appstore`. LiDAR features need an iPhone 12 Pro or later Pro model, or an iPad Pro with LiDAR.
 Game Center sign-in only succeeds once the app is set up in App Store Connect; until then the app says Game
 Center is unavailable and uses a local player id.
 
@@ -77,6 +77,7 @@ project by editing `project.yml` and re-running `scripts/bootstrap.sh`.
 
 ```
 project.yml          XcodeGen spec: app target Canopy, unit and UI test targets
+Makefile             make version, make bump-version (0.1.0 → 0.1.1, 0.1.1-pre2 → 0.1.1-pre3)
 App/                 SwiftUI app: CanopyApp, tab shell (Map · Census · Tag · Me), screens
 Packages/
   CanopyDesign/      design tokens and base components

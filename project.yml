@@ -60,7 +60,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(CANOPY_BUNDLE_ID)
         PRODUCT_NAME: Canopy
-        MARKETING_VERSION: "0.1.0"
+        # MARKETING_VERSION comes from Configs/Version.xcconfig; the build number from scripts/testflight.sh.
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor

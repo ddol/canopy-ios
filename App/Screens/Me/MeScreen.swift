@@ -251,8 +251,11 @@ struct ViewControllerHost: UIViewControllerRepresentable {
 }
 
 extension Bundle {
+    /// "0.1.1-pre3 (20261023.1507)": the full version, which may be a pre-release, and the build number.
     var version: String {
-        let short = infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let short =
+            infoDictionary?["CanopyVersion"] as? String
+            ?? infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let build = infoDictionary?["CFBundleVersion"] as? String ?? "?"
         return "\(short) (\(build))"
     }

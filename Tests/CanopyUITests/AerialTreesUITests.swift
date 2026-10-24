@@ -15,7 +15,7 @@ final class AerialTreesUITests: XCTestCase {
         // The argument domain overrides the app's server setting for this launch.
         app.launchArguments = ["-ui-testing", "-canopy.gerardusURL", server]
         app.launch()
-        XCTAssertTrue(app.descendants(matching: .any)["Estimated: 200"].firstMatch.waitForExistence(timeout: 90))
+        XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: 90))
 
         // A prepared site loads in seconds. A new one may first fail as still preparing; the server carries on, so
         // the second try finds it ready.

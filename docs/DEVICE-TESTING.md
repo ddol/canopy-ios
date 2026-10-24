@@ -3,14 +3,15 @@
 LiDAR capture (the Census AR view, Scan trunk, 3D limb points) only works on an iPhone or iPad Pro with
 LiDAR; no simulator can reconstruct a mesh. Everything else is covered by `scripts/test.sh` on the simulator.
 
-There are two ways to get Canopy onto a phone:
+There are three ways to get Canopy onto a phone:
 
 - **Straight from a Mac** (`scripts/device.sh`): the fastest loop while developing. The phone is paired with the
   Mac.
-- **TestFlight** (`scripts/testflight.sh`): for testers in the park. They install from the TestFlight app; no Mac
+- **TestFlight** (`make testflight`): for testers in the park. They install from the TestFlight app; no Mac
   needed.
+- **The App Store** (`make appstore`, then App Review): for everyone.
 
-Both need a paid Apple Developer Program team.
+All of them need a paid Apple Developer Program team. `make` on its own lists the shortcuts.
 
 ## One-time setup
 
@@ -56,15 +57,19 @@ Blobs are named by their SHA-256 under `blobs/`; add `.glb` to open one in a glT
    App: platform iOS, a name (it must be unique on the App Store, for example "Canopy Tree Census"; the name
    under the icon stays "Canopy"), bundle id `io.github.ddol.canopy` (it is in the list after the first signed
    build, or register it under Certificates, Identifiers & Profiles), and any SKU such as `canopy-ios`.
-2. **Upload a build:**
+2. **Set the version** when a release needs a new one. The version lives in `Configs/Version.xcconfig`;
+   `make bump-version` moves it on by one (`0.1.0` → `0.1.1`, `0.2.13` → `0.2.14`, and a pre-release
+   `0.1.1-pre2` → `0.1.1-pre3`), and `make version` prints it. App Store Connect accepts only numbers, so a
+   pre-release uploads under its release number (`0.1.1-pre3` as `0.1.1`); the Me tab shows the full version.
+3. **Upload a build:**
 
    ```sh
-   scripts/testflight.sh
+   make testflight
    ```
 
-   It archives a Release build numbered from the current UTC time (for example `20261021.1507`, so every upload
+   It runs `scripts/testflight.sh`, which archives a Release build numbered from the current UTC time (for example `20261021.1507`, so every upload
    is newer than the last) and uploads it. `UPLOAD=0` stops after exporting an `.ipa`.
-3. **Add testers.** After processing (usually 5 to 30 minutes), the build appears under TestFlight. Internal
+4. **Add testers.** After processing (usually 5 to 30 minutes), the build appears under TestFlight. Internal
    testers (people on your App Store Connect team) can install it straight away; external testers need a short
    beta review first.
 
@@ -77,6 +82,45 @@ account, against the sandbox). Before that, the app falls back to a local player
 
 To upload without an Xcode account (for example from CI), create an App Store Connect API key (Users and Access
 → Integrations) and set `ASC_KEY_PATH`, `ASC_KEY_ID` and `ASC_ISSUER_ID`.
+
+## The App Store
+
+A build for the App Store is the same upload as a TestFlight one, without the testing tools. App Review then
+checks it before it goes on sale.
+
+1. **Merge what you want to ship to `main`** and let CI pass. The version in `Configs/Version.xcconfig` must be a
+   release (`0.2.0`, not `0.2.0-pre3`) and newer than the last version on the App Store. App Store Connect takes
+   no new builds for a version it has already released, so run `make bump-version` after each release.
+2. **Upload the build** from an up-to-date `main`:
+
+   ```sh
+   git switch main && git pull
+   make appstore
+   ```
+
+   `scripts/appstore.sh` refuses a pre-release version, local changes, or a commit that is not on `origin/main`,
+   so the build is exactly what CI tested. Then it runs `scripts/testflight.sh` with `TESTING_TOOLS=0`. The build
+   also shows up under TestFlight, so you can try it before submitting. `UPLOAD=0 make appstore` stops after
+   exporting the `.ipa`.
+3. **Fill in the listing** (the first time, and when it changes). In App Store Connect → Canopy:
+   - **App Information:** category (Education), age rating questionnaire, content rights.
+   - **Pricing and Availability:** free, and which countries.
+   - **App Privacy:** the privacy policy URL (`PRIVACY.md` on GitHub works). Answer the data questions the same
+     way as `App/Resources/PrivacyInfo.xcprivacy`: precise location and other data types, used for app
+     functionality, not linked to the player, and no tracking.
+   - **The version page:** screenshots for a 6.9-inch iPhone and a 13-inch iPad (the app is universal),
+     description, keywords, support URL, and *What's New* for updates.
+   - **App Review Information:** a contact, and notes for the reviewer: LiDAR features need a Pro device, the map
+     and tagging work on any device, and no Gerardus server or sign-in is needed to try the app.
+
+   Export compliance is already answered in the build (`ITSAppUsesNonExemptEncryption` is `NO`).
+4. **Submit.** On the version page, under Build, choose the build `make appstore` uploaded (after processing,
+   usually 5 to 30 minutes), then **Add for Review** and **Submit for Review**. Review usually takes a day or two.
+5. **Release.** Choose on the version page whether an approved version goes on sale automatically or when you
+   press Release.
+
+Submitting is done by hand in App Store Connect for now. The App Store Connect API could automate it later with
+the same API key, once the listing exists.
 
 ## What to check on the phone
 
