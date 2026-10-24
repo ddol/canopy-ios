@@ -15,6 +15,9 @@ final class LaunchTests: XCTestCase {
     @MainActor
     func testAllFourTabsAreReachable() {
         let app = launch()
+        // Tapping while the app is still importing the fixtures and drawing the map can time out the accessibility
+        // connection on CI runners, so wait for the map first.
+        XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
         for name in ["Map", "Census", "Tag", "Me"] {
             let tab = app.buttons[name].firstMatch
             XCTAssertTrue(tab.waitForExistence(timeout: 10), "missing tab \(name)")
