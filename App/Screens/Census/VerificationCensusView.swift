@@ -79,6 +79,7 @@ struct TreeVerificationRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text(tree.name).font(.headline)
             HStack {
                 StatusBadge(tree.displayStatus.presentation)
                 Spacer()

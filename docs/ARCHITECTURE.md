@@ -135,7 +135,9 @@ millimetre (the fit's RMS is reported), and it carries the datum shift (about 1.
 projection or datum code in Canopy.
 
 **Real trees.** `AerialTrees.load` prepares the site if needed and streams the canopy classes (unclassified and
-vegetation; 3DEP's San Francisco tiles leave trees unclassified), the buildings and the ground model. Given an
+vegetation; 3DEP's San Francisco tiles leave trees unclassified), the DataSF building footprints and the ground
+model. OpenStreetMap is not loaded: the shared tree layer takes nothing from it (Gerardus ADR-0005, ADR-0008), so
+detection must not depend on it. An admin can opt in for checking (see *Admin flags*). Given an
 `Area` it streams only a circle (`StreamReferenceRequest`'s centre and radius, in the site frame) plus a 20 m margin
 so edge crowns are whole; the app asks for the map's visible region, at most 150 m from its centre, which is about
 4 MB at 1 m voxels instead of 15 MB for the whole site. Then it runs `TreeDetector`:
@@ -145,7 +147,7 @@ so edge crowns are whole; the app asks for the map's visible region, at most 150
 2. tree tops: cells at least 5 m high that are the highest within a radius of 1 m + 0.08 × height (1.5 to 4.5 m);
 3. crowns: every cell at least 2 m high climbs to its highest neighbour until it reaches a top (a suppressed local
    maximum goes to the nearest kept top);
-4. buildings (OSM and footprints) are masked out, and tops within 8 m of the data's edge are dropped.
+4. buildings (DataSF footprints) are masked out, and tops within 8 m of the data's edge are dropped.
 
 Each tree becomes a `TreeCandidate` with its height, crown radius, a confidence from crown size, height and point
 density, the source for attribution, and an id derived from its position, so loading the area again finds the same
@@ -176,9 +178,29 @@ the app's live UI test.
 
 ## Map
 
-`MapLayers` is a plain description of what to draw, built from `CensusState`. Renderers implement
-`MapRenderer`; `MapKitRenderer` uses MapKit for SwiftUI. A MapLibre Native renderer with offline PMTiles (a
-Milestone 1 issue) can implement the same protocol without changing the screens.
+`MapLayers` is a plain description of what to draw, built from `CensusState`: trees filtered by the statuses the
+player shows (`Visibility.statuses`, the chips under the summary bar), tags, routes, tiles, the boundary, and
+`Reference`, the last loaded area's own data. Renderers implement `MapRenderer`:
+
+- `MapKitRenderer` draws on Apple's map with MapKit for SwiftUI. Each tree is a view, so detected trees are capped
+  (250 to 400, nearest the centre first).
+- `GerardusRenderer` (Layers → **Gerardus only**) draws with no base map. It is a SwiftUI `Canvas` on a flat
+  projection showing only Canopy's own data: the canopy height grid from the aerial point cloud (1 m, light to dark
+  green with height), DataSF building outlines, OpenStreetMap roads and paths when an admin loaded them, then the
+  boundary, tiles, routes, every tree and the tags. Drag to pan, pinch to zoom, tap to select. The grid and outlines
+  are kept in memory after **Load real trees in view**.
+
+A MapLibre Native renderer with offline PMTiles (a Milestone 1 issue) can implement the same protocol without
+changing the screens.
+
+## Admin flags
+
+`AdminSettings` holds flags for checking the data. **Me → Settings → Admin** shows them to Game Center players whose
+team-scoped id is in the `CANOPY_ADMIN_PLAYER_IDS` build setting. It is set in `Configs/Local.xcconfig`, so the list
+stays out of the repository, and reaches the app as Info.plist `CanopyAdminPlayerIDs`. Debug builds show the flags to
+everyone, and every flag is off until turned on. The one flag today is **Use OpenStreetMap**: tree detection also
+masks OSM buildings, the Gerardus map gets roads and paths, and the trees found are marked as for checking only. The
+section also shows the player's id, to copy into the allowlist.
 
 ## Server settings
 

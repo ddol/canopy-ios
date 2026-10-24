@@ -29,9 +29,31 @@ public enum AerialTrees {
         public var tiles: Set<S2CellID>
         /// The part of the site that was loaded; nil: all of it.
         public var area: Area?
-        /// Who to credit, one line per source: "U.S. Geological Survey, 3D Elevation Program (public domain)".
+        /// Who to credit, one line per source that was used: "U.S. Geological Survey, 3D Elevation Program (public
+        /// domain)".
         public var attribution: [String]
         public var pointCount: Int
+        /// For drawing the data itself: the site's georeference, the raw canopy height model, and the outlines and
+        /// lines streamed with the points (DataSF footprints, and OpenStreetMap when it was asked for).
+        public var georeference: SiteGeoreference?
+        public var canopy: TreeDetector.CanopyHeightModel?
+        public var lines: [LineFeature]
+
+        public init(
+            site: Site, candidates: [TreeCandidate], tiles: Set<S2CellID>, area: Area? = nil, attribution: [String],
+            pointCount: Int, georeference: SiteGeoreference? = nil, canopy: TreeDetector.CanopyHeightModel? = nil,
+            lines: [LineFeature] = []
+        ) {
+            self.site = site
+            self.candidates = candidates
+            self.tiles = tiles
+            self.area = area
+            self.attribution = attribution
+            self.pointCount = pointCount
+            self.georeference = georeference
+            self.canopy = canopy
+            self.lines = lines
+        }
 
         /// Whether the result answers for a point: in the site's tiles and the area. Candidates there can be
         /// replaced by `candidates`.
@@ -65,10 +87,12 @@ public enum AerialTrees {
     public static let areaMargin = 20.0
 
     /// Finds the trees in the site for `tile`, or only in `area` (which should be centred in `tile`), so less data
-    /// comes down.
+    /// comes down. Buildings are masked out of detection with DataSF footprints. `osm` adds OpenStreetMap buildings:
+    /// for checking only, since the shared tree layer takes nothing from OpenStreetMap (Gerardus ADR-0005, ADR-0008),
+    /// and the candidates' source says so.
     public static func load(
-        tile: S2CellID, area: Area? = nil, label: String, client: AlignClient, voxelSize: Float = 1.0,
-        detector: TreeDetector = TreeDetector(), progress: @Sendable (Stage) -> Void = { _ in }
+        tile: S2CellID, area: Area? = nil, osm: Bool = false, label: String, client: AlignClient,
+        voxelSize: Float = 1.0, detector: TreeDetector = TreeDetector(), progress: @Sendable (Stage) -> Void = { _ in }
     ) async throws -> SiteResult {
         let token = tile.parent(level: S2CellID.tileLevel).token
         let site: Site
@@ -91,11 +115,10 @@ public enum AerialTrees {
 
         var blocks: [PointBlock] = []
         var ground: Heightfield?
-        var buildings: [[SIMD2<Double>]] = []
+        var lines: [LineFeature] = []
         var count = 0
-        for try await chunk in client.reference(
-            request([.aerialPoints, .osm, .footprints, .groundMesh], classes: canopyClasses))
-        {
+        let layers: [ReferenceLayer] = [.aerialPoints, .footprints, .groundMesh] + (osm ? [.osm] : [])
+        for try await chunk in client.reference(request(layers, classes: canopyClasses)) {
             switch chunk {
             case .points(_, let block):
                 blocks.append(block)
@@ -103,8 +126,8 @@ public enum AerialTrees {
                 progress(.downloading(points: count))
             case .groundMesh(let field):
                 ground = field
-            case .lines(_, let lines):
-                buildings += lines.filter { $0.kind == .building && $0.points.count >= 3 }.map(\.points)
+            case .lines(_, let more):
+                lines += more
             default:
                 break
             }
@@ -120,20 +143,26 @@ public enum AerialTrees {
         guard let ground else { throw GRPCTransportError.noResponse }
 
         progress(.detecting)
+        let buildings = lines.filter { $0.kind == .building && $0.points.count >= 3 }.map(\.points)
         let trees = detector.detect(points: blocks, ground: ground, buildings: buildings)
         progress(.placing)
         let aerialSource = site.sources.first { $0.layer == .aerialPoints }
-        let source = aerialSource.map { "\($0.name) (\($0.licence))" } ?? "Gerardus aerial points"
+        let source =
+            (aerialSource.map { "\($0.name) (\($0.licence))" } ?? "Gerardus aerial points")
+            + (osm ? "; buildings masked with OpenStreetMap, for checking only" : "")
         // The bundle is the bounding box of its 9 tiles, which reaches past them; a site answers for its tiles only, so
         // loading the neighbouring site later neither duplicates nor drops a tree.
         var result = SiteResult(
             site: site, candidates: [], tiles: Set(site.coveringL16Tokens.compactMap(S2CellID.init(token:))),
             area: area,
-            attribution: site.sources.map { source in
+            attribution: site.sources.filter { layers.contains($0.layer) }.map { source in
                 let licence = source.licence == "public-domain" ? "public domain" : source.licence
                 return "\(source.attribution.isEmpty ? source.name : source.attribution) (\(licence))"
             },
-            pointCount: count
+            pointCount: count,
+            georeference: georeference,
+            canopy: detector.canopyHeightModel(points: blocks, ground: ground),
+            lines: lines
         )
         result.candidates = candidates(trees, georeference: georeference, source: source).filter {
             result.covers($0.location)

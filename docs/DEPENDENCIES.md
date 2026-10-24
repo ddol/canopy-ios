@@ -32,8 +32,8 @@ its data is in use.
 | Data | Licence | Used for |
 |---|---|---|
 | USGS 3D Elevation Program (3DEP) lidar point cloud, CA_SanFrancisco_1_B23 | Public domain | Tree detection, the ground model, scan registration |
-| OpenStreetMap | ODbL 1.0, © OpenStreetMap contributors | Building outlines masked out of tree detection |
-| DataSF building footprints | PDDL 1.0, City and County of San Francisco | Building outlines masked out of tree detection |
+| OpenStreetMap | ODbL 1.0, © OpenStreetMap contributors | Admins only, when they opt in: checking detection against OSM buildings, and roads and paths on the Gerardus map. Never in the shared tree layer |
+| DataSF building footprints | PDDL 1.0, City and County of San Francisco | Building outlines masked out of tree detection, drawn on the Gerardus map |
 
 ## Bundled assets
 

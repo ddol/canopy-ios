@@ -3,5 +3,9 @@
 // Your Apple Developer team id, from developer.apple.com → Membership.
 DEVELOPMENT_TEAM = ABCDE12345
 
+// Game Center player ids (Me → Settings → Admin shows yours in a debug build) that see the admin flags in
+// TestFlight and App Store builds. Separate them with spaces.
+// CANOPY_ADMIN_PLAYER_IDS = T:_0123456789abcdef
+
 // Uncomment if io.github.ddol.canopy is registered to another team.
 // CANOPY_BUNDLE_ID = com.example.canopy

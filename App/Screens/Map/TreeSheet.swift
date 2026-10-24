@@ -106,7 +106,7 @@ struct TreeSheet: View {
                     }
                 }
             }
-            .navigationTitle(tree.localName ?? tree.species ?? "Tree")
+            .navigationTitle(tree.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
