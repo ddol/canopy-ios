@@ -61,8 +61,8 @@ struct SettingsScreen: View {
                 """
                 Without a scheme the address is http:// on port \(String(GerardusEndpoint.defaultPort)). Plain http:// \
                 works for .local and tailnet (.ts.net) names and IP addresses; other hosts need https://. The test \
-                reads the server’s status page and sends nothing about you. Sync still uses the simulated server in \
-                this build.
+                reads the server’s status page and sends nothing about you. Sync, and the trees you load, go to this \
+                server under your Game Center id and alias.
                 """)
         }
     }

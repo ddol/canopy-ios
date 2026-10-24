@@ -12,8 +12,8 @@ send, so you can check it against the code.
   a shape, so scan when nobody is within a couple of metres of it.
 - **One identity.** Your Game Center player id and alias are the only identity in the data. No email, no
   name, no device identifiers, no advertising ids, no analytics.
-- **Census sync is still local.** Changesets go to a simulated server on your device. The only data that leaves
-  the device is described under *Gerardus align server* below, and only when you ask for it.
+- **Nothing leaves the device until you set a server.** With no Gerardus server set in Me → Settings, changesets go
+  to a simulated server on your device. With one set, what is sent is listed under *Gerardus server* below.
 
 ## Permissions
 
@@ -38,25 +38,32 @@ The data is protected by iOS file protection. **Me → Reset local data** (debug
 Debug builds can also share a scan's GLB file or preview it; that only happens when you tap Share or Preview.
 Deleting the app deletes all of it too.
 
-## Gerardus align server
+## Gerardus server
 
-Canopy can use a Gerardus align server on your network (Map → Layers → **Load real trees in view**, and Census →
-**Register with 3DEP**). You set its address in **Me → Settings**; until you do, the app contacts no server. iOS
-asks for Local Network permission the first time.
+Canopy can use a Gerardus server on your network: for aerial trees (Map → Layers → **Load real trees in view**), for
+scan registration (Census → **Register with 3DEP**), and for the shared census (Me → **Sync now**). You set its
+address in **Me → Settings**; until you do, the app contacts no server. iOS asks for Local Network permission the
+first time.
+
+Every call to the server, apart from the connection test, carries your **Game Center player id** (or the app's
+random `local:` id before you sign in) and your **alias**. The server uses them to know which account is calling,
+to credit your changes, and to decide whether you may have OpenStreetMap.
 
 - **Testing the connection** (Me → Settings → **Test connection**) sends one `GET /` and shows what the server
   answers (its version, commit, uptime and reference layers). The request carries no player id, alias, location
   or record, and the app keeps only the address, not the answer.
 - **Loading real trees** sends the S2 tile you are looking at and the circle of the map in view (its centre and
-  radius) and downloads public data for it (USGS 3DEP aerial LiDAR and DataSF footprints, plus OpenStreetMap for an
-  admin who turned it on). The map
-  position is where you are looking, not where you are, and nothing about you is sent.
+  radius), and downloads public data for it: USGS 3DEP aerial LiDAR and DataSF footprints, plus OpenStreetMap for an
+  admin who turned it on. The map position is where you are looking, not where you are. The trees found are then
+  saved to the server's shared tree layer, unless they were found with OpenStreetMap. The server records which
+  player's phone found them.
 - **Registering a scan** happens only when you tap Register and confirm. It uploads the colourless mesh the AR
   session has reconstructed within 60 m of where the session started, thinned to one point per 10 cm, with the
   session's approximate GPS position. It is geometry only (no photos, colours or textures), it is not cropped to a
   tree, and anyone nearby is in it as a shape, so register when nobody is close. The scan is stored on that server
-  under a random sensor id and capture reference, with no player id. The server keeps the scan and the registration
-  run.
+  under a random sensor id and capture reference. The server keeps the scan and the registration run.
+- **Syncing** sends your open changesets: the changes you propose, with their S2 cells, your player id and alias,
+  and the evidence meshes they reference. It brings back their state and other players' approvals.
 
 In every case the server also sees the network address the request comes from. Plain `http://` is allowed only to
 `.local` names, IP addresses and tailnet (`*.ts.net`) hosts; Tailscale encrypts tailnet traffic between devices.
@@ -64,12 +71,8 @@ Any other server must use HTTPS.
 
 ## What will be synced (not yet)
 
-When the Gerardus server exists, Canopy will upload:
-
-- your changesets (the changes you propose, with their S2 cells and your player id and alias);
-- the evidence meshes those changesets reference;
-
-and download other players' approved changes for the cells you are in. Nothing else.
+Downloading other players' approved changes for the cells you are in. That brings nothing about you to anyone
+else beyond what your changesets already carry (your player id and alias).
 
 ## Fixture data
 
