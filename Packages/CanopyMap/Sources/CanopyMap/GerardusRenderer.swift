@@ -56,7 +56,7 @@ struct GerardusMap: View {
     /// The region to fit once the size is known.
     @State private var unfitted: MapViewport?
     @State private var size = CGSize.zero
-    @State private var canopy: CGImage?
+    @State private var canopies: [CGImage?] = []
     @GestureState private var pan = CGSize.zero
     @GestureState private var zoom = 1.0
 
@@ -120,7 +120,7 @@ struct GerardusMap: View {
         }
         .background(Color.canopySurface)
         .onChange(of: layers.reference, initial: true) { _, reference in
-            canopy = reference?.canopy.flatMap(CanopyImage.make)
+            canopies = (reference?.canopies ?? []).map(CanopyImage.make)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Gerardus map, \(layers.trees.count) trees")
@@ -168,11 +168,12 @@ struct GerardusMap: View {
             return path
         }
 
-        if let canopy, let raster = layers.reference?.canopy {
+        for (image, raster) in zip(canopies, layers.reference?.canopies ?? []) {
+            guard let image else { continue }
             let sw = projection.point(raster.southWest)
             let ne = projection.point(raster.northEast)
             let rect = CGRect(x: sw.x, y: ne.y, width: ne.x - sw.x, height: sw.y - ne.y)
-            context.draw(Image(decorative: canopy, scale: 1).interpolation(.medium), in: rect)
+            context.draw(Image(decorative: image, scale: 1).interpolation(.medium), in: rect)
         }
         for line in layers.reference?.lines ?? [] {
             let shape = path(line.points, closed: line.closed)
@@ -180,6 +181,12 @@ struct GerardusMap: View {
             case .building:
                 context.fill(shape, with: .color(Color.canopyInkMuted.opacity(0.25)))
                 context.stroke(shape, with: .color(Color.canopyInkMuted), lineWidth: 1)
+            case .wall:
+                context.stroke(shape, with: .color(Color.canopyInk), lineWidth: 2)
+            case .kerb:
+                context.stroke(shape, with: .color(Color.canopyInkMuted.opacity(0.8)), lineWidth: 1)
+            case .surface:
+                context.fill(shape, with: .color(Color.canopyInkMuted.opacity(0.12)))
             case .road:
                 context.stroke(shape, with: .color(Color.canopyInkMuted.opacity(0.6)), lineWidth: 3)
             case .path:

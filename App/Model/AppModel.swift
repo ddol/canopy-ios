@@ -29,6 +29,8 @@ final class AppModel {
     var aerial = AerialProgress.idle
     /// The map's visible region, as the Map tab last reported it: sync pulls the shared map's tiles here.
     var mapViewport: MapViewport?
+    /// How many scans (evidence meshes) this device has recorded.
+    private(set) var scanCount = 0
     /// The tiles pulled from the shared map so far (see AppModel+SharedMap).
     private(set) var followedTiles: Set<S2CellID> = []
     /// Bookkeeping for syncing on its own (`syncSoon`).
@@ -39,7 +41,19 @@ final class AppModel {
     /// The player as the Gerardus server sees them (trusted, admin), after a sync.
     var serverPlayer: GerardusMapClient.PlayerInfo?
     /// The last loaded area's own data (canopy heights, outlines), for the Gerardus map. In memory only.
-    var aerialReference: MapLayers.Reference?
+    var aerialReference: MapLayers.Reference? {
+        didSet { updateMapReference() }
+    }
+    /// Vectors loaded per site (L16 token), drawn over either map. In memory only.
+    var vectorAreas: [String: MapLayers.Reference] = [:] {
+        didSet { updateMapReference() }
+    }
+    /// The tiles the loaded vector sites cover.
+    var vectorTiles: Set<S2CellID> = []
+    /// Credits for the loaded vectors.
+    var vectorAttribution: [String] = []
+    /// Everything loaded, as the map draws it: kept, not computed, so the map's canopy images are made once.
+    private(set) var mapReference: MapLayers.Reference?
     /// Where each base-layer candidate came from, for the tree sheet: nil for the synthetic sample.
     private(set) var candidateSources: [UUID: String] = [:]
     /// The last error to show, if any.
@@ -66,6 +80,11 @@ final class AppModel {
 
     /// Whether Settings shows the admin flags to this player.
     var isAdmin: Bool { adminSettings.isAdmin(player) }
+
+    private func updateMapReference() {
+        mapReference = MapLayers.Reference.merged(
+            [aerialReference].compactMap { $0 } + vectorAreas.keys.sorted().compactMap { vectorAreas[$0] })
+    }
 
     init(
         store: LocalStore, players: PlayerService, server: FakeGerardusClient = FakeGerardusClient(),
@@ -145,6 +164,7 @@ final class AppModel {
         summary = await store.summary()
         changesets = (try? await store.changesets()) ?? []
         followedTiles = Set(((try? await store.sharedTiles()) ?? [:]).keys)
+        scanCount = (try? await store.allEvidence().count) ?? 0
         let candidates = (try? await store.candidates()) ?? []
         candidateSources = Dictionary(
             candidates.compactMap { candidate in candidate.source.map { (candidate.id, $0) } },

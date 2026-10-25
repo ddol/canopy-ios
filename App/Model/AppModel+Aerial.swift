@@ -151,7 +151,7 @@ extension AppModel {
             return MapLayers.Reference.Line(
                 kind: kind, points: line.points.map { georeference.geo(x: $0.x, y: $0.y) }, closed: line.closed)
         }
-        return MapLayers.Reference(canopy: canopy, lines: lines)
+        return MapLayers.Reference(canopies: canopy.map { [$0] } ?? [], lines: lines)
     }
 
     nonisolated static func describe(_ stage: AerialTrees.Stage) -> String {

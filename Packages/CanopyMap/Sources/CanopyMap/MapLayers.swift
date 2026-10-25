@@ -14,14 +14,18 @@ public struct MapLayers: Equatable, Sendable {
         public var routes = true
         /// S2 L16 tile outlines.
         public var tiles = false
+        /// Gerardus's vectors (building outlines and walls, streets, kerbs) over the base map.
+        public var vectors = true
 
         public init(
-            statuses: Set<CountStatus> = Set(treeStatuses), tags: Bool = true, routes: Bool = true, tiles: Bool = false
+            statuses: Set<CountStatus> = Set(treeStatuses), tags: Bool = true, routes: Bool = true, tiles: Bool = false,
+            vectors: Bool = true
         ) {
             self.statuses = statuses
             self.tags = tags
             self.routes = routes
             self.tiles = tiles
+            self.vectors = vectors
         }
     }
 
@@ -54,11 +58,21 @@ public struct MapLayers: Equatable, Sendable {
         public var corners: [GeoPoint]
     }
 
-    /// Gerardus's own data for the area last loaded: canopy heights from the aerial point cloud, and outlines and lines.
-    /// Drawn by `GerardusRenderer` in place of a base map. A class, so comparing layers does not compare every height.
+    /// Gerardus's own data for the areas loaded: canopy heights from the aerial point cloud, and vectors (outlines,
+    /// walls, streets). `GerardusRenderer` draws it all in place of a base map; `MapKitRenderer` draws the vectors over
+    /// Apple's. A class, so comparing layers does not compare every height.
     public final class Reference: Equatable, Sendable {
         public enum LineKind: Sendable {
-            case building, road, path, other
+            /// A building outline or part, closed.
+            case building
+            /// A wall seen from above: a box wall or a measured facade plane.
+            case wall
+            case road
+            case path
+            case kerb
+            /// A street surface, closed: a driveway, parking space or marked area.
+            case surface
+            case other
         }
 
         public struct Line: Sendable {
@@ -90,12 +104,19 @@ public struct MapLayers: Equatable, Sendable {
             }
         }
 
-        public let canopy: Raster?
+        public let canopies: [Raster]
         public let lines: [Line]
 
-        public init(canopy: Raster?, lines: [Line]) {
-            self.canopy = canopy
+        public init(canopies: [Raster], lines: [Line]) {
+            self.canopies = canopies
             self.lines = lines
+        }
+
+        /// Several loaded areas as one, or nil when there are none.
+        public static func merged(_ references: [Reference]) -> Reference? {
+            guard !references.isEmpty else { return nil }
+            if references.count == 1 { return references[0] }
+            return Reference(canopies: references.flatMap(\.canopies), lines: references.flatMap(\.lines))
         }
 
         public static func == (lhs: Reference, rhs: Reference) -> Bool { lhs === rhs }

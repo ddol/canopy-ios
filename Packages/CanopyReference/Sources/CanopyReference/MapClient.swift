@@ -343,6 +343,7 @@ enum MapMessages {
         var ops: [ChangeOp] = []
         var state = Changeset.State.pending
         var approvals: [Changeset.Approval] = []
+        var reason: String?
         for f in fields {
             switch f.number {
             case 1: id = UUID(uuidString: f.string) ?? id
@@ -365,13 +366,14 @@ enum MapMessages {
                     }
                 }
                 approvals.append(Changeset.Approval(playerID: player, isTrusted: trusted, at: at))
+            case 14: reason = f.string.isEmpty ? nil : f.string
             default: break
             }
         }
         let firstTile = tiles.first ?? S2CellID(GeoPoint(latitude: 0, longitude: 0)).tile
         return Changeset(
             meta: RecordMeta(id: id, createdAt: created, playerID: author, chunk: chunk ?? firstTile),
-            ops: ops, tiles: tiles.sorted(), state: state, approvals: approvals)
+            ops: ops, tiles: tiles.sorted(), state: state, approvals: approvals, stateReason: reason)
     }
 
     static func appliedChange(_ fields: [ProtoField]) throws -> AppliedChange {

@@ -17,6 +17,8 @@ public struct SyncCoordinator: Sendable {
         public var submitted: Int = 0
         public var updated: [Changeset] = []
         public var blobsUploaded: Int = 0
+        /// The open changesets the server has after this sync: ones it already knew and ones just submitted.
+        public var known: Set<UUID> = []
         public var finishedAt: Date = .now
 
         public init() {}
@@ -45,10 +47,14 @@ public struct SyncCoordinator: Sendable {
                 remote = try await client.submit(changeset, author: author)
                 report.submitted += 1
             }
-            if remote.state != changeset.state || remote.approvals != changeset.approvals {
+            report.known.insert(changeset.id)
+            if remote.state != changeset.state || remote.approvals != changeset.approvals
+                || remote.stateReason != changeset.stateReason
+            {
                 var merged = changeset
                 merged.state = remote.state
                 merged.approvals = remote.approvals
+                merged.stateReason = remote.stateReason
                 report.updated.append(merged)
             }
         }
