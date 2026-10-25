@@ -25,6 +25,9 @@
 			</dict>
 		</dict>
 	</dict>
+	<!-- Game Center player ids that see the admin flags in Settings (CANOPY_ADMIN_PLAYER_IDS, Configs/Local.xcconfig). -->
+	<key>CanopyAdminPlayerIDs</key>
+	<string>$(CANOPY_ADMIN_PLAYER_IDS)</string>
 	<!-- The full version, which may be a pre-release (Configs/Version.xcconfig). -->
 	<key>CanopyVersion</key>
 	<string>$(CANOPY_VERSION)</string>

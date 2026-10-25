@@ -40,26 +40,45 @@ public struct TreeDetector: Sendable {
 
     public init() {}
 
-    /// - Parameters:
-    ///   - points: aerial points in the site frame, with LAS classes.
-    ///   - ground: the site's ground model.
-    ///   - buildings: closed outlines (site x, y) to mask out.
-    ///   - extent: the area to search, site frame (x range, y range); defaults to the ground model's extent.
-    public func detect(
-        points: [PointBlock], ground: Heightfield, buildings: [[SIMD2<Double>]] = [],
-        extent: (x: ClosedRange<Double>, y: ClosedRange<Double>)? = nil
-    ) -> [Tree] {
-        let area =
-            extent
-            ?? (
-                x: ground.origin.x...(ground.origin.x + Double(ground.nx - 1) * ground.cellSize),
-                y: ground.origin.y...(ground.origin.y + Double(ground.ny - 1) * ground.cellSize)
-            )
+    /// Heights of the highest canopy return above the ground on a grid in the site frame: the raw canopy height model,
+    /// before pits are filled and it is smoothed. For drawing; `detect` builds its own.
+    public struct CanopyHeightModel: Sendable {
+        /// Site-frame x and y of the grid's south-west corner.
+        public var origin: SIMD2<Double>
+        public var cellSize: Double
+        public var nx: Int
+        public var ny: Int
+        /// Row by row from the south-west, in metres; 0 where there is no canopy.
+        public var heights: [Float]
+
+        public init(origin: SIMD2<Double>, cellSize: Double, nx: Int, ny: Int, heights: [Float]) {
+            self.origin = origin
+            self.cellSize = cellSize
+            self.nx = nx
+            self.ny = ny
+            self.heights = heights
+        }
+    }
+
+    /// The raw canopy height model over the ground model's extent, or nil when that is too small or too large.
+    public func canopyHeightModel(points: [PointBlock], ground: Heightfield) -> CanopyHeightModel? {
+        let area = (
+            x: ground.origin.x...(ground.origin.x + Double(ground.nx - 1) * ground.cellSize),
+            y: ground.origin.y...(ground.origin.y + Double(ground.ny - 1) * ground.cellSize)
+        )
         let nx = Int(((area.x.upperBound - area.x.lowerBound) / cellSize).rounded(.up)) + 1
         let ny = Int(((area.y.upperBound - area.y.lowerBound) / cellSize).rounded(.up)) + 1
-        guard nx > 2, ny > 2, nx * ny < 50_000_000 else { return [] }
+        guard nx > 2, ny > 2, nx * ny < 50_000_000 else { return nil }
+        let (chm, _) = rawCanopy(points: points, ground: ground, area: area, nx: nx, ny: ny)
+        return CanopyHeightModel(
+            origin: SIMD2(area.x.lowerBound, area.y.lowerBound), cellSize: cellSize, nx: nx, ny: ny, heights: chm)
+    }
 
-        // 1. Raw CHM: highest return above ground per cell, and hits per cell.
+    /// The highest vegetation return above the ground in each cell, and how many returns each cell has.
+    private func rawCanopy(
+        points: [PointBlock], ground: Heightfield, area: (x: ClosedRange<Double>, y: ClosedRange<Double>), nx: Int,
+        ny: Int
+    ) -> (chm: [Float], hits: [UInt16]) {
         var chm = [Float](repeating: 0, count: nx * ny)
         var hits = [UInt16](repeating: 0, count: nx * ny)
         var groundCache = [Float](repeating: .nan, count: nx * ny)
@@ -85,6 +104,30 @@ public struct TreeDetector: Sendable {
                 if hits[index] < .max { hits[index] += 1 }
             }
         }
+        return (chm, hits)
+    }
+
+    /// - Parameters:
+    ///   - points: aerial points in the site frame, with LAS classes.
+    ///   - ground: the site's ground model.
+    ///   - buildings: closed outlines (site x, y) to mask out.
+    ///   - extent: the area to search, site frame (x range, y range); defaults to the ground model's extent.
+    public func detect(
+        points: [PointBlock], ground: Heightfield, buildings: [[SIMD2<Double>]] = [],
+        extent: (x: ClosedRange<Double>, y: ClosedRange<Double>)? = nil
+    ) -> [Tree] {
+        let area =
+            extent
+            ?? (
+                x: ground.origin.x...(ground.origin.x + Double(ground.nx - 1) * ground.cellSize),
+                y: ground.origin.y...(ground.origin.y + Double(ground.ny - 1) * ground.cellSize)
+            )
+        let nx = Int(((area.x.upperBound - area.x.lowerBound) / cellSize).rounded(.up)) + 1
+        let ny = Int(((area.y.upperBound - area.y.lowerBound) / cellSize).rounded(.up)) + 1
+        guard nx > 2, ny > 2, nx * ny < 50_000_000 else { return [] }
+
+        // 1. Raw CHM: highest return above ground per cell, and hits per cell.
+        let (chm, hits) = rawCanopy(points: points, ground: ground, area: area, nx: nx, ny: ny)
 
         // 2. Fill single-cell pits (cells lower than most neighbours) and smooth with a 3 × 3 Gaussian.
         var filled = chm

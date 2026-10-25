@@ -88,7 +88,36 @@ A `Quantity` is a value and its standard uncertainty (one standard deviation): `
 | `removed` | Agreed not to be a tree, or gone | hidden |
 
 The UI shows `displayStatus`, which is `proposed` while this device waits for agreement and the agreed
-status otherwise.
+status otherwise. The map can show or hide each status (the chips under the summary bar).
+
+### Tree names
+
+A tree is called by its `localName` when players have given it one. Otherwise it gets a generated name such as
+*Steadfast Raelin Caelum* (`TreeName`, `Tree.name`). Generated names are deterministic and never repeat across Golden
+Gate Park. The rubric:
+
+1. **Occupancy key.** A name belongs to the S2 **L22** cell the trunk stands in, about 2.1 m × 2.1 m in the park. At
+   most one tree per L22 cell is the occupancy rule; two candidates in one cell would share a name.
+2. **Naming region.** A frozen list of **414 L16 tiles** covers the park boundary plus 60 m (`regionTokens`). A cell
+   outside it has no generated name ("Unnamed tree").
+3. **Index.** The cell's index is its tile's position in the list (9 bits, room for 512 tiles) followed by its place
+   inside the tile: the six child positions from L17 to L22 (12 bits). Distinct cells in the region get distinct
+   indices below 2²¹ = 2,097,152, and 414 × 4,096 = 1,695,744 cells can be named.
+4. **Scramble.** A fixed bijection of the 21-bit indices (multiplications by odd numbers and right xor-shifts) gives
+   neighbouring trees unrelated names. A bijection cannot create collisions; the test suite checks all 2²¹ inputs.
+5. **Spell.** The scrambled index read as three base-128 digits picks **adjective + name + Latin word**: 128 × 128 ×
+   128 = 2²¹ names. So any 20,000 trees, or all 1.7 million cells, have different names.
+6. **Word lists.** Every list is exactly 128 words, with no word in two lists:
+   - Adjectives are everyday dictionary words that are kind or neutral, mostly about nature, light and weather. No
+     words for skin colour, bodies, illness or death, no slang with a second meaning (no *Shady*, no *Dusky*), and
+     no negative traits.
+   - Names are invented and sound mystical. None is a well-known character, deity, saint or brand (no Tolkien or
+     Narnia names), and none matches a word in the other lists.
+   - Latin words are botanical epithets (*Sempervirens*, *Sylvatica*) and words for sky, weather, seasons and
+     landscape (*Caelum*, *Aurora*). There are no genus names, so a name never claims a species, and no word that
+     reads badly in English (no *Nigra*, *Vulgaris* or *Semen*).
+7. **Stability.** Names change if a list changes or the region is reordered, so both are frozen and a test pins one
+   name. Tiles can be appended to the region, up to 512, without renaming anything.
 
 ## Tags
 
@@ -200,7 +229,8 @@ enough to hash and compare.
 
 The base layer is a set of `TreeCandidate`s: position, height and crown radius from the aerial survey, a detection
 confidence, `isSynthetic` for the bundled sample, and `source` (for example `USGS 3DEP lidar point cloud, sf-b23
-(public-domain)`) for real ones. Real candidates come from a Gerardus align server, for the part of the map in view (at
+(public-domain)`) for real ones. A candidate found with an admin's OpenStreetMap flag on says so in its source
+("buildings masked with OpenStreetMap, for checking only"); those must never go into the shared, CC0 tree layer. Real candidates come from a Gerardus align server, for the part of the map in view (at
 most 150 m from its centre) within one site (an L16 tile and its 8 neighbours); their ids are derived from the
 position rounded to 1e-5 degrees, so reloading gives the same ids. Loading replaces the candidates in that area,
 except those a player has observed (see docs/ARCHITECTURE.md, *Aerial data and registration*).

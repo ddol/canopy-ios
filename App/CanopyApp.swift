@@ -13,6 +13,7 @@ struct CanopyApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
+                .defaultAppStorage(model.preferences)
                 .tint(.canopyBrand)
                 .task {
                     if !AppModel.isTesting() {
