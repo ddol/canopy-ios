@@ -11,6 +11,7 @@ let package = Package(
     dependencies: [
         .package(path: "../CanopyModel"),
         .package(path: "../CanopyDesign"),
+        .package(path: "../CanopyReference"),
     ],
     targets: [
         .target(
@@ -18,6 +19,7 @@ let package = Package(
             dependencies: [
                 .product(name: "CanopyModel", package: "CanopyModel"),
                 .product(name: "CanopyDesign", package: "CanopyDesign"),
+                .product(name: "CanopyReference", package: "CanopyReference"),
             ]
         ),
         .testTarget(name: "CanopyMapTests", dependencies: ["CanopyMap"]),

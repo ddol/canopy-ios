@@ -249,6 +249,15 @@ public enum ReferenceLayer: Int, Sendable, CaseIterable {
     case registeredScans = 5
     case observed = 6
     case groundMesh = 7
+    case boxes = 8
+    case cityStreets = 9
+    case cityIntersections = 10
+    case kerbs = 11
+    case streetUse = 12
+    case buildings = 13
+    case laneMarkings = 14
+    case streetFurniture = 15
+    case trees = 16
 }
 
 public enum FeatureKind: Int, Sendable {
@@ -262,7 +271,18 @@ public enum FeatureKind: Int, Sendable {
     case correction = 7
     case facade = 8
     case pole = 9
+    case wallPlane = 10
+    case driveway = 11
+    case parkingSpace = 12
+    case travelLane = 13
+    case island = 14
     case other = 15
+    case surface = 16
+    case roofPlane = 17
+    case buildingPart = 18
+    case laneMarking = 19
+    case sign = 20
+    case tree = 21
 }
 
 public struct SiteFrame: Equatable, Sendable, ProtoDecodable {
@@ -362,6 +382,7 @@ public struct LineFeature: Equatable, Sendable, ProtoDecodable {
     public var closed = false
     public var height: Float = 0
     public var tags: [String: String] = [:]
+    public var sourceVersion = ""
 
     public init(fields: [ProtoField]) throws {
         for f in fields {
@@ -379,6 +400,7 @@ public struct LineFeature: Equatable, Sendable, ProtoDecodable {
                     if g.number == 2 { value = g.string }
                 }
                 tags[key] = value
+            case 7: sourceVersion = f.string
             default: break
             }
         }
@@ -386,7 +408,12 @@ public struct LineFeature: Equatable, Sendable, ProtoDecodable {
 
     /// The vertices as (x, y) pairs.
     public var points: [SIMD2<Double>] {
-        stride(from: 0, to: xyz.count - 2, by: 3).map { SIMD2(Double(xyz[$0]), Double(xyz[$0 + 1])) }
+        vertices.map { SIMD2(Double($0.x), Double($0.y)) }
+    }
+
+    /// Full ENU geometry, including NAVD88 elevation. Ignore a trailing incomplete vertex.
+    public var vertices: [SIMD3<Float>] {
+        stride(from: 0, to: xyz.count / 3 * 3, by: 3).map { SIMD3(xyz[$0], xyz[$0 + 1], xyz[$0 + 2]) }
     }
 }
 

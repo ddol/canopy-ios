@@ -180,6 +180,19 @@ struct MapScreen: View {
                 }
                 .disabled(model.aerial.isWorking)
             }
+            Section("3D vectors") {
+                NavigationLink {
+                    VectorMapScreen(token: VectorMapScreen.kirkham9th, title: "Kirkham & 9th")
+                } label: {
+                    Label("Kirkham & 9th in 3D", systemImage: "cube")
+                }
+                NavigationLink {
+                    VectorMapScreen(
+                        token: (viewport ?? .goldenGatePark).center.tile.token, title: "3D vectors in view")
+                } label: {
+                    Label("3D vectors in view", systemImage: "view.3d")
+                }
+            }
             Section("Legend") {
                 ForEach([CountStatus.detected, .proposed, .confirmed, .verified], id: \.self) { status in
                     Label(status.presentation.label, systemImage: status.presentation.systemImage)

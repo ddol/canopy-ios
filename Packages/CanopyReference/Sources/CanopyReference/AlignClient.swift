@@ -103,32 +103,16 @@ public struct AlignClient: Sendable {
 
     /// Streams reference geometry for a prepared site, in the site frame.
     public func reference(_ request: StreamReferenceRequest) -> AsyncThrowingStream<ReferenceChunk, any Error> {
-        map(call(Self.site + "StreamReference", [request.serialized], limit: timeouts.reference)) { fields in
-            var layer = ReferenceLayer.unspecified
-            var chunk: ReferenceChunk?
-            var complete = false
-            for f in fields {
-                switch f.number {
-                case 1: layer = ReferenceLayer(rawValue: f.int) ?? .unspecified
-                case 2: chunk = .points(layer, try PointBlock(f))
-                case 3:
-                    let lines = try ProtoReader.fields(f.bytes).filter { $0.number == 1 }.map { try LineFeature($0) }
-                    chunk = .lines(layer, lines)
-                case 7: chunk = .groundMesh(try Heightfield(f))
-                case 5: complete = f.bool
-                case 4, 6: chunk = .other(layer)
-                default: break
-                }
-            }
-            // The layer field may follow the payload on the wire; fix the layer up once everything is read.
-            switch chunk {
-            case .points(_, let block): chunk = .points(layer, block)
-            case .lines(_, let lines): chunk = .lines(layer, lines)
-            case .other: chunk = .other(layer)
-            default: break
-            }
-            if chunk == nil, complete { return .layerComplete(layer) }
-            return chunk
+        map(call(Self.site + "StreamReference", [request.serialized], limit: timeouts.reference)) {
+            try ReferenceMessage(fields: $0).chunk
+        }
+    }
+
+    /// Includes completion flags and model identity, needed to reject partial or mixed vector scenes.
+    public func referenceMessages(_ request: StreamReferenceRequest) -> AsyncThrowingStream<ReferenceMessage, any Error>
+    {
+        map(call(Self.site + "StreamReference", [request.serialized], limit: timeouts.reference)) {
+            try ReferenceMessage(fields: $0)
         }
     }
 
