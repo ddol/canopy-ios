@@ -10,6 +10,14 @@ streets/kerbs and ground. **Reset view** restores the initial camera. **Reload v
 model. **Sources and model** shows attribution, bundle identity and the model identity returned by the server.
 The phone needs access to the configured server (including Tailscale when that is how it is reached).
 
+## On the main map
+
+The same vectors can be drawn flat over Apple's map (or the Gerardus-only map): **Map → Layers → Load vectors in
+view**, or the **Load vectors here** button that appears when the site at the map centre is not loaded yet. Each load
+adds a site, so panning and loading builds up an area. **Show vectors** turns them off. Outlines, box walls and
+measured facades, streets, kerbs and street surfaces are drawn from above. Ground and trees are left out, since the
+census has its own trees. See ARCHITECTURE.md, *Map*.
+
 ## Available building layers
 
 The implementation follows Gerardus's `gerardus.align.v1alpha1` contract, including the W4–W7 enum additions

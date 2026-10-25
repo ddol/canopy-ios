@@ -55,7 +55,7 @@ import Testing
                 origin: SIMD2(-10, -20), cellSize: 0.5, nx: 40, ny: 80, heights: Array(repeating: 12, count: 3200)),
             lines: [road])
         let reference = try #require(AppModel.reference(result))
-        let canopy = try #require(reference.canopy)
+        let canopy = try #require(reference.canopies.first)
         #expect(canopy.nx == 20 && canopy.ny == 40)
         #expect(abs(frame.enu(of: canopy.southWest).east + 10) < 0.01)
         #expect(abs(frame.enu(of: canopy.northEast).north - 20) < 0.01)  // −20 m + 40 × 1 m, pooled from 0.5 m

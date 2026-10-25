@@ -63,6 +63,13 @@ public actor LocalStore {
         .filter { states?.contains($0.state) ?? true }
     }
 
+    /// Every evidence record on this device (this device's scans), newest first.
+    public func allEvidence() throws -> [Evidence] {
+        try db.query("SELECT payload FROM evidence ORDER BY created_at DESC, rowid DESC") { row in
+            try CanopyJSON.decoder.decode(Evidence.self, from: Data(row.string(0).utf8))
+        }
+    }
+
     public func evidence(about subjectID: UUID) throws -> [Evidence] {
         try db.query(
             "SELECT payload FROM evidence WHERE subject_id = ? ORDER BY created_at, rowid",

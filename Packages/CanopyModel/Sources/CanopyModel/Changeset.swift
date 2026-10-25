@@ -69,15 +69,19 @@ public struct Changeset: Identifiable, Hashable, Codable, Sendable {
     public var tiles: [S2CellID]
     public var state: State
     public var approvals: [Approval]
+    /// Why the server rejected the changeset or found it conflicted, when it said.
+    public var stateReason: String?
 
     public init(
-        meta: RecordMeta, ops: [ChangeOp], tiles: [S2CellID], state: State = .pending, approvals: [Approval] = []
+        meta: RecordMeta, ops: [ChangeOp], tiles: [S2CellID], state: State = .pending, approvals: [Approval] = [],
+        stateReason: String? = nil
     ) {
         self.meta = meta
         self.ops = ops
         self.tiles = tiles
         self.state = state
         self.approvals = approvals
+        self.stateReason = stateReason
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -86,6 +90,7 @@ public struct Changeset: Identifiable, Hashable, Codable, Sendable {
         case tiles = "s2_l16_tokens"
         case state
         case approvals
+        case stateReason
         /// Before the S2 field names named their level (schema v1).
         case legacyCells = "cells"
     }
@@ -99,6 +104,7 @@ public struct Changeset: Identifiable, Hashable, Codable, Sendable {
             ?? container.decode([S2CellID].self, forKey: .legacyCells)
         state = try container.decode(State.self, forKey: .state)
         approvals = try container.decode([Approval].self, forKey: .approvals)
+        stateReason = try container.decodeIfPresent(String.self, forKey: .stateReason)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -108,6 +114,7 @@ public struct Changeset: Identifiable, Hashable, Codable, Sendable {
         try container.encode(tiles, forKey: .tiles)
         try container.encode(state, forKey: .state)
         try container.encode(approvals, forKey: .approvals)
+        try container.encodeIfPresent(stateReason, forKey: .stateReason)
     }
 
     public var id: UUID { meta.id }
@@ -120,5 +127,25 @@ public struct Changeset: Identifiable, Hashable, Codable, Sendable {
             players[approval.playerID] = (players[approval.playerID] ?? false) || approval.isTrusted
         }
         return players.count >= 2 && players.values.contains(true)
+    }
+
+    /// What an open changeset still needs to reach the shared map under the policy.
+    public enum Need: Equatable, Sendable {
+        /// The policy is met; the server applies it.
+        case nothing
+        /// A trusted player has agreed; any second player will do.
+        case anotherPlayer
+        /// Nobody trusted has agreed yet. A trusted player agreeing also makes the second player, if one is missing.
+        case trustedPlayer
+    }
+
+    /// What the changeset still needs, given whether its author was trusted.
+    public func need(authorTrusted: Bool) -> Need {
+        var players: [PlayerID: Bool] = [meta.playerID: authorTrusted]
+        for approval in approvals {
+            players[approval.playerID] = (players[approval.playerID] ?? false) || approval.isTrusted
+        }
+        guard players.values.contains(true) else { return .trustedPlayer }
+        return players.count >= 2 ? .nothing : .anotherPlayer
     }
 }

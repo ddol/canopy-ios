@@ -57,6 +57,9 @@ to credit your changes, and to decide whether you may have OpenStreetMap.
   admin who turned it on. The map position is where you are looking, not where you are. The trees found are then
   saved to the server's shared tree layer, unless they were found with OpenStreetMap. The server records which
   player's phone found them.
+- **Loading vectors** (Map → Layers → **Load vectors in view**, or **Load vectors here**) sends the S2 tile at the
+  map centre and downloads that site's public vectors: building outlines and walls, streets and kerbs. Nothing about
+  you is sent beyond the identity every call carries.
 - **Registering a scan** happens only when you tap Register and confirm. It uploads the colourless mesh the AR
   session has reconstructed within 60 m of where the session started, thinned to one point per 10 cm, with the
   session's approximate GPS position. It is geometry only (no photos, colours or textures), it is not cropped to a

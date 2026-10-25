@@ -226,6 +226,25 @@ own.
 downloaded first (`GetBlob`, `AppModel.evidenceFile`), checked against its hash and kept in the blob store, then
 opened the same way, as a throwaway USDZ in Quick Look. Blobs are uploaded with the changeset that references them.
 
+**Your proposals.** Me → **Your proposals** lists the player's open changesets, and History the closed ones. Each
+row gives the trees, what it changes, its state, and what it still needs in words (`ProposalStatus`).
+`Changeset.need(authorTrusted:)` applies the policy (two players, one trusted) to the author and the approvals:
+- nothing, so the server applies it;
+- any other player, because a trusted player has agreed;
+- a trusted player.
+
+Other cases have their own wording:
+- open and not on the server yet, using `SyncCoordinator.Report.known`;
+- only on the simulated server;
+- rejected, with the server's reason (`Changeset.stateReason`);
+- conflicted.
+
+Tapping a row opens its tree. The tree sheet gives the same line for its open proposal.
+
+**Your scans.** Me → **Your scans** lists every evidence mesh this device recorded, newest first
+(`LocalStore.allEvidence`), with its tree, date, DBH, mesh size and crop radius, and Preview and Share. Scans
+uploaded for registration are not kept on the phone.
+
 **Reviewing.** The review queue (Me → **Review**) lists other players' open changesets in the followed tiles
 (`ListOpenChangesets`), leaving out the player's own changes and ones they have already agreed with. **Agree**
 records an approval (`ReviewChangeset`). A trusted player (`GetPlayer`) can also **Reject**, with a reason. The server
@@ -249,8 +268,31 @@ player shows (`Visibility.statuses`, the chips under the summary bar), tags, rou
   boundary, tiles, routes, every tree and the tags. Drag to pan, pinch to zoom, tap to select. The grid and outlines
   are kept in memory after **Load real trees in view**.
 
+**Vectors on the main map.** Layers → **Load vectors in view** (or the **Load vectors here** button, which shows
+when the vectors are on, the map is within about 600 m from centre to corner, and the site at the centre is not loaded
+yet) reads the public vector layers of the site at the map centre with #17's `VectorReference.load`, preparing the
+site first if needed. It converts them from the site frame to the map with `SiteGeoreference`, and keeps them per site
+(`AppModel.vectorAreas`), so panning and loading builds up an area.
+
+`AppModel.lineKind` decides how each layer draws from above:
+- footprints and buildings as building outlines;
+- box walls and measured facade planes as walls;
+- city streets as roads and paths;
+- kerbs;
+- street use as surfaces.
+
+Ground, trees and sensor arrows are left out. Both renderers draw them; on Apple's map **Show vectors** turns them
+off. The canopy grid stays on the Gerardus-only map, since SwiftUI's MapKit has no image overlays. The 3D viewer
+(Layers → 3D vectors) is unchanged. Everything loaded lives in memory, merged once into `AppModel.mapReference`.
+
 A MapLibre Native renderer with offline PMTiles (a Milestone 1 issue) can implement the same protocol without
 changing the screens.
+
+## Switched-off features
+
+`Features` holds parts of Canopy that are built but hidden. `Features.limbTagging` is off: the Tag tab, "Tag a limb
+hazard" on a tree, and the hazard-tags map layer are hidden, and come back as an extension. The model, store and sync
+still handle tags, so nothing already recorded is lost, and the unit tests still cover tagging.
 
 ## Admin flags
 

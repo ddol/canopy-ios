@@ -54,3 +54,15 @@ review queue. Loaded trees are saved to the server's trees layer. Still to do:
 
 - Shade the ground model (hillshade) under the canopy, and show the player's position.
 - Keep the loaded area's canopy grid and outlines across launches; they are in memory only.
+
+## Limb tagging
+
+Hidden for now (`Features.limbTagging`). To bring it back as an extension:
+- Turn the switch on, and look again at the Tag flow on the LiDAR mesh.
+- Bring hazard tags into the review queue and the proposals list.
+- Decide how tag evidence (limb scans) is shared and previewed.
+
+## Vectors
+
+- Loaded vectors and canopy grids live in memory; keep them across launches.
+- Show which areas are loaded on the map, and let a player drop one.

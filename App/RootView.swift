@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The tab shell: Map · Census · Tag · Me. On iPad the tabs adapt to a sidebar.
+/// The tab shell: Map · Census · Me, plus Tag when limb tagging is switched on (`Features`). On iPad the tabs adapt
+/// to a sidebar.
 struct RootView: View {
     enum Section: Hashable {
         case map
@@ -20,8 +21,10 @@ struct RootView: View {
             Tab("Census", systemImage: "tree", value: Section.census) {
                 CensusScreen()
             }
-            Tab("Tag", systemImage: "exclamationmark.triangle", value: Section.tag) {
-                TagScreen()
+            if Features.limbTagging {
+                Tab("Tag", systemImage: "exclamationmark.triangle", value: Section.tag) {
+                    TagScreen()
+                }
             }
             Tab("Me", systemImage: "person.crop.circle", value: Section.me) {
                 MeScreen()

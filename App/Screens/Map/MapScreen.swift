@@ -15,7 +15,7 @@ struct MapScreen: View {
 
     @Environment(AppModel.self) private var model
     @State private var selection: UUID?
-    @State private var visibility = MapLayers.Visibility()
+    @State private var visibility = MapLayers.Visibility(tags: Features.limbTagging)
     /// The visible region, once the map has reported one; detected trees are drawn only around it.
     @State private var viewport: MapViewport?
     @AppStorage("canopy.baseMap") private var baseMap = BaseMap.apple
@@ -41,7 +41,7 @@ struct MapScreen: View {
                 }
                 .safeAreaInset(edge: .bottom) {
                     VStack(alignment: .leading, spacing: Spacing.xs) {
-                        if baseMap == .gerardus, model.aerialReference == nil, !model.aerial.isWorking {
+                        if baseMap == .gerardus, model.mapReference == nil, !model.aerial.isWorking {
                             Text(
                                 "Only trees so far. Layers → Load real trees in view draws the canopy and outlines here."
                             )
@@ -50,8 +50,15 @@ struct MapScreen: View {
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.medium))
                         }
                         aerialStatus
-                        if !model.aerialAttribution.isEmpty {
-                            Text("Trees: " + model.aerialAttribution.joined(separator: " · "))
+                        if showsLoadVectors {
+                            Button("Load vectors here", systemImage: "square.stack.3d.down.right") {
+                                Task { await model.loadVectors(around: centre) }
+                            }
+                            .buttonStyle(.canopySecondary)
+                            .accessibilityIdentifier("load-vectors-here")
+                        }
+                        if !model.mapAttribution.isEmpty {
+                            Text("Data: " + model.mapAttribution.joined(separator: " · "))
                                 .font(.caption2)
                                 .foregroundStyle(Color.canopyInkMuted)
                                 .padding(.horizontal, Spacing.xs)
@@ -82,7 +89,7 @@ struct MapScreen: View {
     private var map: some View {
         let layers = MapLayers(
             state: model.census, boundary: model.boundary, visibility: visibility, region: viewport,
-            detectedLimit: detectedLimit, reference: model.aerialReference)
+            detectedLimit: detectedLimit, reference: model.mapReference)
         switch baseMap {
         case .apple:
             CanopyMapView(layers: layers, selection: $selection, viewport: viewport ?? .goldenGatePark)
@@ -100,6 +107,16 @@ struct MapScreen: View {
                 model.mapDidSettle($0)
             }
         }
+    }
+
+    /// The middle of the map in view.
+    private var centre: GeoPoint { (viewport ?? .goldenGatePark).center }
+
+    /// Offer to load the vectors where the map is when they are shown, a server is set, the map is close enough to be
+    /// worth it, and that site is not loaded yet.
+    private var showsLoadVectors: Bool {
+        visibility.vectors && model.alignClient != nil && !model.aerial.isWorking
+            && (viewport?.cornerDistance ?? .infinity) <= 600 && !model.hasVectors(at: centre)
     }
 
     /// How many detected trees to draw. On Apple's map each marker is a view, and hundreds of them make it sluggish, so a
@@ -168,15 +185,23 @@ struct MapScreen: View {
                     Label("Gerardus only", systemImage: "square.3.layers.3d.down.right").tag(BaseMap.gerardus)
                 }
             }
-            Toggle("Hazard tags", systemImage: "exclamationmark.triangle", isOn: $visibility.tags)
+            if Features.limbTagging {
+                Toggle("Hazard tags", systemImage: "exclamationmark.triangle", isOn: $visibility.tags)
+            }
             Toggle("Routes", systemImage: "point.topleft.down.to.point.bottomright.curvepath", isOn: $visibility.routes)
             Toggle("S2 L16 tiles", systemImage: "square.grid.3x3", isOn: $visibility.tiles)
             Divider()
             Section("Aerial LiDAR") {
                 Button("Load real trees in view", systemImage: "tree") {
-                    let centre = viewport?.center ?? MapViewport.goldenGatePark.center
                     let radius = viewport?.cornerDistance ?? AppModel.aerialRadiusLimit
                     Task { await model.loadAerialTrees(around: centre, radius: radius) }
+                }
+                .disabled(model.aerial.isWorking)
+            }
+            Section("Gerardus vectors") {
+                Toggle("Show vectors", systemImage: "square.stack.3d.down.right", isOn: $visibility.vectors)
+                Button("Load vectors in view", systemImage: "arrow.down.circle") {
+                    Task { await model.loadVectors(around: centre) }
                 }
                 .disabled(model.aerial.isWorking)
             }

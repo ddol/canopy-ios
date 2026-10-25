@@ -144,10 +144,12 @@ import Testing
         #expect(first.submitted == 1)
         #expect(first.blobsUploaded == 1)
         #expect(first.updated.isEmpty, "still pending, nothing changed")
+        #expect(first.known == [measure.id])
 
         try await server.approve(measure.id, by: ranger)
         let second = try await sync.sync([measure], author: author) { blobs[$0.rawValue]! }
         #expect(second.submitted == 0)
+        #expect(second.known == [measure.id])
         #expect(second.updated.map(\.state) == [.applied])
         #expect(second.updated.first?.approvals.map(\.playerID) == [ranger.id])
 

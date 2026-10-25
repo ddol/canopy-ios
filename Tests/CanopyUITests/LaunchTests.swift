@@ -13,14 +13,16 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
-    func testAllFourTabsAreReachable() {
+    func testEveryTabIsReachable() {
         let app = launch()
         waitForMap(app)
-        for name in ["Map", "Census", "Tag", "Me"] {
+        for name in ["Map", "Census", "Me"] {
             let tab = app.buttons[name].firstMatch
             XCTAssertTrue(tab.waitForExistence(timeout: 10), "missing tab \(name)")
             tab.tap()
         }
+        // Limb tagging is hidden for now (Features.limbTagging).
+        XCTAssertFalse(app.buttons["Tag"].exists)
     }
 
     @MainActor
@@ -102,7 +104,8 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
-    func testTaggingATreeCreatesAProposedTag() {
+    func testTaggingATreeCreatesAProposedTag() throws {
+        try XCTSkipIf(true, "Limb tagging is hidden for now (Features.limbTagging).")
         let app = launch()
         waitForMap(app)
         let tree = app.buttons[firstTreeID].firstMatch
@@ -128,14 +131,17 @@ final class LaunchTests: XCTestCase {
         confirm.tap()
 
         app.buttons["Me"].firstMatch.tap()
-        let row = app.staticTexts["changeset-row"].firstMatch
+        let row = app.buttons["changeset-row"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         XCTAssertTrue(row.label.contains("Confirm tree"), row.label)
         XCTAssertTrue(row.label.contains("Pending"), row.label)
+        // What it still needs, in words.
+        XCTAssertTrue(row.label.contains("simulated server"), row.label)
+        XCTAssertTrue(app.buttons["scans-link"].firstMatch.waitForExistence(timeout: 10))
 
         app.buttons["Sync now"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["sync-submitted"].firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(text(app, "Pending changes (1)").exists)
+        XCTAssertTrue(text(app, "Your proposals (1)").exists)
 
         let approve = app.buttons["Simulate trusted approval"].firstMatch
         scroll(app, toReveal: approve)
@@ -145,7 +151,7 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(applied.waitForExistence(timeout: 10))
         app.swipeDown()
         app.swipeDown()
-        XCTAssertTrue(text(app, "Pending changes (0)").waitForExistence(timeout: 10))
+        XCTAssertTrue(text(app, "Your proposals (0)").waitForExistence(timeout: 10))
     }
 
     @MainActor

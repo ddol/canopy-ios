@@ -9,6 +9,7 @@ import SwiftUI
 /// Quick Look (downloading it first when needed) and Share hands over the GLB file.
 struct EvidenceRow: View {
     let ref: BlobRef
+    var title = "Trunk scan"
     @Environment(AppModel.self) private var model
     @State private var previewURL: URL?
     @State private var isPreparing = false
@@ -18,7 +19,7 @@ struct EvidenceRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             HStack {
-                Label("Trunk scan", systemImage: "cube")
+                Label(title, systemImage: "cube")
                 Spacer()
                 Text(verbatim: String(ref.rawValue.prefix(12)))
                     .font(CanopyFont.mono(.caption))

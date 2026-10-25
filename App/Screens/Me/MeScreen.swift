@@ -9,6 +9,8 @@ import SwiftUI
 struct MeScreen: View {
     @Environment(AppModel.self) private var model
     @State private var confirmingReset = false
+    /// The tree of the proposal the player tapped.
+    @State private var shownTree: Tree?
     private let format = QuantityFormat()
 
     var body: some View {
@@ -16,6 +18,7 @@ struct MeScreen: View {
             List {
                 playerSection
                 pendingSection
+                scansSection
                 reviewSection
                 syncSection
                 historySection
@@ -34,6 +37,10 @@ struct MeScreen: View {
                         Label("Settings", systemImage: "gearshape")
                     }
                 }
+            }
+            .sheet(item: $shownTree) { tree in
+                TreeSheet(tree: tree)
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: signInPresented) {
                 if let controller = model.players.signInViewController {
@@ -124,14 +131,14 @@ struct MeScreen: View {
     private var pendingSection: some View {
         Section {
             if open.isEmpty {
-                Text("Nothing waiting. Confirm, measure or tag a tree to propose a change.")
+                Text("Nothing waiting. Confirm, measure or add a tree to propose a change.")
                     .foregroundStyle(Color.canopyInkMuted)
             }
             ForEach(open) { changeset in
-                ChangesetRow(changeset: changeset)
+                proposal(changeset)
             }
         } header: {
-            Text("Pending changes (\(open.count))")
+            Text("Your proposals (\(open.count))")
         } footer: {
             Text("A change reaches the shared map when a second player agrees and at least one of you is trusted.")
         }
@@ -204,12 +211,36 @@ struct MeScreen: View {
         }
     }
 
+    private var scansSection: some View {
+        Section {
+            NavigationLink {
+                ScansScreen()
+            } label: {
+                LabeledContent("Your scans", value: format.count(model.scanCount))
+            }
+            .accessibilityIdentifier("scans-link")
+        } footer: {
+            Text("Every trunk scan is kept on this phone as a colourless mesh, and shared with the change it backs.")
+        }
+    }
+
+    /// A proposal row; tapping it opens its tree.
+    private func proposal(_ changeset: Changeset) -> some View {
+        Button {
+            shownTree = changeset.ops.lazy.compactMap { model.tree($0.id) }.first
+        } label: {
+            ProposalRow(changeset: changeset)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("changeset-row")
+    }
+
     @ViewBuilder
     private var historySection: some View {
         if !closed.isEmpty {
             Section("History") {
                 ForEach(closed) { changeset in
-                    ChangesetRow(changeset: changeset)
+                    proposal(changeset)
                 }
             }
         }
@@ -247,36 +278,6 @@ struct MeScreen: View {
                 .font(.footnote)
                 .foregroundStyle(Color.canopyInkMuted)
         }
-    }
-}
-
-/// One changeset: what it does, its state, when and where.
-struct ChangesetRow: View {
-    let changeset: Changeset
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.xxs) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(ChangesetSummary.describe(changeset))
-                    .font(.body.weight(.semibold))
-                Spacer()
-                StatusBadge(changeset.state.presentation)
-            }
-            HStack(spacing: Spacing.xs) {
-                Text(changeset.meta.createdAt, style: .relative)
-                Text("·")
-                Text(verbatim: changeset.tiles.map(\.familyDisplay).joined(separator: " "))
-                    .font(CanopyFont.mono(.caption))
-                if !changeset.approvals.isEmpty {
-                    Text("·")
-                    Label("\(changeset.approvals.count)", systemImage: "hand.thumbsup")
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(Color.canopyInkMuted)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("changeset-row")
     }
 }
 

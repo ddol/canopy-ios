@@ -11,6 +11,11 @@ struct TreeSheet: View {
     @Environment(\.dismiss) private var dismiss
     private let format = QuantityFormat()
 
+    /// The player's latest open proposal about this tree.
+    private var proposal: Changeset? {
+        model.changesets.last { $0.state.isOpen && $0.ops.contains { $0.id == tree.id } }
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -19,10 +24,12 @@ struct TreeSheet: View {
                         StatusBadge(tree.displayStatus.presentation)
                         if let proposed = tree.proposedStatus {
                             Text(
-                                "You proposed \(proposed.presentation.label.lowercased()); waiting for a second player."
+                                "You proposed \(proposed.presentation.label.lowercased())."
+                                    + (proposal.map { " " + ProposalStatus.explain($0, in: model) } ?? "")
                             )
                             .font(.footnote)
                             .foregroundStyle(Color.canopyInkMuted)
+                            .accessibilityIdentifier("tree-proposal")
                         }
                     }
                     .listRowBackground(Color.clear)
@@ -37,7 +44,7 @@ struct TreeSheet: View {
                             Task { await model.reject(tree) }
                         }
                     }
-                    if tree.effectiveStatus != .removed {
+                    if Features.limbTagging, tree.effectiveStatus != .removed {
                         Button("Tag a limb hazard", systemImage: "exclamationmark.triangle") {
                             dismiss()
                             model.tagLimb(on: tree)
@@ -72,8 +79,10 @@ struct TreeSheet: View {
                         }
                     }
                     LabeledContent("Evidence scans", value: "\(tree.evidenceRefs.count)")
-                    LabeledContent(
-                        "Hazard tags", value: "\(model.census.tags.values.filter { $0.treeID == tree.id }.count)")
+                    if Features.limbTagging {
+                        LabeledContent(
+                            "Hazard tags", value: "\(model.census.tags.values.filter { $0.treeID == tree.id }.count)")
+                    }
                 }
 
                 if !tree.evidenceRefs.isEmpty {

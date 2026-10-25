@@ -38,6 +38,11 @@ struct MapKitMap: View {
                     .foregroundStyle(Color.canopyBrand.opacity(0.06))
                     .stroke(Color.canopyBrand.opacity(0.5), lineWidth: 1.5)
             }
+            if layers.visibility.vectors, let reference = layers.reference {
+                ForEach(Array(reference.lines.enumerated()), id: \.offset) { _, line in
+                    vector(line)
+                }
+            }
             ForEach(layers.tiles) { tile in
                 MapPolygon(coordinates: tile.corners.map(CLLocationCoordinate2D.init))
                     .foregroundStyle(.clear)
@@ -82,6 +87,34 @@ struct MapKitMap: View {
                 MapViewport(
                     center: GeoPoint(latitude: region.center.latitude, longitude: region.center.longitude),
                     latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta))
+        }
+    }
+}
+
+extension MapKitMap {
+    /// One Gerardus vector, seen from above.
+    @MapContentBuilder
+    func vector(_ line: MapLayers.Reference.Line) -> some MapContent {
+        let coordinates = line.points.map(CLLocationCoordinate2D.init)
+        switch line.kind {
+        case .building:
+            MapPolygon(coordinates: coordinates)
+                .foregroundStyle(Color.canopyInkMuted.opacity(0.25))
+                .stroke(Color.canopyInkMuted, lineWidth: 1)
+        case .surface:
+            MapPolygon(coordinates: coordinates)
+                .foregroundStyle(Color.canopyInkMuted.opacity(0.12))
+        case .wall:
+            MapPolyline(coordinates: coordinates).stroke(Color.canopyInk, lineWidth: 2)
+        case .road:
+            MapPolyline(coordinates: coordinates).stroke(Color.canopyInkMuted.opacity(0.7), lineWidth: 3)
+        case .path:
+            MapPolyline(coordinates: coordinates)
+                .stroke(Color.canopyInkMuted, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+        case .kerb:
+            MapPolyline(coordinates: coordinates).stroke(Color.canopyInkMuted, lineWidth: 1)
+        case .other:
+            MapPolyline(coordinates: coordinates).stroke(Color.canopyLineStrong, lineWidth: 1)
         }
     }
 }

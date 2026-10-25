@@ -17,9 +17,8 @@ struct VerificationCensusView: View {
                         Text("This device has no LiDAR")
                             .font(.headline)
                         Text(
-                            "Trunk measurement and 3D tagging need an iPhone or iPad Pro with LiDAR. "
-                                + "You can still confirm trees, mark candidates that are not trees, "
-                                + "add trees at your location, and tag hazards."
+                            "Trunk scans need an iPhone or iPad Pro with LiDAR. You can still confirm trees, mark "
+                                + "candidates that are not trees, and add trees at your location."
                         )
                         .font(.subheadline)
                         .foregroundStyle(Color.canopyInkMuted)
