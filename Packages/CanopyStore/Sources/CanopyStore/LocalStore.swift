@@ -8,7 +8,8 @@ public enum LocalStoreError: Error, Equatable {
 }
 
 /// The app's local data: an append-only observation log, the changesets that share it, immutable evidence,
-/// the aerial base layer, and current-state tables derived from all of those.
+/// the aerial base layer, the shared map pulled from a Gerardus server, and current-state tables derived from all of
+/// those.
 ///
 /// Every write re-derives the current state (`CensusState.derive`) and rewrites the `trees` and `tags` tables in
 /// the same transaction, so the tables always match the log. Opening a store re-derives too.
@@ -174,6 +175,103 @@ public actor LocalStore {
         )
     }
 
+    // MARK: The shared map
+
+    /// What a sync brings for one tile: the tile's whole snapshot, or the ops applied in it since the last pull.
+    public struct SharedTileUpdate: Sendable {
+        public enum Content: Sendable {
+            case snapshot([SharedRecord])
+            case changes([SharedChange])
+        }
+
+        public var tile: S2CellID
+        /// The sequence to pull from next.
+        public var sequence: Int64
+        public var content: Content
+
+        public init(tile: S2CellID, sequence: Int64, content: Content) {
+            self.tile = tile
+            self.sequence = sequence
+            self.content = content
+        }
+    }
+
+    /// The tiles pulled from the shared map, and the sequence to pull each from next.
+    public func sharedTiles() throws -> [S2CellID: Int64] {
+        let rows = try db.query("SELECT s2_l16_token, sequence FROM shared_tiles") { row in
+            (S2CellID(token: row.string(0)), Int64(row.int(1)))
+        }
+        var cursors: [S2CellID: Int64] = [:]
+        for case (let tile?, let sequence) in rows {
+            cursors[tile] = sequence
+        }
+        return cursors
+    }
+
+    /// Every record pulled from the shared map.
+    public func sharedRecords() throws -> [SharedRecord] {
+        try Self.sharedRecords(db)
+    }
+
+    /// Applies what a sync pulled, in one transaction, and re-derives. A tile whose changes update an entity the store
+    /// has never seen (it moved in from a tile not pulled yet) is left as it was and returned: take its snapshot.
+    @discardableResult
+    public func applyShared(_ updates: [SharedTileUpdate]) throws -> Set<S2CellID> {
+        var stale: Set<S2CellID> = []
+        try write {
+            for update in updates {
+                switch update.content {
+                case .snapshot(let records):
+                    try db.run("DELETE FROM shared WHERE s2_l16_token = ?", [.text(update.tile.token)])
+                    for record in records { try Self.upsert(record, in: db) }
+                case .changes(let changes):
+                    var known = Dictionary(
+                        try Self.sharedRecords(db, ids: Set(changes.map(\.op.id))).map { ($0.id, $0) },
+                        uniquingKeysWith: { first, _ in first })
+                    var changed: [SharedRecord] = []
+                    var deleted: Set<UUID> = []
+                    var complete = true
+                    for change in changes {
+                        let op = change.op
+                        switch op.op {
+                        case .create:
+                            known[op.id] = SharedRecord(
+                                kind: op.entity, id: op.id, version: 1, tile: change.tile, createdBy: change.author,
+                                createdAt: change.appliedAt, fields: op.fields)
+                        case .update:
+                            guard let record = known[op.id] else {
+                                complete = false
+                                continue
+                            }
+                            known[op.id] = record.applying(op, tile: change.tile)
+                        case .delete:
+                            known[op.id] = nil
+                            deleted.insert(op.id)
+                            continue
+                        }
+                        deleted.remove(op.id)
+                        changed.append(known[op.id]!)
+                    }
+                    guard complete else {
+                        stale.insert(update.tile)
+                        continue
+                    }
+                    for id in Set(changed.map(\.id)) {
+                        if let record = known[id] { try Self.upsert(record, in: db) }
+                    }
+                    for id in deleted { try db.run("DELETE FROM shared WHERE id = ?", [.text(id.uuidString)]) }
+                }
+                try db.run(
+                    """
+                    INSERT INTO shared_tiles (s2_l16_token, sequence, synced_at) VALUES (?, ?, ?)
+                    ON CONFLICT (s2_l16_token) DO UPDATE SET sequence = excluded.sequence, synced_at = excluded.synced_at
+                    """,
+                    [.text(update.tile.token), .integer(update.sequence), .integer(Self.milliseconds(.now))])
+            }
+        }
+        return stale
+    }
+
     /// Updates a changeset's state and approvals (for example after a sync) and re-derives.
     public func updateChangeset(_ changeset: Changeset) throws {
         let exists = try db.query("SELECT 1 FROM changesets WHERE id = ?", [.text(changeset.id.uuidString)]) { _ in 1 }
@@ -240,7 +338,37 @@ public actor LocalStore {
         for case (let id?, let state?) in states {
             changesetStates[id] = state
         }
-        return CensusState.derive(base: base, observations: try observations(db), changesetStates: changesetStates)
+        return CensusState.derive(
+            base: base, shared: try sharedRecords(db), observations: try observations(db),
+            changesetStates: changesetStates)
+    }
+
+    private static func sharedRecords(_ db: SQLiteDatabase, ids: Set<UUID>? = nil) throws -> [SharedRecord] {
+        let rows = try db.query(
+            "SELECT id, kind, version, s2_l16_token, created_by, created_at, fields FROM shared ORDER BY id"
+        ) { row -> SharedRecord? in
+            guard let id = UUID(uuidString: row.string(0)), ids?.contains(id) != false,
+                let kind = EntityKind(rawValue: row.string(1)), let tile = S2CellID(token: row.string(3))
+            else { return nil }
+            return SharedRecord(
+                kind: kind, id: id, version: row.int(2), tile: tile, createdBy: PlayerID(rawValue: row.string(4)),
+                createdAt: Date(timeIntervalSince1970: Double(row.int(5)) / 1000),
+                fields: try CanopyJSON.decoder.decode([String: JSONValue].self, from: Data(row.string(6).utf8)))
+        }
+        return rows.compactMap { $0 }
+    }
+
+    private static func upsert(_ record: SharedRecord, in db: SQLiteDatabase) throws {
+        try db.run(
+            """
+            INSERT OR REPLACE INTO shared (id, kind, version, s2_l16_token, created_by, created_at, fields)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                .text(record.id.uuidString), .text(record.kind.rawValue), .int(record.version),
+                .text(record.tile.token), .text(record.createdBy.rawValue),
+                .integer(milliseconds(record.createdAt)), .text(try json(record.fields)),
+            ])
     }
 
     private static func observations(_ db: SQLiteDatabase) throws -> [FieldObservation] {
@@ -413,6 +541,24 @@ enum Schema {
         DROP INDEX trees_tile;
         CREATE INDEX trees_s2_l16_token ON trees (s2_l16_token);
         CREATE INDEX tags_s2_l16_token ON tags (s2_l16_token);
+        """,
+        // 3: the shared map pulled from a Gerardus server, and how far each tile has been pulled.
+        """
+        CREATE TABLE shared (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            s2_l16_token TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            fields TEXT NOT NULL
+        );
+        CREATE INDEX shared_s2_l16_token ON shared (s2_l16_token);
+        CREATE TABLE shared_tiles (
+            s2_l16_token TEXT PRIMARY KEY,
+            sequence INTEGER NOT NULL,
+            synced_at INTEGER NOT NULL
+        );
         """,
     ]
 

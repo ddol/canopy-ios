@@ -31,16 +31,17 @@ To investigate:
 - **Measuring the real link.** Throughput and latency over Tailscale on cellular in the park, and which step the time
   goes on, before choosing among the above.
 
-## Trees on the server
+## The shared census
 
-The phone keeps the trees it finds to itself: sync still goes to the in-memory fake. The Gerardus server needs a
-changeset API and a tree layer (work in progress in the gerardus repository), and then:
+Sync pushes changesets, pulls the shared map for the tiles in view and those followed before, and fills the
+review queue. Loaded trees are saved to the server's trees layer. Still to do:
 
-- **A real `GerardusClient`** over the same hand-written gRPC transport, replacing the fake in sync.
-- **Uploading detected trees** for the loaded area, idempotently by their stable ids, but never ones found with
-  OpenStreetMap (their source says "for checking only").
-- **OpenStreetMap only for admins on the server too.** The app now asks for OSM only behind the admin flag. Once the
-  server gates the layer, the app has to identify the admin to it.
+- **Evidence offline.** Another device's scan is downloaded only when previewed; nothing prefetches it for offline use.
+- **Forgetting tiles.** Followed tiles are never dropped, so a sync grows with every area looked at.
+- **Verified identity.** The server trusts the player id header. It should check Game Center's identity signature
+  (a server follow-up), and the app should send it.
+- **Changesets from before sign-in** carry the `local:` id. A server takes changesets only from their author, so
+  after a Game Center sign-in sync leaves them on the phone. Offer to propose them again under the new id.
 
 ## Tree names and occupancy
 

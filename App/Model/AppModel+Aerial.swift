@@ -23,7 +23,11 @@ extension AppModel {
     /// The Gerardus server set in Me → Settings; nil until one is set.
     var gerardusURL: URL? { serverSettings.endpoint?.url }
 
-    var alignClient: AlignClient? { gerardusURL.map { AlignClient(baseURL: $0) } }
+    /// The align service, calling as the player: the server sends OpenStreetMap only to its admins.
+    var alignClient: AlignClient? { gerardusURL.map { AlignClient(baseURL: $0, player: player) } }
+
+    /// The map service, where the shared tree census lives; nil until a server is set.
+    var mapClient: GerardusMapClient? { gerardusURL.map { GerardusMapClient(baseURL: $0, player: player) } }
 
     /// Thrown, or shown, when something needs the server and none is set.
     struct NoServerSet: LocalizedError {
@@ -73,14 +77,44 @@ extension AppModel {
             aerialReference = Self.reference(result)
             await refresh()
             let format = QuantityFormat()
-            aerial = .done(
+            var message =
                 "\(format.count(result.candidates.count)) trees from aerial LiDAR within "
-                    + "\(format.length(area.radius, fractionDigits: 0)) of the map centre"
-                    + (removed > 0 ? ", replacing \(format.count(removed)) sample candidates." : "."))
+                + "\(format.length(area.radius, fractionDigits: 0)) of the map centre"
+                + (removed > 0 ? ", replacing \(format.count(removed)) sample candidates." : ".")
+            if result.osmRefused {
+                message += " The server sends OpenStreetMap only to its admins, so it was left out."
+            }
+            if let saved = await saveDetectedTrees(result) {
+                message += " " + saved
+            }
+            aerial = .done(message)
+            syncSoon(after: .zero)
         } catch let error as AerialTrees.Failure {
             aerial = .failed(error.localizedDescription)
         } catch {
             aerial = .failed("Could not load aerial trees: \(error.localizedDescription)")
+        }
+    }
+
+    /// Saves the trees found in a load to the server's trees layer, so they are on the shared map and players can
+    /// confirm them. Trees found with OpenStreetMap stay on the phone: the shared layer takes nothing from it. Returns
+    /// what to tell the player, or nil when there is nothing to say.
+    func saveDetectedTrees(_ result: AerialTrees.SiteResult) async -> String? {
+        guard let client = mapClient, !result.candidates.isEmpty else { return nil }
+        guard !result.usedOSM else { return "They were found with OpenStreetMap, so they stay on this phone." }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CanopyVersion") as? String ?? "dev"
+        do {
+            let saved = try await client.importDetectedTrees(
+                result.candidates, source: result.candidates[0].source ?? "USGS 3DEP aerial LiDAR",
+                tiles: result.tiles, detector: "Canopy \(version) TreeDetector, 1 m voxels")
+            let format = QuantityFormat()
+            return saved.created == 0
+                ? "The server already has them."
+                : "Saved \(format.count(saved.created)) new \(saved.created == 1 ? "tree" : "trees") to the server."
+        } catch let error as GRPCStatusError where error.code == GRPCStatusError.unimplemented {
+            return "This server cannot save trees yet."
+        } catch {
+            return "Not saved to the server: \(error.localizedDescription)"
         }
     }
 
