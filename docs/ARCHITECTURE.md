@@ -189,6 +189,7 @@ changeset log in its trees layer, which is CC0 and takes nothing from OpenStreet
 - `GetTile`: the tile's entities and the sequence to pull from next.
 - `GetPlayer`: roles, and whether OpenStreetMap may be sent.
 - `ImportDetectedTrees`.
+- `GetBlob`: an evidence mesh another device uploaded.
 
 Every call is unary, and failures arrive before any message, so HTTP/1.1 loses nothing. Op fields travel as
 CanopyModel's own JSON (`CanopyJSON`).
@@ -213,6 +214,17 @@ Everything lands in one store transaction (`LocalStore.applyShared`), in the `sh
 Derivation then starts from the shared map, so the server's trees and tags win over the aerial candidates and other
 players' trees appear. This device's applied observations are folded only for entities the server has not sent yet,
 so nothing is counted twice, and its open proposals still show on top as `proposedStatus`.
+
+**Syncing on its own.** With a server set, the app syncs without being asked (`AppModel.syncSoon`): a couple of
+seconds after each change, three seconds after the map settles on tiles not pulled yet (within the 400 m limit), right
+after a load of real trees, and when the app comes to the front. Requests in a row become one sync, one sync runs at a
+time, and a request during a sync runs once more after it. **Sync now** still works. Under tests nothing syncs on its
+own.
+
+**Evidence from other devices.** A tree's evidence refs name the meshes behind its measurements. The tree sheet's
+**Evidence** section previews each one: a mesh on this device opens straight away; one recorded on another device is
+downloaded first (`GetBlob`, `AppModel.evidenceFile`), checked against its hash and kept in the blob store, then
+opened the same way, as a throwaway USDZ in Quick Look. Blobs are uploaded with the changeset that references them.
 
 **Reviewing.** The review queue (Me → **Review**) lists other players' open changesets in the followed tiles
 (`ListOpenChangesets`), leaving out the player's own changes and ones they have already agreed with. **Agree**

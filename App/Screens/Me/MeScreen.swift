@@ -75,6 +75,11 @@ struct MeScreen: View {
                         .foregroundStyle(Color.canopyInkMuted)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .contextMenu {
+                            Button("Copy player id", systemImage: "doc.on.doc") {
+                                UIPasteboard.general.string = model.player.id.rawValue
+                            }
+                        }
                 }
             }
             HStack {
@@ -194,7 +199,8 @@ struct MeScreen: View {
             Text(
                 model.mapClient == nil
                     ? "No server is set, so sync uses a simulated server on this device."
-                    : "Sync sends your changes to this Gerardus server's shared map.")
+                    : "Canopy syncs with this server on its own: after each change, when the map settles somewhere new, "
+                        + "and when the app comes to the front. Sync now does it straight away.")
         }
     }
 

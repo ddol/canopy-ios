@@ -69,6 +69,9 @@ to credit your changes, and to decide whether you may have OpenStreetMap.
   your alias, in the same way.
 - **Reviewing** sends your agreement with another player's change, or a rejection and its reason, under your player
   id.
+- **Previewing another player's scan** downloads that colourless mesh from the server to your device and keeps it.
+- With a server set, syncing happens on its own: after each change you make, when the map settles somewhere new, and
+  when the app comes to the front.
 
 In every case the server also sees the network address the request comes from. Plain `http://` is allowed only to
 `.local` names, IP addresses and tailnet (`*.ts.net`) hosts; Tailscale encrypts tailnet traffic between devices.

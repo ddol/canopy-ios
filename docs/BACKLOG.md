@@ -36,8 +36,7 @@ To investigate:
 Sync pushes changesets, pulls the shared map for the tiles in view and those followed before, and fills the
 review queue. Loaded trees are saved to the server's trees layer. Still to do:
 
-- **Syncing without being asked.** Sync runs only from Me → **Sync now**. Pull when the map settles on new tiles, and
-  push after each change, when a server is set.
+- **Evidence offline.** Another device's scan is downloaded only when previewed; nothing prefetches it for offline use.
 - **Forgetting tiles.** Followed tiles are never dropped, so a sync grows with every area looked at.
 - **Verified identity.** The server trusts the player id header. It should check Game Center's identity signature
   (a server follow-up), and the app should send it.

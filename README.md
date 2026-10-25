@@ -24,8 +24,9 @@ registration and the shared census over gRPC. When no server is set, the app use
 | **Tag** | Pick a tree, place the limb point (on the LiDAR mesh within ~5 m, or by height), choose issue, what it could hit, size and urgency. Saved as a proposed tag. |
 | **Me** | Game Center sign-in (falls back to a local id), pending changes, sync with the Gerardus server (or a simulated one when none is set), which also brings other players' trees and approvals for the tiles you look at, a **Review** queue to agree with (or, if trusted, reject) other players' changes, and debug tools: simulate a trusted approval, reset local data. **Settings** sets the Gerardus server's address and tests the connection: version, commit, uptime and reference layers. Admins (allowlisted Game Center ids, everyone in debug builds) also get opt-in flags, such as using OpenStreetMap for checking. |
 
-Debug builds can share a measurement's GLB and preview it in Quick Look (as a temporary USDZ, since GLB is not
-a Quick Look format on iOS).
+A tree's **Evidence** section previews each trunk scan in Quick Look (as a temporary USDZ, since GLB is not a Quick
+Look format on iOS), downloading scans other devices made, and shares the GLB. Debug builds can do the same right
+after a measurement.
 
 ## Privacy first
 

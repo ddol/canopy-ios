@@ -88,7 +88,7 @@ struct MapScreen: View {
             CanopyMapView(layers: layers, selection: $selection, viewport: viewport ?? .goldenGatePark)
                 .onViewportChange {
                     viewport = $0
-                    model.mapViewport = $0
+                    model.mapDidSettle($0)
                 }
         case .gerardus:
             CanopyMapView(
@@ -97,7 +97,7 @@ struct MapScreen: View {
             )
             .onViewportChange {
                 viewport = $0
-                model.mapViewport = $0
+                model.mapDidSettle($0)
             }
         }
     }

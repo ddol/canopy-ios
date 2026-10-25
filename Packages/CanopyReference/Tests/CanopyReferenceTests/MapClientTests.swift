@@ -193,4 +193,26 @@ import Testing
         #expect(record.createdAt == Date(timeIntervalSince1970: 1_761_200_000))
         #expect(record.fields["countStatus"] == "confirmed")
     }
+
+    @Test func blobsComeDownByTheirHashAndAMissingOneIsNotFound() async throws {
+        let bytes = Data("glTF".utf8)
+        let ref = String(repeating: "cd", count: 32)
+        var answer = ProtoWriter()
+        answer.string(1, ref)
+        answer.bytes(2, bytes)
+        answer.string(3, "model/gltf-binary")
+        let mock = MockTransport()
+        mock.responses[GerardusMapClient.service + "GetBlob"] = .success([answer.data])
+        let client = GerardusMapClient(transport: mock)
+        #expect(try await client.blob(BlobRef(rawValue: ref)!) == bytes)
+        let request = try fields(try #require(mock.sent.first).requests[0])
+        #expect(request.first { $0.number == 1 }?.string == ref)
+
+        mock.responses[GerardusMapClient.service + "GetBlob"] = .failure(
+            GRPCStatusError(code: GRPCStatusError.notFound, message: "no such blob"))
+        let error = await #expect(throws: GRPCStatusError.self) {
+            _ = try await client.blob(BlobRef(rawValue: ref)!)
+        }
+        #expect(error?.code == GRPCStatusError.notFound)
+    }
 }

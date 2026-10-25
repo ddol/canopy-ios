@@ -97,6 +97,40 @@ extension AppModel {
         reviewQueue = queue.sorted { $0.changeset.meta.createdAt < $1.changeset.meta.createdAt }
     }
 
+    // MARK: Syncing on its own
+
+    /// Syncs in a moment, when a Gerardus server is set: after a change, when the map settles on tiles not pulled yet,
+    /// after a load, and when the app comes to the front. Requests in a row become one sync. Off under tests, which
+    /// sync when they say.
+    func syncSoon(after delay: Duration = .seconds(2)) {
+        guard mapClient != nil, phase == .ready, !Self.isTesting() else { return }
+        pendingSync?.cancel()
+        pendingSync = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            await sync()
+        }
+    }
+
+    /// The map stopped moving: remember where, and pull its tiles if any are new and the view is close enough.
+    func mapDidSettle(_ viewport: MapViewport) {
+        mapViewport = viewport
+        guard viewport.cornerDistance <= Self.pullRadiusLimit, !Self.tiles(in: viewport).isSubset(of: followedTiles)
+        else { return }
+        syncSoon(after: .seconds(3))
+    }
+
+    // MARK: Evidence
+
+    /// The evidence mesh's GLB file on this device, downloading it from the server when another device recorded it.
+    func evidenceFile(_ ref: BlobRef) async throws -> URL {
+        let blobs = store.blobs
+        if blobs.contains(ref) { return blobs.url(for: ref) }
+        guard let client = mapClient else { throw NoServerSet() }
+        try blobs.put(try await client.blob(ref), expecting: ref)
+        return blobs.url(for: ref)
+    }
+
     /// Agrees with another player's change, or (trusted players) rejects it with a reason, then syncs.
     func review(_ item: GerardusMapClient.OpenChangeset, approve: Bool, reason: String = "") async {
         guard let client = mapClient else { return }

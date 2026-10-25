@@ -88,6 +88,7 @@ extension AppModel {
                 message += " " + saved
             }
             aerial = .done(message)
+            syncSoon(after: .zero)
         } catch let error as AerialTrees.Failure {
             aerial = .failed(error.localizedDescription)
         } catch {

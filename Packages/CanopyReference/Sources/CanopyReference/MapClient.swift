@@ -124,6 +124,19 @@ public struct GerardusMapClient: GerardusClient {
         return try MapMessages.changeset(try ProtoReader.fields(view.bytes))
     }
 
+    // MARK: Blobs
+
+    /// A blob by its SHA-256, such as the mesh behind another player's measurement. The caller checks the hash. A blob
+    /// the server lacks is `GRPCStatusError.notFound`.
+    public func blob(_ ref: BlobRef) async throws -> Data {
+        var request = ProtoWriter()
+        request.string(1, ref.rawValue)
+        guard let data = try await call("GetBlob", request).first(where: { $0.number == 2 }) else {
+            throw GRPCTransportError.noResponse
+        }
+        return Data(data.bytes)
+    }
+
     /// An open changeset waiting for agreement, with its author as the server knows them.
     public struct OpenChangeset: Sendable {
         public var changeset: Changeset
