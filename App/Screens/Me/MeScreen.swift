@@ -2,6 +2,7 @@ import CanopyDesign
 import CanopyMap
 import CanopyModel
 import CanopyPlayers
+import CanopyReference
 import SwiftUI
 
 /// The player, their pending changes, sync, and (in debug builds) data tools.
@@ -15,6 +16,7 @@ struct MeScreen: View {
             List {
                 playerSection
                 pendingSection
+                reviewSection
                 syncSection
                 historySection
                 #if DEBUG || TESTING_TOOLS
@@ -73,6 +75,11 @@ struct MeScreen: View {
                         .foregroundStyle(Color.canopyInkMuted)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .contextMenu {
+                            Button("Copy player id", systemImage: "doc.on.doc") {
+                                UIPasteboard.general.string = model.player.id.rawValue
+                            }
+                        }
                 }
             }
             HStack {
@@ -130,6 +137,32 @@ struct MeScreen: View {
         }
     }
 
+    @ViewBuilder
+    private var reviewSection: some View {
+        if model.mapClient != nil {
+            Section {
+                if model.reviewQueue.isEmpty {
+                    Text(
+                        model.lastSync == nil
+                            ? "Sync to see other players' changes near you."
+                            : "Nothing waiting near you."
+                    )
+                    .foregroundStyle(Color.canopyInkMuted)
+                }
+                ForEach(model.reviewQueue, id: \.changeset.id) { item in
+                    ReviewRow(item: item, canReject: model.serverPlayer?.isTrusted == true)
+                }
+            } header: {
+                Text("Review (\(model.reviewQueue.count))")
+            } footer: {
+                Text(
+                    "Agree when you have seen the change on the ground. It reaches the shared map when two players agree "
+                        + "and one of them is trusted."
+                        + (model.serverPlayer?.isTrusted == true ? " As a trusted player you can also reject it." : ""))
+            }
+        }
+    }
+
     private var syncSection: some View {
         Section {
             Button {
@@ -163,7 +196,11 @@ struct MeScreen: View {
         } header: {
             Text("Sync")
         } footer: {
-            Text("Sync uses a simulated server on this device; changes are not sent over the network yet.")
+            Text(
+                model.mapClient == nil
+                    ? "No server is set, so sync uses a simulated server on this device."
+                    : "Canopy syncs with this server on its own: after each change, when the map settles somewhere new, "
+                        + "and when the app comes to the front. Sync now does it straight away.")
         }
     }
 
@@ -184,7 +221,7 @@ struct MeScreen: View {
                 Button("Simulate trusted approval", systemImage: "checkmark.shield") {
                     Task { await model.simulateTrustedApproval() }
                 }
-                .disabled(open.isEmpty)
+                .disabled(open.isEmpty || model.mapClient != nil)
                 Button("Reset local data", systemImage: "trash", role: .destructive) {
                     confirmingReset = true
                 }
@@ -193,7 +230,9 @@ struct MeScreen: View {
             } header: {
                 Text("Debug")
             } footer: {
-                Text("A simulated trusted ranger approves every pending change on the fake server.")
+                Text(
+                    "A simulated trusted ranger approves every pending change on the simulated server, when no "
+                        + "server is set.")
             }
         }
     #endif
@@ -238,6 +277,65 @@ struct ChangesetRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("changeset-row")
+    }
+}
+
+/// Another player's open change: what it does, to which tree, who proposed it, and Agree (or Reject, for trusted
+/// players).
+struct ReviewRow: View {
+    let item: GerardusMapClient.OpenChangeset
+    let canReject: Bool
+    @Environment(AppModel.self) private var model
+    @State private var rejecting = false
+    @State private var reason = ""
+
+    private var subjects: String {
+        Set(item.changeset.ops.map(\.id)).compactMap { model.tree($0)?.name }.sorted().joined(separator: ", ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text(ChangesetSummary.describe(item.changeset))
+                .font(.body.weight(.semibold))
+            if !subjects.isEmpty {
+                Text(subjects).font(.subheadline)
+            }
+            HStack(spacing: Spacing.xs) {
+                Text(item.authorAlias.isEmpty ? "A player" : item.authorAlias)
+                if item.authorTrusted {
+                    Image(systemName: "checkmark.shield").accessibilityLabel("trusted")
+                }
+                Text("·")
+                Text(item.changeset.meta.createdAt, style: .relative)
+            }
+            .font(.caption)
+            .foregroundStyle(Color.canopyInkMuted)
+            HStack(spacing: Spacing.s) {
+                Button("Agree", systemImage: "hand.thumbsup") {
+                    Task { await model.review(item, approve: true) }
+                }
+                .buttonStyle(.canopyPrimary)
+                .accessibilityIdentifier("review-agree")
+                if canReject {
+                    Button("Reject", systemImage: "hand.thumbsdown") { rejecting = true }
+                        .buttonStyle(.canopySecondary)
+                }
+            }
+        }
+        .padding(.vertical, Spacing.xxs)
+        .accessibilityIdentifier("review-row")
+        .alert("Reject this change?", isPresented: $rejecting) {
+            TextField("Why", text: $reason)
+            Button("Reject", role: .destructive) {
+                let reason = reason.trimmingCharacters(in: .whitespaces)
+                Task {
+                    await model.review(item, approve: false, reason: reason.isEmpty ? "Not seen on the ground" : reason)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("A rejected change never reaches the shared map. Say what you saw.")
+        }
     }
 }
 

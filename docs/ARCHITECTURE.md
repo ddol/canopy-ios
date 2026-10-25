@@ -40,7 +40,7 @@ where the store, capture, sync and players meet.
 | `CanopyMap` | iOS | `MapLayers`, the `MapRenderer` protocol, `MapKitRenderer`, status presentation (word, icon, tone) |
 | `CanopySync` | iOS, macOS | `GerardusClient` protocol, `FakeGerardusClient`, `SyncCoordinator`; `GerardusEndpoint` and `GerardusStatusClient` for a real server's status page |
 | `CanopyPlayers` | iOS | `PlayerService` (Game Center sign-in, alias, trusted flag) |
-| `CanopyReference` | iOS, macOS | `AlignClient` for a Gerardus align server (gRPC over HTTP/1.1, hand-written protobuf), `SiteGeoreference`, `TreeDetector`, `AerialTrees`, `ScanRegistration` / `RegisteredScan` |
+| `CanopyReference` | iOS, macOS | A Gerardus server over gRPC (HTTP/1.1, hand-written protobuf): `AlignClient` (reference data, registration) and `GerardusMapClient` (the shared census, CanopySync's `GerardusClient`); `SiteGeoreference`, `TreeDetector`, `AerialTrees`, `ScanRegistration` / `RegisteredScan` |
 
 The packages that build on macOS can be tested with `swift test` in a second or two; the full scheme runs
 everything on the simulator.
@@ -55,7 +55,8 @@ everything on the simulator.
                                                │   3. CensusState.derive → rewrite trees/tags
                                                ▼
                                          AppModel.refresh ──► screens
- Me → Sync ──► SyncCoordinator ──► GerardusClient (fake)  ──► LocalStore.updateChangeset ──► derive
+ Me → Sync ──► SyncCoordinator ──► GerardusClient ──► LocalStore.updateChangeset ──► derive
+                                      (GerardusMapClient, or the fake when no server is set)
 ```
 
 - **Observations are the source of truth.** The store never edits one; the current trees and tags are derived
@@ -63,11 +64,12 @@ everything on the simulator.
   ones (see [DATA-MODEL.md](DATA-MODEL.md)). Rejected changesets drop their observations from the fold.
 - **Evidence is immutable and content-addressed.** A trunk or limb scan is cropped, written as GLB, stored
   under its SHA-256 and referenced by hash from observations and changesets.
-- **Sync is a boundary, not a feature yet.** `GerardusClient` is the whole contract with the future Rust
-  server: upload blobs, submit changesets, read their state, pull applied changes per L16 tile. The fake
-  applies the real policy (two players agree, at least one trusted) so the rest of the app can be built and
-  tested against it. The fake lives in memory: after a relaunch it has forgotten earlier submissions, and the
-  next sync submits open changesets again.
+- **Sync goes through one boundary.** `GerardusClient` is the whole contract with a Gerardus server: upload
+  blobs, submit changesets, read their state, and pull applied changes per L16 tile. With a server set in Settings,
+  `GerardusMapClient` speaks the server's map service (see *Shared census*). Without one, `FakeGerardusClient`
+  applies the same policy in memory (two players agree, at least one trusted), so the app works offline and in
+  tests. The fake forgets everything on relaunch, and the next sync submits open changesets again. With a real
+  server, sync also pulls the shared map and the review queue (see *Shared census*).
 
 ## Capture
 
@@ -176,6 +178,63 @@ on a synthetic forest and the scan conventions. `CANOPY_GERARDUS_URL=http://… 
 `Packages/CanopyReference` also runs the live tests against a server, and `TEST_RUNNER_CANOPY_GERARDUS_URL=…` runs
 the app's live UI test.
 
+## Shared census (Gerardus map service)
+
+The Gerardus server's map service (`gerardus.map.v1alpha1`, same port as align) keeps the shared tree census as a
+changeset log in its trees layer, which is CC0 and takes nothing from OpenStreetMap. `GerardusMapClient` implements
+`GerardusClient` on it, plus a few extra calls:
+
+- `UploadBlob`, `SubmitChangeset`, `GetChangesets` and `PullChanges`, following every page.
+- `ReviewChangeset`: another player agrees, or a trusted player rejects.
+- `GetTile`: the tile's entities and the sequence to pull from next.
+- `GetPlayer`: roles, and whether OpenStreetMap may be sent.
+- `ImportDetectedTrees`.
+- `GetBlob`: an evidence mesh another device uploaded.
+
+Every call is unary, and failures arrive before any message, so HTTP/1.1 loses nothing. Op fields travel as
+CanopyModel's own JSON (`CanopyJSON`).
+
+**Identity.** Every call to a Gerardus server carries `x-gerardus-player-id` (the Game Center team-scoped id, or
+`local:<uuid>` before sign-in) and `x-gerardus-player-alias` (`GerardusIdentity`). The server keys accounts and roles
+on the id, which it does not verify yet. A changeset's author must be the caller.
+
+**Detected trees.** After **Load real trees in view**, the app saves the area's candidates with
+`ImportDetectedTrees`. The server applies them at once as detected trees, skipping ids it already has and L22 cells
+that are already occupied. This has to happen before anyone confirms them, because a change to a tree the server
+has never seen comes back conflicted. Candidates found with OpenStreetMap stay on the phone, and the server refuses
+them anyway.
+
+**Pulling the shared map.** After pushing, sync brings this device's copy of the shared map up to date
+(`AppModel.pullSharedMap`). It follows every tile pulled before, plus the tiles in view when the map shows at most
+400 m from centre to corner. A tile it has never pulled gets a snapshot (`GetTile`); the rest get the ops applied since
+their cursor (`PullChanges`). If the server's log goes backwards (its database was replaced), or an update names a
+tree the device has never seen, the tile gets a fresh snapshot.
+
+Everything lands in one store transaction (`LocalStore.applyShared`), in the `shared` and `shared_tiles` tables.
+Derivation then starts from the shared map, so the server's trees and tags win over the aerial candidates and other
+players' trees appear. This device's applied observations are folded only for entities the server has not sent yet,
+so nothing is counted twice, and its open proposals still show on top as `proposedStatus`.
+
+**Syncing on its own.** With a server set, the app syncs without being asked (`AppModel.syncSoon`): a couple of
+seconds after each change, three seconds after the map settles on tiles not pulled yet (within the 400 m limit), right
+after a load of real trees, and when the app comes to the front. Requests in a row become one sync, one sync runs at a
+time, and a request during a sync runs once more after it. **Sync now** still works. Under tests nothing syncs on its
+own.
+
+**Evidence from other devices.** A tree's evidence refs name the meshes behind its measurements. The tree sheet's
+**Evidence** section previews each one: a mesh on this device opens straight away; one recorded on another device is
+downloaded first (`GetBlob`, `AppModel.evidenceFile`), checked against its hash and kept in the blob store, then
+opened the same way, as a throwaway USDZ in Quick Look. Blobs are uploaded with the changeset that references them.
+
+**Reviewing.** The review queue (Me → **Review**) lists other players' open changesets in the followed tiles
+(`ListOpenChangesets`), leaving out the player's own changes and ones they have already agreed with. **Agree**
+records an approval (`ReviewChangeset`). A trusted player (`GetPlayer`) can also **Reject**, with a reason. The server
+applies a change once two players agree and one of them is trusted, and the next sync brings it back.
+
+**OpenStreetMap.** The server sends OSM only to its admins (its own `--admin` list). Anyone else who names the layer
+is refused the whole stream, so `AerialTrees` asks for OSM in a separate call after the main stream. A refusal is
+reported to the player and detection carries on without it.
+
 ## Map
 
 `MapLayers` is a plain description of what to draw, built from `CensusState`: trees filtered by the statuses the
@@ -208,7 +267,8 @@ section also shows the player's id, to copy into the allowlist.
 as scheme, host and port, and runs the connection test: `GerardusStatusClient` sends `GET /` over URLSession and
 decodes the status JSON (`status`, `service`, `server_version`, `git_sha`, `api_version`, `serve_scans`,
 `started_at`, `uptime_s`, `available_layers`). Only `status` is required, so a newer server with more or
-different fields still passes. **Me → Settings** shows the answer; sync still uses the fake.
+different fields still passes. **Me → Settings** shows the answer. With an address set, sync and the aerial trees
+use that server; without one, sync uses the fake.
 
 The setting is the only source of the server's address: `AppModel.gerardusURL` and `alignClient`, used by Load
 real trees here and Register with 3DEP, read `serverSettings.endpoint` and are nil until a server is set, when
