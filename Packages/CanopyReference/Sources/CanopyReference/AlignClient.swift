@@ -1,3 +1,4 @@
+import CanopyModel
 import Foundation
 
 /// A client for a Gerardus align server (gerardus.align.v1alpha1): sites and their reference layers, and
@@ -37,8 +38,12 @@ public struct AlignClient: Sendable {
         self.timeouts = timeouts
     }
 
-    public init(baseURL: URL) {
-        self.init(transport: URLSessionGRPCTransport(baseURL: baseURL))
+    /// A client for the server at `baseURL`, calling as `player` when given (`GerardusIdentity`): the server sends
+    /// OpenStreetMap only to its admins.
+    public init(baseURL: URL, player: Player? = nil) {
+        self.init(
+            transport: URLSessionGRPCTransport(
+                baseURL: baseURL, headers: player.map(GerardusIdentity.headers(for:)) ?? [:]))
     }
 
     // MARK: Sites
@@ -205,27 +210,8 @@ public struct AlignClient: Sendable {
 
     // MARK: Plumbing
 
-    /// The messages of a call. Once `limit` has passed the stream fails with `timedOut` and the call is cancelled.
     func call(_ path: String, _ requests: [Data], limit: Duration) -> AsyncThrowingStream<Data, any Error> {
-        let messages = transport.call(path, requests: requests)
-        return AsyncThrowingStream { continuation in
-            let reader = Task {
-                do {
-                    for try await message in messages { continuation.yield(message) }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            let timer = Task {
-                try await Task.sleep(for: limit)
-                continuation.finish(throwing: GRPCTransportError.timedOut(seconds: Int(limit.components.seconds)))
-            }
-            continuation.onTermination = { _ in
-                reader.cancel()
-                timer.cancel()
-            }
-        }
+        transport.call(path, requests, limit: limit)
     }
 
     func unaryFields(_ path: String, _ request: Data) async throws -> [ProtoField] {
@@ -259,5 +245,38 @@ public struct AlignClient: Sendable {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+}
+
+extension GRPCTransport {
+    /// The messages of a call. Once `limit` has passed the stream fails with `timedOut` and the call is cancelled.
+    func call(_ path: String, _ requests: [Data], limit: Duration) -> AsyncThrowingStream<Data, any Error> {
+        let messages = call(path, requests: requests)
+        return AsyncThrowingStream { continuation in
+            let reader = Task {
+                do {
+                    for try await message in messages { continuation.yield(message) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            let timer = Task {
+                try await Task.sleep(for: limit)
+                continuation.finish(throwing: GRPCTransportError.timedOut(seconds: Int(limit.components.seconds)))
+            }
+            continuation.onTermination = { _ in
+                reader.cancel()
+                timer.cancel()
+            }
+        }
+    }
+
+    /// The one message of a unary call, as fields.
+    func unaryFields(_ path: String, _ request: Data, limit: Duration) async throws -> [ProtoField] {
+        for try await data in call(path, [request], limit: limit) {
+            return try ProtoReader.fields(ArraySlice([UInt8](data)))
+        }
+        throw GRPCTransportError.noResponse
     }
 }

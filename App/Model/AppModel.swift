@@ -1,6 +1,7 @@
 import CanopyMap
 import CanopyModel
 import CanopyPlayers
+import CanopyReference
 import CanopyStore
 import CanopySync
 import Foundation
@@ -26,6 +27,17 @@ final class AppModel {
     private(set) var isSyncing = false
     /// Loading real trees from a Gerardus align server (see AppModel+Aerial).
     var aerial = AerialProgress.idle
+    /// The map's visible region, as the Map tab last reported it: sync pulls the shared map's tiles here.
+    var mapViewport: MapViewport?
+    /// The tiles pulled from the shared map so far (see AppModel+SharedMap).
+    private(set) var followedTiles: Set<S2CellID> = []
+    /// Bookkeeping for syncing on its own (`syncSoon`).
+    @ObservationIgnored var pendingSync: Task<Void, Never>?
+    @ObservationIgnored var syncAgain = false
+    /// Other players' open changesets near the tiles this device follows, for the player to agree with or reject.
+    var reviewQueue: [GerardusMapClient.OpenChangeset] = []
+    /// The player as the Gerardus server sees them (trusted, admin), after a sync.
+    var serverPlayer: GerardusMapClient.PlayerInfo?
     /// The last loaded area's own data (canopy heights, outlines), for the Gerardus map. In memory only.
     var aerialReference: MapLayers.Reference?
     /// Where each base-layer candidate came from, for the tree sheet: nil for the synthetic sample.
@@ -132,6 +144,7 @@ final class AppModel {
         census = await store.state()
         summary = await store.summary()
         changesets = (try? await store.changesets()) ?? []
+        followedTiles = Set(((try? await store.sharedTiles()) ?? [:]).keys)
         let candidates = (try? await store.candidates()) ?? []
         candidateSources = Dictionary(
             candidates.compactMap { candidate in candidate.source.map { (candidate.id, $0) } },
@@ -172,6 +185,7 @@ final class AppModel {
         do {
             let (_, changeset) = try await store.record(kind, by: player.id)
             await refresh()
+            syncSoon()
             return changeset
         } catch {
             self.error = "Could not save: \(error.localizedDescription)"
@@ -246,17 +260,39 @@ extension AppModel {
 // MARK: - Sync
 
 extension AppModel {
-    /// Pushes open changesets to the (fake) Gerardus server and brings back their state.
+    /// Where sync sends changesets: the Gerardus server in Settings, or the simulated one when none is set.
+    var syncClient: any GerardusClient { mapClient ?? server }
+
+    /// Pushes open changesets to the Gerardus server (or the simulated one) and brings back their state; with a real
+    /// server, also pulls the shared map and the review queue. One sync runs at a time: a call during one runs once more
+    /// after it.
     func sync() async {
+        guard !isSyncing else {
+            syncAgain = true
+            return
+        }
         isSyncing = true
         defer { isSyncing = false }
+        repeat {
+            syncAgain = false
+            await syncOnce()
+        } while syncAgain
+    }
+
+    private func syncOnce() async {
         let blobs = store.blobs
         do {
-            let report = try await SyncCoordinator(client: server).sync(
-                changesets.filter(\.state.isOpen), author: player
+            // A server takes changesets only from their author: ones made under another id (before a Game Center
+            // sign-in) stay on the phone.
+            let report = try await SyncCoordinator(client: syncClient).sync(
+                changesets.filter { $0.state.isOpen && $0.meta.playerID == player.id }, author: player
             ) { ref in try blobs.data(for: ref) }
             for changeset in report.updated {
                 try await store.updateChangeset(changeset)
+            }
+            if let client = mapClient {
+                try await pullSharedMap(client)
+                try await refreshReviewQueue(client)
             }
             lastSync = report
             await refresh()
@@ -271,8 +307,14 @@ extension AppModel {
         id: PlayerID(rawValue: "gerardus:fake-ranger"), alias: "Ranger (simulated)", isTrusted: true,
         source: .gameCenter)
 
-    /// Has the simulated trusted ranger approve every open changeset on the fake server, then syncs.
+    /// Has the simulated trusted ranger approve every open changeset on the fake server, then syncs. Only without a
+    /// real server: on one, a second player has to agree.
     func simulateTrustedApproval() async {
+        guard mapClient == nil else {
+            error =
+                "The simulated ranger only approves on the simulated server. Forget the server in Settings to use it."
+            return
+        }
         await sync()
         do {
             for id in await server.openChangesetIDs() {

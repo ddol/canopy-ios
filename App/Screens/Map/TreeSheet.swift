@@ -76,6 +76,20 @@ struct TreeSheet: View {
                         "Hazard tags", value: "\(model.census.tags.values.filter { $0.treeID == tree.id }.count)")
                 }
 
+                if !tree.evidenceRefs.isEmpty {
+                    Section {
+                        ForEach(tree.evidenceRefs, id: \.rawValue) { ref in
+                            EvidenceRow(ref: ref)
+                        }
+                    } header: {
+                        Text("Evidence")
+                    } footer: {
+                        Text(
+                            "Colourless meshes of the trunk, cropped to it: no photos. A scan from another device comes "
+                                + "down from the server when you preview it.")
+                    }
+                }
+
                 Section("Position") {
                     LabeledContent("Latitude, longitude") {
                         Text(String(format: "%.6f, %.6f", tree.position.geo.latitude, tree.position.geo.longitude))

@@ -15,9 +15,7 @@ final class LaunchTests: XCTestCase {
     @MainActor
     func testAllFourTabsAreReachable() {
         let app = launch()
-        // Tapping while the app is still importing the fixtures and drawing the map can time out the accessibility
-        // connection on CI runners, so wait for the map first.
-        XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
+        waitForMap(app)
         for name in ["Map", "Census", "Tag", "Me"] {
             let tab = app.buttons[name].firstMatch
             XCTAssertTrue(tab.waitForExistence(timeout: 10), "missing tab \(name)")
@@ -37,6 +35,7 @@ final class LaunchTests: XCTestCase {
     @MainActor
     func testConfirmingATreeFromItsSheetMakesItProposed() {
         let app = launch()
+        waitForMap(app)
         let tree = app.buttons[firstTreeID].firstMatch
         XCTAssertTrue(tree.waitForExistence(timeout: mapTimeout))
         tree.tap()
@@ -58,6 +57,7 @@ final class LaunchTests: XCTestCase {
     @MainActor
     func testTreesFilterByStatusAndTheMapCanLeaveOutAppleMaps() {
         let app = launch()
+        waitForMap(app)
         let tree = app.buttons[firstTreeID].firstMatch
         XCTAssertTrue(tree.waitForExistence(timeout: mapTimeout))
         let detected = app.buttons["status-filter-detected"].firstMatch
@@ -104,6 +104,7 @@ final class LaunchTests: XCTestCase {
     @MainActor
     func testTaggingATreeCreatesAProposedTag() {
         let app = launch()
+        waitForMap(app)
         let tree = app.buttons[firstTreeID].firstMatch
         XCTAssertTrue(tree.waitForExistence(timeout: mapTimeout))
         tree.tap()
@@ -215,6 +216,13 @@ final class LaunchTests: XCTestCase {
     @MainActor
     private func text(_ app: XCUIApplication, _ label: String) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", label)).firstMatch
+    }
+
+    /// Waits for the map to finish loading the fixtures. Snapshotting it while it is still adding its 200 markers can
+    /// time out the accessibility query on CI runners.
+    @MainActor
+    private func waitForMap(_ app: XCUIApplication) {
+        XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
     }
 
     /// Lists load rows lazily, so swipe until the element exists.

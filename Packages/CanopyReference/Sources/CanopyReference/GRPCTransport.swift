@@ -1,3 +1,4 @@
+import CanopyModel
 import Foundation
 
 #if canImport(FoundationNetworking)
@@ -7,6 +8,7 @@ import Foundation
 /// A gRPC call that failed with a status from the server.
 public struct GRPCStatusError: Error, Equatable, LocalizedError {
     public static let notFound = 5
+    public static let permissionDenied = 7
     public static let unimplemented = 12
     public static let unavailable = 14
 
@@ -46,19 +48,38 @@ public protocol GRPCTransport: Sendable {
     func call(_ path: String, requests: [Data]) -> AsyncThrowingStream<Data, any Error>
 }
 
+/// Who is calling, as a Gerardus server reads it from every request's metadata: the Game Center team-scoped player
+/// id (or `local:<uuid>` before sign-in) and the alias. The server keys accounts, roles and OpenStreetMap access on
+/// the id, which it does not verify yet.
+public enum GerardusIdentity {
+    public static func headers(for player: Player) -> [String: String] {
+        // RFC 3986 unreserved characters stay as they are; everything else in the alias is percent-encoded.
+        var unreserved = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        unreserved.insert(charactersIn: "-._~")
+        return [
+            "x-gerardus-player-id": player.id.rawValue,
+            "x-gerardus-player-alias": player.alias.addingPercentEncoding(withAllowedCharacters: unreserved)
+                ?? "",
+        ]
+    }
+}
+
 /// gRPC over HTTP/1.1 with URLSession, which cannot speak cleartext HTTP/2. The Gerardus align server accepts
 /// HTTP/1.1. HTTP/1.1 trailers are not visible to URLSession, so a status the server sends after messages is
 /// lost; a failure before any message arrives in the headers ("trailers-only") and is reported.
 public final class URLSessionGRPCTransport: GRPCTransport {
     public let baseURL: URL
+    /// Request metadata sent with every call, such as the player's identity (`GerardusIdentity`).
+    public let headers: [String: String]
     private let session: URLSession
     private let router: Router
 
     /// - Parameter idleTimeout: how long a call may go without receiving data. Site preparation and
     ///   registration stream progress, so this is the gap between messages, not the length of the call;
     ///   `AlignClient.Timeouts` limits the length.
-    public init(baseURL: URL, idleTimeout: TimeInterval = 30) {
+    public init(baseURL: URL, idleTimeout: TimeInterval = 30, headers: [String: String] = [:]) {
         self.baseURL = baseURL
+        self.headers = headers
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = idleTimeout
         configuration.timeoutIntervalForResource = 3600
@@ -78,6 +99,9 @@ public final class URLSessionGRPCTransport: GRPCTransport {
         request.httpMethod = "POST"
         request.setValue("application/grpc", forHTTPHeaderField: "Content-Type")
         request.setValue("identity", forHTTPHeaderField: "grpc-accept-encoding")
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         var body = Data()
         for message in requests {
             body.append(0)
