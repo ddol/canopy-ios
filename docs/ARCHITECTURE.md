@@ -237,7 +237,8 @@ them anyway.
 (`AppModel.pullSharedMap`). It follows every tile pulled before, plus the tiles in view when the map shows at most
 400 m from centre to corner. A tile it has never pulled gets a snapshot (`GetTile`); the rest get the ops applied since
 their cursor (`PullChanges`). If the server's log goes backwards (its database was replaced), or an update names a
-tree the device has never seen, the tile gets a fresh snapshot.
+tree the device has never seen, the tile gets a fresh snapshot. Tiles are asked about four at a time (as are their
+open changesets for the review queue), so a sync takes a few round trips rather than two per tile.
 
 Everything lands in one store transaction (`LocalStore.applyShared`), in the `shared` and `shared_tiles` tables.
 Derivation then starts from the shared map, so the server's trees and tags win over the aerial candidates and other
