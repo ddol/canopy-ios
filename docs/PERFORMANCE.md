@@ -125,8 +125,9 @@ download before, 1 to 2 % after).
 - **Coarser voxels are not free.** The 0.5 m canopy model grows false tops from sparse points: at 2 m most trees found
   are not trees. Coarser data would need the detector retuned (a coarser model), and checking on real 3DEP.
 - **Compression is one line on the server.** Tonic's `send_compressed(CompressionEncoding::Gzip)` on the site service
-  would make every load a third smaller now that the client accepts gzip. Measured with the stand-in compressing, a
-  first load over `cellular` takes 5.1 s instead of 6.5 s.
+  (with tonic's `gzip` feature) would make every load a third smaller now that the client accepts gzip. Tried with
+  `gerardus serve` built that way: it answers in gzip and the client reads it (a test keeps its bytes). Measured with
+  the stand-in compressing, a first load over `cellular` takes 5.1 s instead of 6.5 s.
 - **Intensity** is 12 % of every load and Canopy never reads it: a request flag to leave it out would help, more so
   with compression.
 - **Quantised coordinates** (centimetre offsets per block) would halve the points, two thirds with gzip, but need a
