@@ -63,6 +63,10 @@ final class AppModel {
     /// The tree the Tag screen should start with.
     var tagTarget: UUID?
 
+    /// The clients for the Gerardus server in Settings, kept so calls share connections and the reference cache
+    /// (see `AppModel+Aerial`).
+    @ObservationIgnored var gerardusConnection: GerardusConnection?
+
     let store: LocalStore
     let players: PlayerService
     /// The Gerardus server stand-in. In memory: it forgets everything when the app quits.
@@ -164,11 +168,8 @@ final class AppModel {
         summary = await store.summary()
         changesets = (try? await store.changesets()) ?? []
         followedTiles = Set(((try? await store.sharedTiles()) ?? [:]).keys)
-        scanCount = (try? await store.allEvidence().count) ?? 0
-        let candidates = (try? await store.candidates()) ?? []
-        candidateSources = Dictionary(
-            candidates.compactMap { candidate in candidate.source.map { (candidate.id, $0) } },
-            uniquingKeysWith: { first, _ in first })
+        scanCount = (try? await store.evidenceCount()) ?? 0
+        candidateSources = await store.candidateSources()
     }
 
     // MARK: Census actions

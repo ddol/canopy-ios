@@ -1,6 +1,6 @@
 # Shortcuts for the scripts in scripts/. `make` on its own lists them.
 
-.PHONY: help version bump-version test lint testflight appstore
+.PHONY: help version bump-version test lint bench serve testflight appstore
 .DEFAULT_GOAL := help
 
 # List the targets.
@@ -22,6 +22,16 @@ test:
 # Check formatting as CI does.
 lint:
 	@swift format lint --strict --recursive --parallel App Packages Tests
+
+# Measure loading real trees against the stand-in server; compare with BASE=report.json (docs/PERFORMANCE.md).
+bench:
+	@swift build -c release --package-path Packages/CanopyHarness --product canopy-harness
+	@Packages/CanopyHarness/.build/release/canopy-harness bench --out bench.json $(if $(BASE),--compare $(BASE))
+
+# Serve a synthetic park on port 50099 for the simulator (PROFILE=loopback|lan|cellular|poor).
+serve:
+	@swift build -c release --package-path Packages/CanopyHarness --product canopy-harness
+	@Packages/CanopyHarness/.build/release/canopy-harness serve --port 50099 --profile $(or $(PROFILE),cellular)
 
 # Upload a beta build, testing tools included, for TestFlight testers.
 testflight:

@@ -62,39 +62,82 @@ public struct TreeDetector: Sendable {
 
     /// The raw canopy height model over the ground model's extent, or nil when that is too small or too large.
     public func canopyHeightModel(points: [PointBlock], ground: Heightfield) -> CanopyHeightModel? {
-        let area = (
+        let grid = Grid(extent: Self.extent(of: ground), cellSize: cellSize)
+        guard grid.isUsable else { return nil }
+        let (chm, _) = rawCanopy(points: points, ground: ground, grid: grid)
+        return grid.model(chm)
+    }
+
+    /// `detect` and `canopyHeightModel` over the ground model's extent, building the canopy height model once.
+    public func detectWithCanopy(
+        points: [PointBlock], ground: Heightfield, buildings: [[SIMD2<Double>]] = []
+    ) -> (trees: [Tree], canopy: CanopyHeightModel?) {
+        let grid = Grid(extent: Self.extent(of: ground), cellSize: cellSize)
+        guard grid.isUsable else { return ([], nil) }
+        let (chm, hits) = rawCanopy(points: points, ground: ground, grid: grid)
+        return (trees(chm: chm, hits: hits, grid: grid, ground: ground, buildings: buildings), grid.model(chm))
+    }
+
+    /// The cells of a canopy height model over an extent.
+    struct Grid {
+        var area: (x: ClosedRange<Double>, y: ClosedRange<Double>)
+        var cellSize: Double
+        var nx: Int
+        var ny: Int
+
+        init(extent area: (x: ClosedRange<Double>, y: ClosedRange<Double>), cellSize: Double) {
+            self.area = area
+            self.cellSize = cellSize
+            nx = Int(((area.x.upperBound - area.x.lowerBound) / cellSize).rounded(.up)) + 1
+            ny = Int(((area.y.upperBound - area.y.lowerBound) / cellSize).rounded(.up)) + 1
+        }
+
+        var isUsable: Bool { nx > 2 && ny > 2 && nx * ny < 50_000_000 }
+
+        func model(_ heights: [Float]) -> CanopyHeightModel {
+            CanopyHeightModel(
+                origin: SIMD2(area.x.lowerBound, area.y.lowerBound), cellSize: cellSize, nx: nx, ny: ny,
+                heights: heights)
+        }
+    }
+
+    static func extent(of ground: Heightfield) -> (x: ClosedRange<Double>, y: ClosedRange<Double>) {
+        (
             x: ground.origin.x...(ground.origin.x + Double(ground.nx - 1) * ground.cellSize),
             y: ground.origin.y...(ground.origin.y + Double(ground.ny - 1) * ground.cellSize)
         )
-        let nx = Int(((area.x.upperBound - area.x.lowerBound) / cellSize).rounded(.up)) + 1
-        let ny = Int(((area.y.upperBound - area.y.lowerBound) / cellSize).rounded(.up)) + 1
-        guard nx > 2, ny > 2, nx * ny < 50_000_000 else { return nil }
-        let (chm, _) = rawCanopy(points: points, ground: ground, area: area, nx: nx, ny: ny)
-        return CanopyHeightModel(
-            origin: SIMD2(area.x.lowerBound, area.y.lowerBound), cellSize: cellSize, nx: nx, ny: ny, heights: chm)
     }
 
     /// The highest vegetation return above the ground in each cell, and how many returns each cell has.
-    private func rawCanopy(
-        points: [PointBlock], ground: Heightfield, area: (x: ClosedRange<Double>, y: ClosedRange<Double>), nx: Int,
-        ny: Int
-    ) -> (chm: [Float], hits: [UInt16]) {
+    private func rawCanopy(points: [PointBlock], ground: Heightfield, grid: Grid) -> (chm: [Float], hits: [UInt16]) {
+        let (area, nx, ny) = (grid.area, grid.nx, grid.ny)
         var chm = [Float](repeating: 0, count: nx * ny)
         var hits = [UInt16](repeating: 0, count: nx * ny)
         var groundCache = [Float](repeating: .nan, count: nx * ny)
+        // Classes as bits: a set lookup per point is most of the time spent here.
+        let mask = vegetationClasses.reduce(UInt64(0)) { $1 < 64 ? $0 | 1 << UInt64($1) : $0 }
+        let wide = vegetationClasses.contains { $0 >= 64 }
         for block in points {
             let hasClass = block.classification.count == block.count
             for k in 0..<block.count {
-                if hasClass, !vegetationClasses.contains(block.classification[k]) { continue }
+                if hasClass {
+                    let c = block.classification[k]
+                    if c < 64 ? mask >> UInt64(c) & 1 == 0 : !(wide && vegetationClasses.contains(c)) { continue }
+                }
                 let px = Double(block.x[k])
                 let py = Double(block.y[k])
                 guard area.x.contains(px), area.y.contains(py) else { continue }
                 let i = Int((px - area.x.lowerBound) / cellSize)
                 let j = Int((py - area.y.lowerBound) / cellSize)
                 let index = j * nx + i
+                // The ground under the cell's centre, so a cell's height does not depend on which return came first.
                 var g = groundCache[index]
                 if g.isNaN {
-                    guard let h = ground.height(x: px, y: py) else { continue }
+                    guard
+                        let h = ground.height(
+                            x: area.x.lowerBound + (Double(i) + 0.5) * cellSize,
+                            y: area.y.lowerBound + (Double(j) + 0.5) * cellSize)
+                    else { continue }
                     g = Float(h)
                     groundCache[index] = g
                 }
@@ -116,31 +159,29 @@ public struct TreeDetector: Sendable {
         points: [PointBlock], ground: Heightfield, buildings: [[SIMD2<Double>]] = [],
         extent: (x: ClosedRange<Double>, y: ClosedRange<Double>)? = nil
     ) -> [Tree] {
-        let area =
-            extent
-            ?? (
-                x: ground.origin.x...(ground.origin.x + Double(ground.nx - 1) * ground.cellSize),
-                y: ground.origin.y...(ground.origin.y + Double(ground.ny - 1) * ground.cellSize)
-            )
-        let nx = Int(((area.x.upperBound - area.x.lowerBound) / cellSize).rounded(.up)) + 1
-        let ny = Int(((area.y.upperBound - area.y.lowerBound) / cellSize).rounded(.up)) + 1
-        guard nx > 2, ny > 2, nx * ny < 50_000_000 else { return [] }
-
+        let grid = Grid(extent: extent ?? Self.extent(of: ground), cellSize: cellSize)
+        guard grid.isUsable else { return [] }
         // 1. Raw CHM: highest return above ground per cell, and hits per cell.
-        let (chm, hits) = rawCanopy(points: points, ground: ground, area: area, nx: nx, ny: ny)
+        let (chm, hits) = rawCanopy(points: points, ground: ground, grid: grid)
+        return trees(chm: chm, hits: hits, grid: grid, ground: ground, buildings: buildings)
+    }
+
+    /// Steps 2 to 6 of `detect`, on a raw canopy height model.
+    private func trees(
+        chm: [Float], hits: [UInt16], grid: Grid, ground: Heightfield, buildings: [[SIMD2<Double>]]
+    ) -> [Tree] {
+        let (area, nx, ny) = (grid.area, grid.nx, grid.ny)
 
         // 2. Fill single-cell pits (cells lower than most neighbours) and smooth with a 3 × 3 Gaussian.
         var filled = chm
         for j in 1..<(ny - 1) {
             for i in 1..<(nx - 1) {
                 let c = chm[j * nx + i]
-                var neighbours: [Float] = []
-                neighbours.reserveCapacity(8)
-                for dj in -1...1 {
-                    for di in -1...1 where di != 0 || dj != 0 { neighbours.append(chm[(j + dj) * nx + i + di]) }
-                }
-                neighbours.sort()
-                let median = (neighbours[3] + neighbours[4]) / 2
+                let up = (j + 1) * nx + i
+                let down = (j - 1) * nx + i
+                let median = Self.median(
+                    chm[down - 1], chm[down], chm[down + 1], chm[j * nx + i - 1], chm[j * nx + i + 1], chm[up - 1],
+                    chm[up], chm[up + 1])
                 if c < median - 1.5 { filled[j * nx + i] = median }
             }
         }
@@ -221,8 +262,9 @@ public struct TreeDetector: Sendable {
         //    nearest kept top, for a suppressed local maximum) owns it.
         var owner = [Int32](repeating: -1, count: nx * ny)
         for (k, top) in tops.enumerated() { owner[top.j * nx + top.i] = Int32(k) }
+        var path: [Int] = []
         func resolve(_ start: Int) -> Int32 {
-            var path: [Int] = []
+            path.removeAll(keepingCapacity: true)
             var index = start
             while owner[index] == -1 {
                 path.append(index)
@@ -318,6 +360,37 @@ public struct TreeDetector: Sendable {
                     confidence: (confidence * 100).rounded() / 100))
         }
         return trees
+    }
+
+    /// The median of eight values (the mean of the middle two), by a sorting network: no array, no allocation.
+    static func median(
+        _ a0: Float, _ a1: Float, _ a2: Float, _ a3: Float, _ a4: Float, _ a5: Float, _ a6: Float, _ a7: Float
+    ) -> Float {
+        var v = (a0, a1, a2, a3, a4, a5, a6, a7)
+        @inline(__always) func order(_ a: inout Float, _ b: inout Float) {
+            if b < a { swap(&a, &b) }
+        }
+        // Batcher's odd-even merge sort for eight: 19 comparisons.
+        order(&v.0, &v.1)
+        order(&v.2, &v.3)
+        order(&v.4, &v.5)
+        order(&v.6, &v.7)
+        order(&v.0, &v.2)
+        order(&v.1, &v.3)
+        order(&v.4, &v.6)
+        order(&v.5, &v.7)
+        order(&v.1, &v.2)
+        order(&v.5, &v.6)
+        order(&v.0, &v.4)
+        order(&v.1, &v.5)
+        order(&v.2, &v.6)
+        order(&v.3, &v.7)
+        order(&v.2, &v.4)
+        order(&v.3, &v.5)
+        order(&v.1, &v.2)
+        order(&v.3, &v.4)
+        order(&v.5, &v.6)
+        return (v.3 + v.4) / 2
     }
 
     static func contains(_ ring: [SIMD2<Double>], _ p: SIMD2<Double>) -> Bool {

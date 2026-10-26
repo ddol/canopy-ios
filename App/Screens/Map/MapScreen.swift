@@ -18,6 +18,8 @@ struct MapScreen: View {
     @State private var visibility = MapLayers.Visibility(tags: Features.limbTagging)
     /// The visible region, once the map has reported one; detected trees are drawn only around it.
     @State private var viewport: MapViewport?
+    /// Where to move the map, such as to trees just loaded.
+    @State private var focus: MapFocus?
     @AppStorage("canopy.baseMap") private var baseMap = BaseMap.apple
 
     private let format = QuantityFormat()
@@ -82,6 +84,16 @@ struct MapScreen: View {
                     TreeSheet(tree: tree)
                         .presentationDetents([.medium, .large])
                 }
+                #if DEBUG || TESTING_TOOLS
+                    // For profiling a load with Instruments without UI automation: launch with
+                    // `-canopy.loadTreesAtLaunch YES` (and a server) to load the trees in view once the app is ready.
+                    .task(id: model.phase) {
+                        guard model.phase == .ready, UserDefaults.standard.bool(forKey: "canopy.loadTreesAtLaunch")
+                        else { return }
+                        try? await Task.sleep(for: .seconds(2))
+                        await loadTreesInView()
+                    }
+                #endif
         }
     }
 
@@ -93,6 +105,7 @@ struct MapScreen: View {
         switch baseMap {
         case .apple:
             CanopyMapView(layers: layers, selection: $selection, viewport: viewport ?? .goldenGatePark)
+                .focus(focus)
                 .onViewportChange {
                     viewport = $0
                     model.mapDidSettle($0)
@@ -102,10 +115,22 @@ struct MapScreen: View {
                 renderer: GerardusRenderer(), layers: layers, selection: $selection,
                 viewport: viewport ?? .goldenGatePark
             )
+            .focus(focus)
             .onViewportChange {
                 viewport = $0
                 model.mapDidSettle($0)
             }
+        }
+    }
+
+    /// Loads the real trees in view, then goes to them if the map showed much more than was loaded: a zoomed-out map
+    /// loads only its middle, which would be a dot.
+    private func loadTreesInView() async {
+        let radius = viewport?.cornerDistance ?? AppModel.aerialRadiusLimit
+        let centre = centre
+        await model.loadAerialTrees(around: centre, radius: radius)
+        if case .done = model.aerial, radius > AppModel.aerialRadiusLimit * 1.5 {
+            focus = MapFocus(MapViewport(center: centre, radius: AppModel.aerialRadiusLimit * 1.1))
         }
     }
 
@@ -193,8 +218,7 @@ struct MapScreen: View {
             Divider()
             Section("Aerial LiDAR") {
                 Button("Load real trees in view", systemImage: "tree") {
-                    let radius = viewport?.cornerDistance ?? AppModel.aerialRadiusLimit
-                    Task { await model.loadAerialTrees(around: centre, radius: radius) }
+                    Task { await loadTreesInView() }
                 }
                 .disabled(model.aerial.isWorking)
             }

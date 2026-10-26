@@ -11,13 +11,47 @@ public enum LocalStoreError: Error, Equatable {
 /// the aerial base layer, the shared map pulled from a Gerardus server, and current-state tables derived from all of
 /// those.
 ///
-/// Every write re-derives the current state (`CensusState.derive`) and rewrites the `trees` and `tags` tables in
-/// the same transaction, so the tables always match the log. Opening a store re-derives too.
+/// Every write re-derives the current state (`CensusState.derive`) and brings the `trees` and `tags` tables up to
+/// date in the same transaction, so the tables always match the log. Opening a store re-derives too, and rewrites
+/// those tables only when the schema or the derivation has changed since they were written (`Schema.derived`).
+///
+/// What derivation reads (the candidates, the shared map, the log and the changesets' states) is kept in memory as it
+/// is in the database, so a write decodes only what it adds, and only the rows of trees and tags that changed are
+/// written: a player's tap costs much the same with thirty thousand trees in the park as with two hundred.
 public actor LocalStore {
     public nonisolated let blobs: BlobStore
     private let databasePath: String
     private var db: SQLiteDatabase
     private var current = CensusState()
+    private var inputs = Inputs()
+    /// `candidates()` and `changesets()` as last read, until a write changes them.
+    private var sortedCandidates: [TreeCandidate]?
+    private var decodedChangesets: [Changeset]?
+
+    /// The inputs to derivation, as they are in the database.
+    struct Inputs {
+        var candidates: [UUID: TreeCandidate] = [:]
+        /// The candidates as detected trees, made once each.
+        var base: [UUID: Tree] = [:]
+        var shared: [SharedRecord] = []
+        /// Oldest first.
+        var observations: [FieldObservation] = []
+        var changesetStates: [UUID: Changeset.State] = [:]
+
+        mutating func setCandidates(_ candidates: [UUID: TreeCandidate]) {
+            var base: [UUID: Tree] = [:]
+            base.reserveCapacity(candidates.count)
+            for (id, candidate) in candidates {
+                if let kept = self.base[id], self.candidates[id] == candidate {
+                    base[id] = kept
+                } else {
+                    base[id] = candidate.makeTree()
+                }
+            }
+            self.candidates = candidates
+            self.base = base
+        }
+    }
 
     /// Opens (creating if needed) the store in `directory`: `canopy.sqlite` and a `blobs/` folder.
     public init(directory: URL) throws {
@@ -39,8 +73,17 @@ public actor LocalStore {
         let db = try SQLiteDatabase(path: databasePath)
         try Schema.migrate(db)
         self.db = db
-        self.current = try Self.derive(db)
-        try Self.materialize(current, in: db)
+        self.inputs = try Self.readInputs(db)
+        self.current = Self.derive(inputs)
+        // Every write keeps the tables in step, so they need writing again only when what writes them has changed:
+        // with a park's worth of trees that is seconds at launch.
+        if try Self.derivedStamp(db) != Schema.derived {
+            let current = current
+            try db.transaction {
+                try Self.materialize(current, replacing: nil, in: db)
+                try Self.stampDerived(db)
+            }
+        }
     }
 
     // MARK: Reading
@@ -57,10 +100,13 @@ public actor LocalStore {
 
     /// Changesets, oldest first, optionally only those in `states`.
     public func changesets(in states: Set<Changeset.State>? = nil) throws -> [Changeset] {
-        try db.query("SELECT payload FROM changesets ORDER BY created_at, rowid") { row in
-            try CanopyJSON.decoder.decode(Changeset.self, from: Data(row.string(0).utf8))
-        }
-        .filter { states?.contains($0.state) ?? true }
+        let all =
+            try decodedChangesets
+            ?? db.query("SELECT payload FROM changesets ORDER BY created_at, rowid") { row in
+                try CanopyJSON.decoder.decode(Changeset.self, from: Data(row.string(0).utf8))
+            }
+        decodedChangesets = all
+        return states.map { states in all.filter { states.contains($0.state) } } ?? all
     }
 
     /// Every evidence record on this device (this device's scans), newest first.
@@ -79,32 +125,59 @@ public actor LocalStore {
         }
     }
 
-    /// The aerial base layer.
+    /// The aerial base layer, by id.
     public func candidates() throws -> [TreeCandidate] {
-        try db.query("SELECT payload FROM candidates ORDER BY id") { row in
-            try CanopyJSON.decoder.decode(TreeCandidate.self, from: Data(row.string(0).utf8))
-        }
+        if let sortedCandidates { return sortedCandidates }
+        let sorted = inputs.candidates.values.sorted { $0.id.uuidString < $1.id.uuidString }
+        sortedCandidates = sorted
+        return sorted
     }
 
     public func candidateCount() throws -> Int {
-        try db.query("SELECT count(*) FROM candidates") { $0.int(0) }.first ?? 0
+        inputs.candidates.count
+    }
+
+    /// Where each candidate came from, for those that say (`TreeCandidate.source`).
+    public func candidateSources() -> [UUID: String] {
+        inputs.candidates.compactMapValues(\.source)
+    }
+
+    /// How many evidence records this device has.
+    public func evidenceCount() throws -> Int {
+        try db.query("SELECT count(*) FROM evidence") { $0.int(0) }.first ?? 0
     }
 
     // MARK: Writing
 
+    /// What replacing an area's candidates did.
+    public struct CandidateReplacement: Equatable, Sendable {
+        /// Candidates in the area that were replaced: all of them but those a player has observed.
+        public var replaced: Int
+        /// Candidates there now that were not there before.
+        public var added: Int
+        /// Candidates there before that are not there now, and how many of those were the made-up sample.
+        public var gone: Int
+        public var samplesGone: Int
+
+        public init(replaced: Int, added: Int, gone: Int, samplesGone: Int) {
+            self.replaced = replaced
+            self.added = added
+            self.gone = gone
+            self.samplesGone = samplesGone
+        }
+    }
+
     /// Replaces the candidates in an area (where `covers` is true) with new ones, such as the aerial trees found there,
     /// keeping every candidate elsewhere. A candidate in the area that a player has already observed stays, so their
     /// work is not orphaned, and a replacement within `duplicateRadius` metres of one it keeps is dropped as the same
-    /// tree. Returns how many candidates were removed.
+    /// tree. Loading the same area again replaces its candidates with the same ones: nothing is added or gone.
     @discardableResult
     public func replaceCandidates(
         where covers: @Sendable (GeoPoint) -> Bool, with replacements: [TreeCandidate],
         duplicateRadius: Double = 2.5
-    ) throws -> Int {
-        let current = try candidates()
-        let observed = Set(
-            try db.query("SELECT DISTINCT subject_id FROM observations") { UUID(uuidString: $0.string(0)) }
-                .compactMap { $0 })
+    ) throws -> CandidateReplacement {
+        let current = inputs.candidates.values
+        let observed = Set(inputs.observations.map(\.kind.subject.id))
         let kept = current.filter { !covers($0.location) || observed.contains($0.id) }
         let keptInArea = kept.filter { covers($0.location) }
         let keptIDs = Set(kept.map(\.id))
@@ -113,21 +186,39 @@ public actor LocalStore {
             let frame = LocalFrame(origin: replacement.location)
             return !keptInArea.contains { frame.enu(of: $0.location).horizontalDistance < duplicateRadius }
         }
+        let before = inputs.candidates
         try importCandidates(kept + added)
-        return current.count - kept.count
+        let after = inputs.candidates
+        let gone = before.values.filter { after[$0.id] == nil }
+        return CandidateReplacement(
+            replaced: current.count - kept.count, added: after.keys.filter { before[$0] == nil }.count,
+            gone: gone.count, samplesGone: gone.filter(\.isSynthetic).count)
     }
 
-    /// Replaces the aerial base layer.
+    /// Replaces the aerial base layer. Only the rows that change are written.
     public func importCandidates(_ candidates: [TreeCandidate]) throws {
-        try write {
-            try db.run("DELETE FROM candidates")
-            for candidate in candidates {
-                try db.run(
-                    "INSERT INTO candidates (id, payload) VALUES (?, ?)",
-                    [.text(candidate.id.uuidString), .text(try Self.json(candidate))]
-                )
+        var next: [UUID: TreeCandidate] = [:]
+        next.reserveCapacity(candidates.count)
+        for candidate in candidates {
+            guard next.updateValue(candidate, forKey: candidate.id) == nil else {
+                throw SQLiteError(code: 19, message: "UNIQUE constraint failed: candidates.id")
             }
         }
+        let previous = inputs.candidates
+        try write {
+            for id in previous.keys where next[id] == nil {
+                try db.run("DELETE FROM candidates WHERE id = ?", [.text(id.uuidString)])
+            }
+            for (id, candidate) in next where previous[id] != candidate {
+                try db.run(
+                    "INSERT OR REPLACE INTO candidates (id, payload) VALUES (?, ?)",
+                    [.text(id.uuidString), .text(try Self.json(candidate))]
+                )
+            }
+        } update: { inputs in
+            inputs.setCandidates(next)
+        }
+        sortedCandidates = nil
     }
 
     /// Records an observation and the changeset that shares it, in one transaction.
@@ -162,7 +253,11 @@ public actor LocalStore {
         try write {
             try Self.insert(observation, in: db)
             try Self.insert(changeset, in: db)
+        } update: { inputs in
+            inputs.observations.append(observation)
+            inputs.changesetStates[changeset.id] = changeset.state
         }
+        decodedChangesets = nil
         return (observation, changeset)
     }
 
@@ -275,6 +370,8 @@ public actor LocalStore {
                     """,
                     [.text(update.tile.token), .integer(update.sequence), .integer(Self.milliseconds(.now))])
             }
+        } update: { inputs in
+            inputs.shared = try Self.sharedRecords(db)
         }
         return stale
     }
@@ -291,13 +388,26 @@ public actor LocalStore {
                     .integer(Self.milliseconds(.now)), .text(changeset.id.uuidString),
                 ]
             )
+        } update: { inputs in
+            inputs.changesetStates[changeset.id] = changeset.state
         }
+        decodedChangesets = nil
     }
 
-    /// Re-derives the current state from the base layer and the log, and rewrites the current-state tables.
+    /// Re-derives the current state from the database alone, and rewrites the current-state tables.
     @discardableResult
     public func rebuild() throws -> CensusState {
-        try write {}
+        let (inputs, state) = try db.transaction {
+            let inputs = try Self.readInputs(db)
+            let state = Self.derive(inputs)
+            try Self.materialize(state, replacing: nil, in: db)
+            try Self.stampDerived(db)
+            return (inputs, state)
+        }
+        self.inputs = inputs
+        current = state
+        sortedCandidates = nil
+        decodedChangesets = nil
         return current
     }
 
@@ -315,7 +425,11 @@ public actor LocalStore {
         try Schema.migrate(db)
         try blobs.removeAll()
         current = CensusState()
-        try Self.materialize(current, in: db)
+        inputs = Inputs()
+        sortedCandidates = nil
+        decodedChangesets = nil
+        try Self.materialize(current, replacing: nil, in: db)
+        try Self.stampDerived(db)
     }
 
     // MARK: Internals
@@ -323,31 +437,53 @@ public actor LocalStore {
     /// The underlying connection, for tests that need raw SQL.
     var databaseForTesting: SQLiteDatabase { db }
 
-    /// Runs `body` and re-derives the state in one transaction.
-    private func write(_ body: () throws -> Void) throws {
+    /// Runs `body`, brings the inputs up to date with what it wrote (`update`), re-derives, and writes the trees and
+    /// tags that changed, in one transaction. The inputs and state change only once it commits.
+    private func write(_ body: () throws -> Void, update: (inout Inputs) throws -> Void) throws {
+        var inputs = self.inputs
+        let previous = current
+        let db = db
         let next = try db.transaction {
             try body()
-            let next = try Self.derive(db)
-            try Self.materialize(next, in: db)
+            try update(&inputs)
+            let next = Self.derive(inputs)
+            try Self.materialize(next, replacing: previous, in: db)
             return next
         }
+        self.inputs = inputs
         current = next
     }
 
-    private static func derive(_ db: SQLiteDatabase) throws -> CensusState {
-        let base = try db.query("SELECT payload FROM candidates ORDER BY id") { row in
-            try CanopyJSON.decoder.decode(TreeCandidate.self, from: Data(row.string(0).utf8)).makeTree()
+    /// What wrote the `trees` and `tags` tables last, or nil before any stamp.
+    static func derivedStamp(_ db: SQLiteDatabase) throws -> String? {
+        try db.query("SELECT value FROM store_meta WHERE key = 'derived'") { $0.string(0) }.first
+    }
+
+    private static func stampDerived(_ db: SQLiteDatabase) throws {
+        try db.run("INSERT OR REPLACE INTO store_meta (key, value) VALUES ('derived', ?)", [.text(Schema.derived)])
+    }
+
+    private static func readInputs(_ db: SQLiteDatabase) throws -> Inputs {
+        var inputs = Inputs()
+        let candidates = try db.query("SELECT payload FROM candidates") { row in
+            try CanopyJSON.decoder.decode(TreeCandidate.self, from: Data(row.string(0).utf8))
         }
+        inputs.setCandidates(Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }))
         let states = try db.query("SELECT id, state FROM changesets") { row in
             (UUID(uuidString: row.string(0)), Changeset.State(rawValue: row.string(1)))
         }
-        var changesetStates: [UUID: Changeset.State] = [:]
         for case (let id?, let state?) in states {
-            changesetStates[id] = state
+            inputs.changesetStates[id] = state
         }
-        return CensusState.derive(
-            base: base, shared: try sharedRecords(db), observations: try observations(db),
-            changesetStates: changesetStates)
+        inputs.shared = try sharedRecords(db)
+        inputs.observations = try observations(db)
+        return inputs
+    }
+
+    private static func derive(_ inputs: Inputs) -> CensusState {
+        CensusState.derive(
+            base: Array(inputs.base.values), shared: inputs.shared, observations: inputs.observations,
+            changesetStates: inputs.changesetStates)
     }
 
     private static func sharedRecords(_ db: SQLiteDatabase, ids: Set<UUID>? = nil) throws -> [SharedRecord] {
@@ -384,13 +520,31 @@ public actor LocalStore {
         }
     }
 
-    private static func materialize(_ state: CensusState, in db: SQLiteDatabase) throws {
-        try db.run("DELETE FROM trees")
-        try db.run("DELETE FROM tags")
-        for tree in state.trees.values {
+    /// Writes the trees and tags of `state`: those that differ from `previous`, or all of them.
+    private static func materialize(
+        _ state: CensusState, replacing previous: CensusState?, in db: SQLiteDatabase
+    ) throws {
+        let trees: [Tree]
+        let tags: [Tag]
+        if let previous {
+            for id in previous.trees.keys where state.trees[id] == nil {
+                try db.run("DELETE FROM trees WHERE id = ?", [.text(id.uuidString)])
+            }
+            for id in previous.tags.keys where state.tags[id] == nil {
+                try db.run("DELETE FROM tags WHERE id = ?", [.text(id.uuidString)])
+            }
+            trees = state.trees.values.filter { previous.trees[$0.id] != $0 }
+            tags = state.tags.values.filter { previous.tags[$0.id] != $0 }
+        } else {
+            try db.run("DELETE FROM trees")
+            try db.run("DELETE FROM tags")
+            trees = Array(state.trees.values)
+            tags = Array(state.tags.values)
+        }
+        for tree in trees {
             try db.run(
                 """
-                INSERT INTO trees (id, s2_l19_token, s2_l16_token, count_status, proposed_status, version, payload)
+                INSERT OR REPLACE INTO trees (id, s2_l19_token, s2_l16_token, count_status, proposed_status, version, payload)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
@@ -400,10 +554,10 @@ public actor LocalStore {
                 ]
             )
         }
-        for tag in state.tags.values {
+        for tag in tags {
             try db.run(
                 """
-                INSERT INTO tags (id, tree_id, s2_l19_token, s2_l16_token, status, version, payload)
+                INSERT OR REPLACE INTO tags (id, tree_id, s2_l19_token, s2_l16_token, status, version, payload)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
@@ -567,7 +721,21 @@ enum Schema {
             synced_at INTEGER NOT NULL
         );
         """,
+        // 4: what wrote the derived tables, so opening a store rewrites them only when that changes.
+        """
+        CREATE TABLE store_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """,
     ]
+
+    /// Bump when `CensusState.derive` or `LocalStore.materialize` changes what the `trees` and `tags` tables hold:
+    /// every store then rewrites them once, when it is next opened.
+    static let derivation = 1
+
+    /// The stamp of the tables as this version writes them.
+    static var derived: String { "schema \(migrations.count), derivation \(derivation)" }
 
     static func migrate(_ db: SQLiteDatabase) throws {
         let version = try db.userVersion

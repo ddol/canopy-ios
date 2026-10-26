@@ -59,14 +59,56 @@ public struct AlignClient: Sendable {
 
     /// A prepared site, or nil when the server has not prepared it.
     public func site(_ l16Token: String) async throws -> Site? {
+        try await siteMessage(l16Token).map { try Site(serialized: $0) }
+    }
+
+    /// A prepared site, kept in `cache` as it comes. When the server cannot be reached, the site as it was last
+    /// described, if it was kept: its bundle is then whatever the cache holds.
+    public func site(_ l16Token: String, cache: ReferenceCache?) async throws -> Site? {
+        guard let cache else { return try await site(l16Token) }
+        do {
+            guard let data = try await siteMessage(l16Token) else { return nil }
+            cache.store(site: data, token: l16Token)
+            return try Site(serialized: data)
+        } catch let error where Self.isUnreachable(error) {
+            guard let kept = cache.site(l16Token) else { throw error }
+            return kept.site
+        }
+    }
+
+    /// The `Site` message of `GetSite`, or nil when the server has not prepared the site.
+    func siteMessage(_ l16Token: String) async throws -> Data? {
         var request = ProtoWriter()
         request.string(1, l16Token)
         do {
             let fields = try await unaryFields(Self.site + "GetSite", request.data)
-            return try fields.first { $0.number == 1 }.map { try Site($0) }
+            return fields.first { $0.number == 1 }.map { Data($0.bytes) }
         } catch let error as GRPCStatusError where error.code == GRPCStatusError.notFound {
             return nil
         }
+    }
+
+    /// Whether a call timed out: no data within URLSession's idle limit, or past its own time limit. Before any message
+    /// that usually means the server is still working (preparing a site, or deriving its model after a scan was
+    /// accepted or after it has been idle), and the work carries on, so asking again shortly finds it done.
+    public static func timedOut(_ error: any Error) -> Bool {
+        if let error = error as? URLError { return error.code == .timedOut }
+        if case GRPCTransportError.timedOut = error { return true }
+        return false
+    }
+
+    /// Whether a call failed for want of a connection (no network, the server down or out of reach, or no answer in
+    /// time) rather than because the server said no.
+    public static func isUnreachable(_ error: any Error) -> Bool {
+        if let error = error as? URLError {
+            return [
+                .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .timedOut,
+                .dnsLookupFailed, .internationalRoamingOff, .dataNotAllowed, .secureConnectionFailed,
+            ].contains(error.code)
+        }
+        if case GRPCTransportError.timedOut = error { return true }
+        if let error = error as? GRPCStatusError { return error.code == GRPCStatusError.unavailable }
+        return false
     }
 
     /// Builds (or returns the cached) bundle for a site. The last event is `.ready`.

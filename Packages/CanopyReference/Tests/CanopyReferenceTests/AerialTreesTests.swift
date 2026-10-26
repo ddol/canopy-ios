@@ -109,9 +109,18 @@ import Testing
 
         let checking = try await AerialTrees.load(
             tile: stowLake, area: area, osm: true, label: "ggp-stow-lake", client: Live.client)
-        #expect(checking.attribution.contains { $0.contains("OpenStreetMap") })
-        #expect(checking.lines.contains { $0.kind == .path })
-        #expect(checking.candidates.allSatisfy { $0.source?.contains("for checking only") == true })
+        if checking.osmRefused {
+            // The server sends OpenStreetMap only to its admins, and these tests call as nobody: detection carries on
+            // without it, and nothing is marked for checking.
+            #expect(!checking.usedOSM)
+            #expect(!checking.attribution.contains { $0.contains("OpenStreetMap") })
+            #expect(checking.candidates.count == result.candidates.count)
+            #expect(checking.candidates.allSatisfy { $0.source?.contains("for checking only") != true })
+        } else {
+            #expect(checking.attribution.contains { $0.contains("OpenStreetMap") })
+            #expect(checking.lines.contains { $0.kind == .path })
+            #expect(checking.candidates.allSatisfy { $0.source?.contains("for checking only") == true })
+        }
     }
 
     final class Stages: @unchecked Sendable {

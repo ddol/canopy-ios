@@ -41,40 +41,38 @@ extension AppModel {
     }
 
     /// Brings the followed tiles up to date: a snapshot for a tile never pulled (or one the server has reset), the ops
-    /// applied since for the rest. Everything lands in one store transaction.
+    /// applied since for the rest. Everything lands in one store transaction. Each tile is a question of its own, so
+    /// they are asked a few at a time rather than one round trip after another.
     func pullSharedMap(_ client: GerardusMapClient) async throws {
         let cursors = try await store.sharedTiles()
-        var updates: [LocalStore.SharedTileUpdate] = []
-        for tile in try await followedTiles().sorted() {
-            guard let since = cursors[tile] else {
-                updates.append(try await snapshot(tile, client))
-                continue
-            }
+        let updates = try await Self.concurrently(try await followedTiles().sorted()) {
+            tile -> LocalStore.SharedTileUpdate? in
+            guard let since = cursors[tile] else { return try await Self.snapshot(tile, client) }
             let page = try await client.pullChanges(in: tile, since: since)
             if page.latestSequence < since {
                 // The server's log went backwards: its database was replaced. Start the tile again.
-                updates.append(try await snapshot(tile, client))
-            } else if !page.changes.isEmpty {
-                let changes = page.changes.map { change in
-                    SharedChange(
-                        op: change.op, tile: change.tile, author: change.author ?? PlayerID(rawValue: ""),
-                        appliedAt: change.appliedAt)
-                }
-                updates.append(.init(tile: tile, sequence: page.latestSequence, content: .changes(changes)))
+                return try await Self.snapshot(tile, client)
             }
+            guard !page.changes.isEmpty else { return nil }
+            let changes = page.changes.map { change in
+                SharedChange(
+                    op: change.op, tile: change.tile, author: change.author ?? PlayerID(rawValue: ""),
+                    appliedAt: change.appliedAt)
+            }
+            return .init(tile: tile, sequence: page.latestSequence, content: .changes(changes))
         }
+        .compactMap { $0 }
         guard !updates.isEmpty else { return }
         let stale = try await store.applyShared(updates)
-        var snapshots: [LocalStore.SharedTileUpdate] = []
-        for tile in stale.sorted() {
-            snapshots.append(try await snapshot(tile, client))
-        }
+        let snapshots = try await Self.concurrently(stale.sorted()) { try await Self.snapshot($0, client) }
         if !snapshots.isEmpty {
             try await store.applyShared(snapshots)
         }
     }
 
-    private func snapshot(_ tile: S2CellID, _ client: GerardusMapClient) async throws -> LocalStore.SharedTileUpdate {
+    nonisolated private static func snapshot(
+        _ tile: S2CellID, _ client: GerardusMapClient
+    ) async throws -> LocalStore.SharedTileUpdate {
         let snapshot = try await client.tile(tile)
         return .init(
             tile: tile, sequence: snapshot.latestSequence, content: .snapshot(snapshot.entities.compactMap(\.record)))
@@ -82,19 +80,45 @@ extension AppModel {
 
     /// Other players' open changesets in the followed tiles that this player has not agreed with yet, oldest first.
     func refreshReviewQueue(_ client: GerardusMapClient) async throws {
-        serverPlayer = try await client.player()
+        async let asked = client.player()
+        let tiles = try await store.sharedTiles().keys.sorted()
+        let open = try await Self.concurrently(tiles) { try await client.openChangesets(in: $0) }
+        serverPlayer = try await asked
         var seen: Set<UUID> = []
         var queue: [GerardusMapClient.OpenChangeset] = []
-        for tile in try await store.sharedTiles().keys.sorted() {
-            for open in try await client.openChangesets(in: tile) where seen.insert(open.changeset.id).inserted {
-                let changeset = open.changeset
-                guard changeset.meta.playerID != player.id,
-                    !changeset.approvals.contains(where: { $0.playerID == player.id })
-                else { continue }
-                queue.append(open)
-            }
+        for open in open.joined() where seen.insert(open.changeset.id).inserted {
+            let changeset = open.changeset
+            guard changeset.meta.playerID != player.id,
+                !changeset.approvals.contains(where: { $0.playerID == player.id })
+            else { continue }
+            queue.append(open)
         }
         reviewQueue = queue.sorted { $0.changeset.meta.createdAt < $1.changeset.meta.createdAt }
+    }
+
+    /// `body` for each item, at most `width` at once (URLSession opens four connections to a server on iOS, and a call
+    /// waiting for one would spend its time limit waiting), with the results in the items' order.
+    nonisolated static func concurrently<Item: Sendable, Result: Sendable>(
+        _ items: [Item], width: Int = 4, _ body: @escaping @Sendable (Item) async throws -> Result
+    ) async throws -> [Result] {
+        try await withThrowingTaskGroup(of: (Int, Result).self) { group in
+            var results = [Result?](repeating: nil, count: items.count)
+            var next = 0
+            while next < min(width, items.count) {
+                let k = next
+                group.addTask { (k, try await body(items[k])) }
+                next += 1
+            }
+            while let (k, result) = try await group.next() {
+                results[k] = result
+                if next < items.count {
+                    let k = next
+                    group.addTask { (k, try await body(items[k])) }
+                    next += 1
+                }
+            }
+            return results.map { $0! }
+        }
     }
 
     // MARK: Syncing on its own

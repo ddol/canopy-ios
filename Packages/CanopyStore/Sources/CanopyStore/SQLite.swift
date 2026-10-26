@@ -122,6 +122,8 @@ final class SQLiteDatabase {
         }
 
         func string(_ column: Int32) -> String { text(column) ?? "" }
+
+        var columnCount: Int { Int(sqlite3_column_count(statement)) }
     }
 }
 

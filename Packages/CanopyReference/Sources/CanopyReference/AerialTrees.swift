@@ -42,6 +42,20 @@ public enum AerialTrees {
         public var usedOSM: Bool
         /// OpenStreetMap was asked for and the server refused: it sends OSM only to its admins.
         public var osmRefused: Bool
+        /// The points came from the phone's cache rather than the server.
+        public var fromCache = false
+        /// How long each step took, in order: finding the site, its georeference, the points, detection, placing.
+        public var timings: [Timing] = []
+
+        public struct Timing: Equatable, Sendable {
+            public var step: String
+            public var seconds: Double
+
+            public init(step: String, seconds: Double) {
+                self.step = step
+                self.seconds = seconds
+            }
+        }
 
         public init(
             site: Site, candidates: [TreeCandidate], tiles: Set<S2CellID>, area: Area? = nil, attribution: [String],
@@ -72,6 +86,8 @@ public enum AerialTrees {
         /// The server is building the site's bundle.
         case preparing(Progress)
         case downloading(points: Int)
+        /// Reading points kept on the phone from an earlier load.
+        case readingSaved(points: Int)
         case detecting
         case placing
     }
@@ -79,9 +95,20 @@ public enum AerialTrees {
     public enum Failure: Error, Equatable, LocalizedError {
         /// Preparing the site ran past its time limit. The server carries on, so the site is usually ready soon.
         case stillPreparing
+        /// The site was prepared without aerial points: the server has no 3DEP data there.
+        case noAerialData
+        /// The stream went quiet past its time limit. After being idle, or after accepting a scan, the server builds
+        /// the site's model on first asking and carries on, so asking again shortly usually works.
+        case slowServer
 
         public var errorDescription: String? {
-            "The server is still preparing this area. Try again in a minute."
+            switch self {
+            case .stillPreparing: "The server is still preparing this area. Try again in a minute."
+            case .noAerialData: "The server has no aerial LiDAR for this area, so there are no trees to find here."
+            case .slowServer:
+                "The server took too long to send this area. After being idle it builds the site first, which can "
+                    + "take a minute or two. Try again shortly."
+            }
         }
     }
 
@@ -92,17 +119,33 @@ public enum AerialTrees {
     /// How far past an area points are streamed, in metres, so the crowns of trees on its edge are whole.
     public static let areaMargin = 20.0
 
+    /// How much wider than asked an area's points are downloaded and kept, in metres, so loading again after the map
+    /// has moved a little (a zoom, a nudge) finds them on the phone. About an eighth more to download.
+    public static let cachePadding: Float = 10
+
     /// Finds the trees in the site for `tile`, or only in `area` (which should be centred in `tile`), so less data
     /// comes down. Buildings are masked out of detection with DataSF footprints. `osm` adds OpenStreetMap buildings:
     /// for checking only, since the shared tree layer takes nothing from OpenStreetMap (Gerardus ADR-0005, ADR-0008),
     /// and the candidates' source says so.
+    ///
+    /// With a `cache`, an area inside one loaded before from the same bundle costs one small call (or none, when the
+    /// server cannot be reached) instead of megabytes, and the site georeference is fitted once.
     public static func load(
         tile: S2CellID, area: Area? = nil, osm: Bool = false, label: String, client: AlignClient,
-        voxelSize: Float = 1.0, detector: TreeDetector = TreeDetector(), progress: @Sendable (Stage) -> Void = { _ in }
+        cache: ReferenceCache? = nil, voxelSize: Float = 1.0, detector: TreeDetector = TreeDetector(),
+        progress: @Sendable (Stage) -> Void = { _ in }
     ) async throws -> SiteResult {
         let token = tile.parent(level: S2CellID.tileLevel).token
+        var timings: [SiteResult.Timing] = []
+        var lap = ContinuousClock.now
+        func time(_ step: String) {
+            let now = ContinuousClock.now
+            let elapsed = (now - lap).components
+            timings.append(.init(step: step, seconds: Double(elapsed.seconds) + Double(elapsed.attoseconds) * 1e-18))
+            lap = now
+        }
         let site: Site
-        if let prepared = try await client.site(token) {
+        if let prepared = try await client.site(token, cache: cache) {
             site = prepared
         } else {
             do {
@@ -111,7 +154,14 @@ public enum AerialTrees {
                 throw Failure.stillPreparing
             }
         }
-        let georeference = try await SiteGeoreference.fetch(for: site, client: client)
+        // A server without 3DEP for the area prepares the site anyway, empty: say so rather than fail to place it.
+        guard
+            site.layerCounts[.aerialPoints, default: 0] > 0
+                || site.sources.contains(where: { $0.layer == .aerialPoints })
+        else { throw Failure.noAerialData }
+        time("site")
+        let georeference = try await SiteGeoreference.fetch(for: site, client: client, cache: cache)
+        time("georeference")
         let centre = area.map { georeference.site(of: $0.centre) }
         func request(_ layers: [ReferenceLayer], classes: [UInt32]) -> StreamReferenceRequest {
             StreamReferenceRequest(
@@ -124,26 +174,37 @@ public enum AerialTrees {
         var lines: [LineFeature] = []
         var count = 0
         var layers: [ReferenceLayer] = [.aerialPoints, .footprints, .groundMesh]
-        for try await chunk in client.reference(request(layers, classes: canopyClasses)) {
-            switch chunk {
-            case .points(_, let block):
-                blocks.append(block)
-                count += block.count
-                progress(.downloading(points: count))
-            case .groundMesh(let field):
-                ground = field
-            case .lines(_, let more):
-                lines += more
-            default:
-                break
+        let saved = Flag()
+        let stream = client.reference(
+            request(layers, classes: canopyClasses), bundleID: site.bundleID, cache: cache, padding: cachePadding,
+            fromCache: saved.set)
+        do {
+            for try await chunk in stream {
+                switch chunk {
+                case .points(_, let block):
+                    blocks.append(block)
+                    count += block.count
+                    progress(saved.value ? .readingSaved(points: count) : .downloading(points: count))
+                case .groundMesh(let field):
+                    ground = field
+                case .lines(_, let more):
+                    lines += more
+                default:
+                    break
+                }
             }
+        } catch  where AlignClient.timedOut(error) {
+            // The server went quiet past the time limit, usually while it derives the site's ground model.
+            throw Failure.slowServer
         }
         // OpenStreetMap on its own call: the server refuses a whole stream that names it for anyone but its admins, and
         // detection must work either way.
         var osmRefused = false
         if osm {
             do {
-                for try await chunk in client.reference(request([.osm], classes: [])) {
+                for try await chunk in client.reference(
+                    request([.osm], classes: []), bundleID: site.bundleID, cache: cache)
+                {
                     if case .lines(_, let more) = chunk { lines += more }
                 }
                 layers.append(.osm)
@@ -155,16 +216,20 @@ public enum AerialTrees {
         if ground == nil {
             // Older servers have no ground layer: build one from the ground and water returns.
             var groundBlocks: [PointBlock] = []
-            for try await chunk in client.reference(request([.aerialPoints], classes: [2, 9])) {
+            for try await chunk in client.reference(
+                request([.aerialPoints], classes: [2, 9]), bundleID: site.bundleID, cache: cache)
+            {
                 if case .points(_, let block) = chunk { groundBlocks.append(block) }
             }
             ground = Heightfield(groundPoints: groundBlocks, cellSize: 1)
         }
         guard let ground else { throw GRPCTransportError.noResponse }
 
+        time("points")
         progress(.detecting)
         let buildings = lines.filter { $0.kind == .building && $0.points.count >= 3 }.map(\.points)
-        let trees = detector.detect(points: blocks, ground: ground, buildings: buildings)
+        let (trees, canopy) = detector.detectWithCanopy(points: blocks, ground: ground, buildings: buildings)
+        time("detection")
         progress(.placing)
         let aerialSource = site.sources.first { $0.layer == .aerialPoints }
         let source =
@@ -181,14 +246,17 @@ public enum AerialTrees {
             },
             pointCount: count,
             georeference: georeference,
-            canopy: detector.canopyHeightModel(points: blocks, ground: ground),
+            canopy: canopy,
             lines: lines,
             usedOSM: usedOSM,
             osmRefused: osmRefused
         )
+        result.fromCache = saved.value
         result.candidates = candidates(trees, georeference: georeference, source: source).filter {
             result.covers($0.location)
         }
+        time("placing")
+        result.timings = timings
         return result
     }
 
@@ -218,6 +286,16 @@ public enum AerialTrees {
                 bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
             ))
     }
+}
+
+/// A flag set from another task.
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+
+    var value: Bool { lock.withLock { stored } }
+
+    @Sendable func set(_ value: Bool) { lock.withLock { stored = value } }
 }
 
 extension Heightfield {

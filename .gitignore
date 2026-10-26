@@ -74,3 +74,5 @@ Package.resolved
 # Per-developer signing (DEVELOPMENT_TEAM etc.)
 Configs/Local.xcconfig
 .DS_Store
+# make bench writes its report here.
+bench.json

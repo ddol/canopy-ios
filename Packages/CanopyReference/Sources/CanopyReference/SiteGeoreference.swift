@@ -16,10 +16,19 @@ public struct SiteGeoreference: Sendable {
     public let offset: SIMD2<Double>
     /// RMS residual of the fit, metres.
     public let rms: Double
+    /// What it was fitted from: WGS 84 points and their site-frame x and y.
+    public let samples: [(geo: GeoPoint, site: SIMD2<Double>)]
 
-    public enum FitError: Error, Equatable {
+    public enum FitError: Error, Equatable, LocalizedError {
         case tooFewSamples
         case degenerate
+
+        public var errorDescription: String? {
+            switch self {
+            case .tooFewSamples: "The server could not place enough points in this area on its ground model."
+            case .degenerate: "The server placed points in this area in a line, so they cannot be fitted."
+            }
+        }
     }
 
     /// Fits from pairs of (WGS 84 point, site-frame x and y).
@@ -56,6 +65,7 @@ public struct SiteGeoreference: Sendable {
         self.matrix = matrix
         self.offset = offset
         self.rms = (sum / Double(samples.count)).squareRoot()
+        self.samples = samples
     }
 
     /// Site-frame x and y of a WGS 84 point.
@@ -75,12 +85,15 @@ public struct SiteGeoreference: Sendable {
     }
 
     /// Asks the server for the site positions of points around the origin and fits. Points where the site has no
-    /// ground model (water, gaps) are skipped; at least three, not in a line, must answer.
+    /// ground model (water, gaps) are skipped; at least three, not in a line, must answer. The first six that answer,
+    /// in order, are used; they are asked for six at a time, so it takes a round trip or two rather than six. With a
+    /// `cache`, a site's georeference is fitted once: it depends only on the site frame.
     public static func fetch(
-        for site: Site, client: AlignClient, sensorID: String = "canopy-georef"
+        for site: Site, client: AlignClient, sensorID: String = "canopy-georef", cache: ReferenceCache? = nil
     ) async throws
         -> SiteGeoreference
     {
+        if let kept = cache?.georeference(for: site) { return kept }
         guard let origin = site.frame?.origin else { throw FitError.tooFewSamples }
         let centre = GeoPoint(latitude: origin.latitude, longitude: origin.longitude)
         let frame = LocalFrame(origin: centre)
@@ -91,20 +104,40 @@ public struct SiteGeoreference: Sendable {
                 offsets.append((radius * cos(angle), radius * sin(angle)))
             }
         }
+        let wanted = 6
         var samples: [(geo: GeoPoint, site: SIMD2<Double>)] = []
-        for (east, north) in offsets {
-            let geo = frame.geoPoint(of: ENU(east: east, north: north, up: 0)).point
-            do {
-                let (pose, _) = try await client.poseFromHint(
-                    l16Token: site.l16Token, sensorID: sensorID,
-                    hint: PoseHint(position: GeodeticPosition(latitude: geo.latitude, longitude: geo.longitude)))
-                samples.append((geo, SIMD2(pose.translation.x, pose.translation.y)))
-            } catch let error as GRPCStatusError where error.code == 9 {
-                continue  // FAILED_PRECONDITION: no ground height there
+        for start in stride(from: 0, to: offsets.count, by: wanted) {
+            let batch = Array(offsets.enumerated())[start..<min(offsets.count, start + wanted)]
+            let answers = await withTaskGroup(of: (Int, Result<(GeoPoint, SIMD2<Double>)?, any Error>).self) { group in
+                for (index, (east, north)) in batch {
+                    let geo = frame.geoPoint(of: ENU(east: east, north: north, up: 0)).point
+                    group.addTask {
+                        do {
+                            let (pose, _) = try await client.poseFromHint(
+                                l16Token: site.l16Token, sensorID: sensorID,
+                                hint: PoseHint(
+                                    position: GeodeticPosition(latitude: geo.latitude, longitude: geo.longitude)))
+                            return (index, .success((geo, SIMD2(pose.translation.x, pose.translation.y))))
+                        } catch let error as GRPCStatusError where error.code == 9 {
+                            return (index, .success(nil))  // FAILED_PRECONDITION: no ground height there
+                        } catch {
+                            return (index, .failure(error))
+                        }
+                    }
+                }
+                var answers: [(Int, Result<(GeoPoint, SIMD2<Double>)?, any Error>)] = []
+                for await answer in group { answers.append(answer) }
+                return answers.sorted { $0.0 < $1.0 }.map(\.1)
             }
-            if samples.count >= 6 { break }
+            // In order, as asking one at a time would have: an error after the sixth sample is never reached.
+            for answer in answers where samples.count < wanted {
+                if let sample = try answer.get() { samples.append((geo: sample.0, site: sample.1)) }
+            }
+            if samples.count >= wanted { break }
         }
-        return try SiteGeoreference(origin: centre, samples: samples)
+        let georeference = try SiteGeoreference(origin: centre, samples: samples)
+        cache?.store(georeference, for: site)
+        return georeference
     }
 
     static func solve3(_ a: [[Double]], _ b: [Double]) -> [Double]? {

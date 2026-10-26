@@ -2,7 +2,9 @@ import CanopyDesign
 import CanopyMap
 import CanopyModel
 import CanopyReference
+import CanopyStore
 import Foundation
+import os
 
 /// Where loading aerial trees has got to.
 enum AerialProgress: Equatable {
@@ -16,6 +18,15 @@ enum AerialProgress: Equatable {
     }
 }
 
+/// The clients for one Gerardus server, calling as one player.
+struct GerardusConnection {
+    let url: URL
+    let player: Player
+    let align: AlignClient
+    let map: GerardusMapClient
+    let cache: ReferenceCache?
+}
+
 /// Real tree candidates and scan registration from a Gerardus align server.
 extension AppModel {
     static let attributionKey = "canopy.aerialAttribution"
@@ -24,10 +35,30 @@ extension AppModel {
     var gerardusURL: URL? { serverSettings.endpoint?.url }
 
     /// The align service, calling as the player: the server sends OpenStreetMap only to its admins.
-    var alignClient: AlignClient? { gerardusURL.map { AlignClient(baseURL: $0, player: player) } }
+    var alignClient: AlignClient? { gerardus?.align }
 
     /// The map service, where the shared tree census lives; nil until a server is set.
-    var mapClient: GerardusMapClient? { gerardusURL.map { GerardusMapClient(baseURL: $0, player: player) } }
+    var mapClient: GerardusMapClient? { gerardus?.map }
+
+    /// Aerial data kept on this phone for the server in Settings, so loading an area again costs no download.
+    var referenceCache: ReferenceCache? { gerardus?.cache }
+
+    /// The clients for the server in Settings, calling as the player. Made once per server and player and then
+    /// kept: each client holds a URLSession, so keeping them lets calls reuse connections, and screens can ask for
+    /// them as often as they draw.
+    var gerardus: GerardusConnection? {
+        guard let url = gerardusURL else { return nil }
+        if let kept = gerardusConnection, kept.url == url, kept.player == player { return kept }
+        let connection = GerardusConnection(
+            url: url, player: player, align: AlignClient(baseURL: url, player: player),
+            map: GerardusMapClient(baseURL: url, player: player),
+            cache: Self.isTesting()
+                ? ReferenceCache(
+                    directory: FileManager.default.temporaryDirectory.appending(path: "reference-\(UUID().uuidString)"))
+                : ReferenceCache.caches(for: url))
+        gerardusConnection = connection
+        return connection
+    }
 
     /// Thrown, or shown, when something needs the server and none is set.
     struct NoServerSet: LocalizedError {
@@ -68,26 +99,41 @@ extension AppModel {
             updates.cancel()
         }
         do {
+            let start = ContinuousClock.now
             let result = try await AerialTrees.load(
                 tile: centre.tile, area: area, osm: isAdmin && adminSettings.useOSM, label: "canopy-ggp",
-                client: client
+                client: client, cache: referenceCache
             ) { stageSink.yield($0) }
-            let removed = try await store.replaceCandidates(where: { result.covers($0) }, with: result.candidates)
+            let stored = ContinuousClock.now
+            let replacement = try await store.replaceCandidates(
+                where: { result.covers($0) }, with: result.candidates)
             UserDefaults.standard.set(result.attribution, forKey: Self.attributionKey)
-            aerialReference = Self.reference(result)
+            // Converting the canopy grid and outlines for the map is a few hundred thousand cells: off the main actor.
+            aerialReference = await Task.detached(priority: .userInitiated) { Self.reference(result) }.value
             await refresh()
+            var timed = result
+            timed.timings.append(.init(step: "store", seconds: Self.seconds(ContinuousClock.now - stored)))
+            let timing = Self.describe(timed, total: ContinuousClock.now - start)
+            Self.aerialLog.info("Loaded \(result.candidates.count) trees. \(timing, privacy: .public)")
             let format = QuantityFormat()
             var message =
                 "\(format.count(result.candidates.count)) trees from aerial LiDAR within "
                 + "\(format.length(area.radius, fractionDigits: 0)) of the map centre"
-                + (removed > 0 ? ", replacing \(format.count(removed)) sample candidates." : ".")
+                + (result.fromCache ? ", from data saved on this phone" : "")
+                + Self.describe(replacement)
             if result.osmRefused {
                 message += " The server sends OpenStreetMap only to its admins, so it was left out."
             }
-            if let saved = await saveDetectedTrees(result) {
-                message += " " + saved
+            var detail = ""
+            #if DEBUG || TESTING_TOOLS
+                detail = "\n" + timing
+            #endif
+            // The trees are on the map: say so now, and what the server made of them when it answers.
+            let shown = AerialProgress.done(message + detail)
+            aerial = shown
+            if let saved = await saveDetectedTrees(result), aerial == shown {
+                aerial = .done(message + " " + saved + detail)
             }
-            aerial = .done(message)
             syncSoon(after: .zero)
         } catch let error as AerialTrees.Failure {
             aerial = .failed(error.localizedDescription)
@@ -154,6 +200,40 @@ extension AppModel {
         return MapLayers.Reference(canopies: canopy.map { [$0] } ?? [], lines: lines)
     }
 
+    static let aerialLog = Logger(subsystem: "io.github.ddol.canopy", category: "aerial")
+
+    /// Where a load's time went, for measuring a link: "2.1 s: site 0.12, georeference 0.00, points 1.43 (270,132
+    /// downloaded), detection 0.38, placing 0.01, store 0.16".
+    nonisolated static func describe(_ result: AerialTrees.SiteResult, total: Duration) -> String {
+        let format = QuantityFormat()
+        let steps = result.timings.map { timing in
+            String(format: "%@ %.2f", timing.step, timing.seconds)
+                + (timing.step == "points"
+                    ? " (\(format.count(result.pointCount)) \(result.fromCache ? "saved" : "downloaded"))" : "")
+        }
+        return String(format: "%.1f s: ", seconds(total)) + steps.joined(separator: ", ")
+    }
+
+    nonisolated static func seconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) * 1e-18
+    }
+
+    /// What a load changed among the candidates, ending the sentence: the sample it replaced, or the trees that are new
+    /// or gone since this area was last loaded.
+    nonisolated static func describe(_ replacement: LocalStore.CandidateReplacement) -> String {
+        let format = QuantityFormat()
+        if replacement.samplesGone > 0 {
+            return ", replacing \(format.count(replacement.samplesGone)) sample candidates."
+        }
+        switch (replacement.added, replacement.gone) {
+        case (0, 0): return "."
+        case (let added, 0): return ", \(format.count(added)) of them new."
+        case (0, let gone): return "; \(format.count(gone)) found before are gone."
+        case (let added, let gone):
+            return ", \(format.count(added)) of them new; \(format.count(gone)) found before are gone."
+        }
+    }
+
     nonisolated static func describe(_ stage: AerialTrees.Stage) -> String {
         switch stage {
         case .preparing(let progress) where progress.stage == "aerial" && (0...1).contains(progress.fraction):
@@ -162,6 +242,8 @@ extension AppModel {
             return "Preparing the site on the server…"
         case .downloading(let points):
             return "Downloading \(QuantityFormat().count(points)) aerial points…"
+        case .readingSaved(let points):
+            return "Reading \(QuantityFormat().count(points)) saved aerial points…"
         case .detecting:
             return "Finding trees…"
         case .placing:
@@ -204,7 +286,7 @@ extension AppModel {
         let tile = GeoPoint(latitude: hint.position.latitude, longitude: hint.position.longitude).tile
         progress("Preparing the site…")
         let site: Site
-        if let prepared = try await client.site(tile.token) {
+        if let prepared = try await client.site(tile.token, cache: referenceCache) {
             site = prepared
         } else {
             do {
@@ -213,7 +295,7 @@ extension AppModel {
                 throw AerialTrees.Failure.stillPreparing
             }
         }
-        let georeference = try await SiteGeoreference.fetch(for: site, client: client)
+        let georeference = try await SiteGeoreference.fetch(for: site, client: client, cache: referenceCache)
 
         progress("Uploading \(QuantityFormat().count(points.count)) points…")
         let header = ScanHeader(

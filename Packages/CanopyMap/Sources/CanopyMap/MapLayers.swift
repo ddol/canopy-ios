@@ -179,7 +179,11 @@ public struct MapLayers: Equatable, Sendable {
         }
         let trees =
             shown
-            .sorted { ($0.position.geo.latitude, $0.id.uuidString) > ($1.position.geo.latitude, $1.id.uuidString) }
+            // North first; the id only breaks ties, so its string is made only then.
+            .sorted { a, b in
+                a.position.geo.latitude != b.position.geo.latitude
+                    ? a.position.geo.latitude > b.position.geo.latitude : a.id.uuidString > b.id.uuidString
+            }
             .map { tree in
                 TreeMarker(
                     id: tree.id, location: tree.position.geo, status: tree.displayStatus,
@@ -240,6 +244,13 @@ public struct MapViewport: Equatable, Sendable {
         self.center = center
         self.latitudeDelta = latitudeDelta
         self.longitudeDelta = longitudeDelta
+    }
+
+    /// The square region round a circle of `radius` metres.
+    public init(center: GeoPoint, radius: Double) {
+        self.init(
+            center: center, latitudeDelta: 2 * radius / 110_574,
+            longitudeDelta: 2 * radius / (111_320 * cos(center.latitude * .pi / 180)))
     }
 
     /// The whole of Golden Gate Park, Panhandle included.

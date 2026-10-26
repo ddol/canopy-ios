@@ -4,6 +4,17 @@ import Testing
 @testable import CanopyReference
 
 @Suite struct VectorReferenceTests {
+    @Test func aStreamThatTimesOutSaysTheSiteIsStillBuilding() async throws {
+        for failure: any Error in [URLError(.timedOut), GRPCTransportError.timedOut(seconds: 45)] {
+            let transport = mock(layers: [.footprints, .boxes], messages: [])
+            transport.responses[AlignClient.site + "StreamReference"] = .failure(failure)
+            await #expect(throws: VectorReference.Failure.stillBuilding) {
+                _ = try await VectorReference.load(
+                    token: VectorReference.kirkham9th, client: AlignClient(transport: transport))
+            }
+        }
+    }
+
     private func mock(layers: [ReferenceLayer], messages: [ProtoWriter]) -> MockTransport {
         let transport = MockTransport()
         var info = ProtoWriter()
@@ -102,7 +113,13 @@ import Testing
     }
 
     @Test(.enabled(if: Live.url != nil)) func liveKirkhamVectors() async throws {
-        let reference = try await VectorReference.load(token: VectorReference.kirkham9th, client: Live.client)
+        let reference: VectorReference
+        do {
+            reference = try await VectorReference.load(token: VectorReference.kirkham9th, client: Live.client)
+        } catch VectorReference.Failure.stillBuilding {
+            // A server that has been idle builds the site's model on first asking; it is ready on the next.
+            reference = try await VectorReference.load(token: VectorReference.kirkham9th, client: Live.client)
+        }
         #expect(reference.features.contains { $0.layer == .boxes })
         #expect(reference.features.contains { $0.line.kind == .wallPlane })
         #expect(reference.ground != nil)

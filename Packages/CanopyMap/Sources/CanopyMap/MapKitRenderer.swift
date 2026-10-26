@@ -8,24 +8,29 @@ public struct MapKitRenderer: MapRenderer {
     public init() {}
 
     public func makeBody(
-        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport,
+        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport, focus: MapFocus?,
         onViewportChange: @escaping @MainActor (MapViewport) -> Void
     ) -> some View {
-        MapKitMap(layers: layers, selection: selection, viewport: viewport, onViewportChange: onViewportChange)
+        MapKitMap(
+            layers: layers, selection: selection, viewport: viewport, focus: focus, onViewportChange: onViewportChange
+        )
+        .equatable()
     }
 }
 
 struct MapKitMap: View {
     let layers: MapLayers
+    let focus: MapFocus?
     let onViewportChange: @MainActor (MapViewport) -> Void
     @Binding var selection: UUID?
     @State private var position: MapCameraPosition
 
     init(
-        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport,
+        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport, focus: MapFocus?,
         onViewportChange: @escaping @MainActor (MapViewport) -> Void
     ) {
         self.layers = layers
+        self.focus = focus
         self.onViewportChange = onViewportChange
         self._selection = selection
         self._position = State(initialValue: .region(MKCoordinateRegion(viewport)))
@@ -81,12 +86,27 @@ struct MapKitMap: View {
             MapUserLocationButton()
             MapCompass()
         }
+        .onChange(of: focus) { _, focus in
+            guard let focus else { return }
+            withAnimation { position = .region(MKCoordinateRegion(focus.viewport)) }
+        }
         .onMapCameraChange(frequency: .onEnd) { context in
             let region = context.region
             onViewportChange(
                 MapViewport(
                     center: GeoPoint(latitude: region.center.latitude, longitude: region.center.longitude),
                     latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta))
+        }
+    }
+}
+
+/// Every annotation is a hosted view that MapKit lays out again whenever the map's content is applied, which with
+/// hundreds of trees takes the main thread for seconds. So the map is drawn again only when what it draws changes,
+/// not whenever the screen around it does (a progress message, a banner).
+extension MapKitMap: Equatable {
+    nonisolated static func == (lhs: MapKitMap, rhs: MapKitMap) -> Bool {
+        MainActor.assumeIsolated {
+            lhs.layers == rhs.layers && lhs.focus == rhs.focus && lhs.selection == rhs.selection
         }
     }
 }

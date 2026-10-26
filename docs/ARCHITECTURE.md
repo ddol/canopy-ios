@@ -1,7 +1,8 @@
 # Architecture
 
-Canopy is a SwiftUI app on top of seven local Swift packages. The packages hold the logic and can be tested
-without a device; the app target wires them together and draws the screens.
+Canopy is a SwiftUI app on top of eight local Swift packages, with a ninth (`CanopyHarness`) for tests and tools.
+The packages hold the logic and can be tested without a device; the app target wires them together and draws the
+screens.
 
 ## Layers
 
@@ -40,7 +41,8 @@ where the store, capture, sync and players meet.
 | `CanopyMap` | iOS | `MapLayers`, the `MapRenderer` protocol, `MapKitRenderer`, status presentation (word, icon, tone) |
 | `CanopySync` | iOS, macOS | `GerardusClient` protocol, `FakeGerardusClient`, `SyncCoordinator`; `GerardusEndpoint` and `GerardusStatusClient` for a real server's status page |
 | `CanopyPlayers` | iOS | `PlayerService` (Game Center sign-in, alias, trusted flag) |
-| `CanopyReference` | iOS, macOS | A Gerardus server over gRPC (HTTP/1.1, hand-written protobuf): `AlignClient` (reference data, registration) and `GerardusMapClient` (the shared census, CanopySync's `GerardusClient`); `SiteGeoreference`, `TreeDetector`, `AerialTrees`, `ScanRegistration` / `RegisteredScan` |
+| `CanopyReference` | iOS, macOS | A Gerardus server over gRPC (HTTP/1.1, hand-written protobuf): `AlignClient` (reference data, registration) and `GerardusMapClient` (the shared census, CanopySync's `GerardusClient`); `SiteGeoreference`, `TreeDetector`, `AerialTrees`, `ReferenceCache`, `ScanRegistration` / `RegisteredScan` |
+| `CanopyHarness` | iOS, macOS | Tests and tools only, linked by nothing in the app: a stand-in Gerardus server on loopback with a synthetic park, network profiles, the load benchmark (`canopy-harness`) |
 
 The packages that build on macOS can be tested with `swift test` in a second or two; the full scheme runs
 everything on the simulator.
@@ -62,6 +64,12 @@ everything on the simulator.
 - **Observations are the source of truth.** The store never edits one; the current trees and tags are derived
   from the aerial base layer plus the log, folded once over agreed changesets and once over this device's open
   ones (see [DATA-MODEL.md](DATA-MODEL.md)). Rejected changesets drop their observations from the fold.
+- **Writes cost what they change.** What derivation reads is kept in memory as it is in the database, updated from
+  each write once its transaction commits, and only the candidate, tree and tag rows that changed are written. With a
+  park's worth of candidates (30,000) a tap takes about a tenth of a second rather than seconds. Opening a store
+  rewrites the derived tables only when the schema or `Schema.derivation` has changed since they were written, so
+  launch takes half a second with that many candidates rather than eight; bump `Schema.derivation` when derivation
+  changes what the tables hold.
 - **Evidence is immutable and content-addressed.** A trunk or limb scan is cropped, written as GLB, stored
   under its SHA-256 and referenced by hash from observations and changesets.
 - **Sync goes through one boundary.** `GerardusClient` is the whole contract with a Gerardus server: upload
@@ -129,12 +137,18 @@ are reported. The message definitions come from the server by gRPC reflection. E
 (`AlignClient.Timeouts`: 10 s for single answers, 30 s to prepare a site, 45 s to stream reference layers, 180 s for
 registration) and a call that receives nothing for 30 s fails, so a slow server or link shows an error instead of
 a spinner. The server keeps preparing a site after the call that asked for it gives up, so the app says the area is
-still being prepared and the next try finds it ready.
+still being prepared and the next try finds it ready. The same goes for a site's model: after being idle (or after
+accepting a scan) the server builds it on first asking, which can take a minute or two, so a reference stream that
+goes quiet past its time limit tells the player the server took too long and to try again shortly
+(`AerialTrees.Failure.slowServer`, `VectorReference.Failure.stillBuilding`) rather than "The request timed out". Calls accept gzip (`grpc-encoding: gzip`, decompressed with the
+Compression framework), which saves about a third of a load once the server compresses its answers. The app keeps
+one align client and one map client per server and player (`AppModel.gerardus`), so calls reuse connections.
 
 **Site frame to the map.** `SiteGeoreference` asks the server (`PoseFromHint`) where a handful of WGS 84 points
 around the site land in the site frame and fits an affine map. Across a site this is exact to well under a
 millimetre (the fit's RMS is reported), and it carries the datum shift (about 1.6 m in San Francisco) without any
-projection or datum code in Canopy.
+projection or datum code in Canopy. It asks for six points at a time rather than one by one, so the fit takes a round
+trip or two, and with a cache it is fitted once per site: it depends only on the site frame.
 
 **Real trees.** `AerialTrees.load` prepares the site if needed and streams the canopy classes (unclassified and
 vegetation; 3DEP's San Francisco tiles leave trees unclassified), the DataSF building footprints and the ground
@@ -151,6 +165,9 @@ so edge crowns are whole; the app asks for the map's visible region, at most 150
    maximum goes to the nearest kept top);
 4. buildings (DataSF footprints) are masked out, and tops within 8 m of the data's edge are dropped.
 
+The canopy height model reads the ground under each cell's centre, so detection does not depend on the order the
+points arrive in.
+
 Each tree becomes a `TreeCandidate` with its height, crown radius, a confidence from crown size, height and point
 density, the source for attribution, and an id derived from its position, so loading the area again finds the same
 trees. A result answers for the part of its area inside the site's own 9 tiles (`SiteResult.covers`):
@@ -158,7 +175,27 @@ trees. A result answers for the part of its area inside the site's own 9 tiles (
 already acted on (and dropping a new one within 2.5 m of such a kept one).
 On a site with 26 million points this takes under 2 s including download; the dense groves are somewhat over-split,
 which players correct with Not a tree. The Map tab's Layers menu has **Load real trees in view**, and the map shows
-the data's credits while real trees are loaded. Reducing the data further is on the [backlog](BACKLOG.md).
+the data's credits while real trees are loaded. From a zoomed-out map the load covers only the middle, so the map
+then moves to the loaded area. The result says what changed (the sample it replaced, or trees new or gone since the
+area was last loaded); debug and TestFlight builds add how long each step took, which is also logged. Reducing the
+data further is on the [backlog](BACKLOG.md); [PERFORMANCE.md](PERFORMANCE.md) has the measurements.
+
+**Kept on the phone.** `ReferenceCache` (in Caches, one folder per server, 250 MB, least recently used first)
+keeps every reference stream as it arrived, under the site's `bundle_id` (which changes whenever an input changes)
+and the request: layers, classes, voxel size and circle. A later request is answered from a kept stream whose layers
+and classes include it and whose circle contains it, cut to the request's circle exactly as the server cuts it, so
+detection finds the same trees. A load asks for 10 m more than it needs and keeps that, so a load after a zoom or a
+small nudge needs no download. When no kept stream holds all of an area but some overlap it (a pan), the cache plans
+up to six small circles round what they leave, asks for them at once with the area's ground model, and takes each
+point and outline from the first stream whose circle holds it; it does this only when the circles cost under 60 % of
+the whole. A stream is kept only when every layer sent its completion flag and the load was not cancelled; a stream
+that ends early (HTTP/1.1 hides the server's error) fails the load rather than giving trees from part of the area.
+The ground comes from the server's site model, which changes when it accepts a scan while the bundle does not: kept
+ground records its model, and a load that could reuse it first asks for a few cells of ground to learn the current
+one, downloading the ground again when it has changed. That question gets five seconds: a server still building its
+model would hold up a load from the phone for minutes, so then the kept ground is used and the next load asks again. The site and its georeference are kept too, so a kept area
+loads with `GetSite` and that small probe, or with nothing from the server when it cannot be reached. Settings shows
+the saved data's size and can clear it.
 
 If a server has no ground layer, the ground model is built from the ground and water returns instead (lowest return
 per cell, gaps filled from their neighbours).
@@ -173,10 +210,14 @@ site georeference, and the Census screen uses it instead of GPS for the rest of 
 measurements land with the registration's uncertainty instead of the GPS fix's. A synthetic scan cut from 3DEP with
 a known pose registers back to within 9 mm.
 
-**Tests.** Offline tests cover the codec, framing, the client over a mock transport, the georeference fit, detection
-on a synthetic forest and the scan conventions. `CANOPY_GERARDUS_URL=http://… swift test` in
-`Packages/CanopyReference` also runs the live tests against a server, and `TEST_RUNNER_CANOPY_GERARDUS_URL=…` runs
-the app's live UI test.
+**Tests.** Offline tests cover the codec, framing, gzip, the client over a mock transport, the georeference fit,
+detection on a synthetic forest, the cache's rules and patch planning, and the scan conventions. `CanopyHarness`
+runs the real client over loopback against a stand-in server with a synthetic park whose trees are known (see
+[PERFORMANCE.md](PERFORMANCE.md)): loads are scored against the truth, a cached or pieced-together load must find
+exactly the trees a download does, the calls and bytes of each kind of load are checked, and whole-site detection is
+pinned to a fingerprint. `scripts/test.sh` starts the stand-in for the UI test that loads trees through the app.
+`CANOPY_GERARDUS_URL=http://… swift test` in `Packages/CanopyReference` also runs the live tests against a server,
+and `TEST_RUNNER_CANOPY_GERARDUS_URL=…` runs the app's live UI test.
 
 ## Shared census (Gerardus map service)
 
@@ -208,7 +249,8 @@ them anyway.
 (`AppModel.pullSharedMap`). It follows every tile pulled before, plus the tiles in view when the map shows at most
 400 m from centre to corner. A tile it has never pulled gets a snapshot (`GetTile`); the rest get the ops applied since
 their cursor (`PullChanges`). If the server's log goes backwards (its database was replaced), or an update names a
-tree the device has never seen, the tile gets a fresh snapshot.
+tree the device has never seen, the tile gets a fresh snapshot. Tiles are asked about four at a time (as are their
+open changesets for the review queue), so a sync takes a few round trips rather than two per tile.
 
 Everything lands in one store transaction (`LocalStore.applyShared`), in the `shared` and `shared_tiles` tables.
 Derivation then starts from the shared map, so the server's trees and tags win over the aerial candidates and other
@@ -261,7 +303,9 @@ player shows (`Visibility.statuses`, the chips under the summary bar), tags, rou
 `Reference`, the last loaded area's own data. Renderers implement `MapRenderer`:
 
 - `MapKitRenderer` draws on Apple's map with MapKit for SwiftUI. Each tree is a view, so detected trees are capped
-  (250 to 400, nearest the centre first).
+  (250 to 400, nearest the centre first). MapKit lays out every one of those views whenever the map's content is
+  applied, so the map view is equatable on what it draws (layers, focus, selection) and the rest of the screen
+  changing (a progress message, a banner) leaves it alone.
 - `GerardusRenderer` (Layers → **Gerardus only**) draws with no base map. It is a SwiftUI `Canvas` on a flat
   projection showing only Canopy's own data: the canopy height grid from the aerial point cloud (1 m, light to dark
   green with height), DataSF building outlines, OpenStreetMap roads and paths when an admin loaded them, then the
@@ -284,6 +328,8 @@ site first if needed. It converts them from the site frame to the map with `Site
 Ground, trees and sensor arrows are left out. Both renderers draw them; on Apple's map **Show vectors** turns them
 off. The canopy grid stays on the Gerardus-only map, since SwiftUI's MapKit has no image overlays. The 3D viewer
 (Layers → 3D vectors) is unchanged. Everything loaded lives in memory, merged once into `AppModel.mapReference`.
+
+A screen moves the map with a `MapFocus` request (a region with its own id), which both renderers follow.
 
 A MapLibre Native renderer with offline PMTiles (a Milestone 1 issue) can implement the same protocol without
 changing the screens.

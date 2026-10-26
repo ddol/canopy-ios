@@ -1,3 +1,4 @@
+import CanopyModel
 import Foundation
 import Testing
 
@@ -57,6 +58,27 @@ struct SilentTransport: GRPCTransport {
         #expect(throws: GRPCTransportError.compressedMessage) {
             try other.receive(Data([1, 0, 0, 0, 1, 42]))
         }
+    }
+
+    @Test func aSiteWithoutAerialDataSaysSo() async throws {
+        // As a server with no 3DEP prepares it: a frame and a bundle, no sources, no layer counts.
+        var reply = ProtoWriter()
+        reply.message(1) { site in
+            site.string(1, "8085876c1")
+            site.message(3) { frame in
+                frame.string(2, "8085876c1")
+                frame.message(3, GeodeticPosition(latitude: 37.7697, longitude: -122.4757))
+            }
+            site.string(7, "sha256:empty")
+        }
+        let mock = MockTransport()
+        mock.responses[AlignClient.site + "GetSite"] = .success([reply.data])
+        await #expect(throws: AerialTrees.Failure.noAerialData) {
+            _ = try await AerialTrees.load(
+                tile: try #require(S2CellID(token: "8085876c1")), label: "test", client: AlignClient(transport: mock))
+        }
+        // Without asking where points are on a ground it does not have.
+        #expect(mock.sent.map(\.path) == [AlignClient.site + "GetSite"])
     }
 
     @Test func unpreparedSiteIsNil() async throws {
