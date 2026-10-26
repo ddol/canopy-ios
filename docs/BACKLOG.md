@@ -18,18 +18,32 @@ megabytes per load. Measured against a server on the same LAN, streaming the can
 Preparing a new park site took 15 s on the server; its OSM step took 0.1 s, so the "Preparing the osm data" label
 seen on the phone was a stale progress update (since fixed), not OSM being slow.
 
-To investigate:
+Since then the phone keeps what it loads (an area again, a nudge, a zoom-in or a relaunch costs one small call, a
+pan only what is new, and kept areas load offline), fits the georeference in a round trip or two, and accepts gzip.
+[PERFORMANCE.md](PERFORMANCE.md) has the measurements and a stand-in server to repeat them. Still open:
 
-- **Downsampling.** A coarser voxel (2 m) for detection, or only the top return per cell (a canopy height model built
-  on the server); how much detection quality each costs.
+- **Compression on the server.** The client accepts gzip; tonic's `send_compressed(Gzip)` on the site service would
+  make every load about 30 % smaller (synthetic data; check a real site).
+- **Leaving out intensity.** 12 % of every load, unused by Canopy: a request flag on `StreamReferenceRequest`.
+- **Encoding.** Centimetre int16 offsets per block would halve the points (two thirds with gzip); needs a new message.
+- **Downsampling.** Measured on the synthetic park: 2 m voxels are 38 % of the bytes but most trees found are false
+  (the 0.5 m canopy model is speckled); 1.5 m keeps recall but loses some precision. Only with the detector retuned,
+  and checked on real 3DEP.
 - **What the phone needs at all.** Detection could run on the server, so the phone gets trees rather than points.
   That needs a server API.
-- **Encoding.** Points are float32 x, y, z in the site frame; quantised int16 offsets per block, or compression
-  (the server would have to offer it; the client refuses compressed messages today).
-- **Caching.** Keep the last loaded area's trees, or the points, keyed by the site's `bundle_id`, so reloading the
-  same area costs nothing.
 - **Measuring the real link.** Throughput and latency over Tailscale on cellular in the park, and which step the time
-  goes on, before choosing among the above.
+  goes on: TestFlight builds now show each step's time under a load's result.
+- **The park for offline use.** About 300 MB as sent today; worth it only once the server sends less.
+
+## Map and store with many trees
+
+- **Detected trees as one layer on Apple's map.** Each tree is a hosted SwiftUI view: MapKit takes a second or more
+  of main thread to add a few hundred, and detected trees are capped at 250 to 400. Overlays, or a canvas in step
+  with the camera, with a tap that finds the nearest tree, would lift both (detected trees would lose their
+  accessibility elements).
+- **Incremental derivation.** A tap re-derives the whole census: about 0.1 s with a park's worth of candidates on a
+  2018 Mac. Keeping the base state between writes would make a tap cost only the trees it touches.
+- **The result banner** (result, timings in test builds, Load vectors here, credits) covers a third of a phone's map.
 
 ## The shared census
 

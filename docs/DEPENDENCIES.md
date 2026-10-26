@@ -21,6 +21,7 @@ file.
 | CoreLocation | Device position |
 | CryptoKit | SHA-256 for blob names and aerial tree ids |
 | Foundation (URLSession) | gRPC over HTTP/1.1 to a Gerardus align server; the protobuf codec is hand-written, so there is no gRPC or protobuf library |
+| Compression | Reading gzip-compressed gRPC messages from a Gerardus server (raw DEFLATE; the gzip header and CRC-32 are read by hand) |
 | SQLite3 | The system `libsqlite3` for the local store |
 | CoreText | Registering the bundled font |
 
@@ -49,6 +50,7 @@ These are used to build and check the project. None of them ends up in the app.
 |---|---|---|
 | [XcodeGen](https://github.com/yonaskolb/XcodeGen) | MIT | Generates `Canopy.xcodeproj` from `project.yml`, so the project file is reviewable text and never hand-edited. Installed by `scripts/bootstrap.sh` (Homebrew). |
 | swift-format | Apache-2.0 | Formatting and lint. Ships with the Xcode toolchain (`swift format`), so there is nothing to install. |
+| `Packages/CanopyHarness` | Apache-2.0 (this repository) | The stand-in Gerardus server, synthetic park and benchmarks ([PERFORMANCE.md](PERFORMANCE.md)). Apple's Network framework only; linked by tests and tools, never by the app. |
 
 ## Test data generation
 

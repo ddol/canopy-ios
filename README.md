@@ -63,9 +63,15 @@ Run every test (app, UI and all packages) on the newest available iPhone simulat
 scripts/test.sh
 ```
 
-which is `xcodebuild test -project Canopy.xcodeproj -scheme Canopy -destination 'id=<simulator>'`. The
-packages that do not need UIKit (`CanopyModel`, `CanopyStore`, `CanopySync`, `CanopyCapture`'s geometry) also
+which is `xcodebuild test -project Canopy.xcodeproj -scheme Canopy -destination 'id=<simulator>'`, with a stand-in
+Gerardus server started for the UI test that loads real trees. The packages that do not need UIKit
+(`CanopyModel`, `CanopyStore`, `CanopySync`, `CanopyReference`, `CanopyHarness`, `CanopyCapture`'s geometry) also
 build on macOS, so `swift test` inside one of them is the quickest loop.
+
+Loading real trees can be measured and tried without a server or a park: `make bench` loads a synthetic park with
+known trees from a stand-in server over a loopback link shaped like LAN, LTE or a weak signal, and `make serve` runs
+that server for the app in the simulator (set `127.0.0.1:50099` in Me → Settings). See
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 To run on an iPhone or iPad, or ship to TestFlight or the App Store, see
 [docs/DEVICE-TESTING.md](docs/DEVICE-TESTING.md): set your `DEVELOPMENT_TEAM` in `Configs/Local.xcconfig`
@@ -90,7 +96,8 @@ Packages/
   CanopyMap/         map behind a protocol (MapKit now), layers
   CanopySync/        GerardusClient protocol and an in-memory fake
   CanopyPlayers/     Game Center sign-in wrapper
-  CanopyReference/   Gerardus align client: 3DEP aerial trees, scan registration
+  CanopyReference/   Gerardus align client: 3DEP aerial trees and their cache, scan registration
+  CanopyHarness/     tests and tools: a stand-in Gerardus server with a synthetic park, the load benchmark
 Tests/               app unit tests (Swift Testing) and UI tests (XCTest)
 Configs/             xcconfig files; Local.xcconfig (git-ignored) holds your signing team
 Fixtures/ggp/        sample park boundary, synthetic aerial tree candidates, S2 cells
@@ -105,6 +112,7 @@ scripts/             bootstrap, test, device install, TestFlight upload, fixture
 - [Design tokens](docs/DESIGN-TOKENS.md)
 - [Dependencies](docs/DEPENDENCIES.md)
 - [Testing on a device and TestFlight](docs/DEVICE-TESTING.md)
+- [Performance: loading real trees, measured](docs/PERFORMANCE.md)
 - [Backlog](docs/BACKLOG.md)
 
 ## Contributing
