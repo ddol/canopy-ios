@@ -9,10 +9,11 @@ public struct GerardusRenderer: MapRenderer {
     public init() {}
 
     public func makeBody(
-        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport,
+        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport, focus: MapFocus?,
         onViewportChange: @escaping @MainActor (MapViewport) -> Void
     ) -> some View {
-        GerardusMap(layers: layers, selection: selection, viewport: viewport, onViewportChange: onViewportChange)
+        GerardusMap(
+            layers: layers, selection: selection, viewport: viewport, focus: focus, onViewportChange: onViewportChange)
     }
 }
 
@@ -49,6 +50,7 @@ struct GerardusMap: View {
     static let zoomRange = 0.05...20.0
 
     let layers: MapLayers
+    let focus: MapFocus?
     let onViewportChange: @MainActor (MapViewport) -> Void
     @Binding var selection: UUID?
     @State private var centre: GeoPoint
@@ -61,10 +63,11 @@ struct GerardusMap: View {
     @GestureState private var zoom = 1.0
 
     init(
-        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport,
+        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport, focus: MapFocus?,
         onViewportChange: @escaping @MainActor (MapViewport) -> Void
     ) {
         self.layers = layers
+        self.focus = focus
         self.onViewportChange = onViewportChange
         self._selection = selection
         self._centre = State(initialValue: viewport.center)
@@ -119,6 +122,12 @@ struct GerardusMap: View {
             }
         }
         .background(Color.canopySurface)
+        .onChange(of: focus) { _, focus in
+            guard let focus else { return }
+            centre = focus.viewport.center
+            unfitted = focus.viewport
+            resize(to: size)
+        }
         .onChange(of: layers.reference, initial: true) { _, reference in
             canopies = (reference?.canopies ?? []).map(CanopyImage.make)
         }

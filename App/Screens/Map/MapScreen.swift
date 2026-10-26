@@ -18,6 +18,8 @@ struct MapScreen: View {
     @State private var visibility = MapLayers.Visibility(tags: Features.limbTagging)
     /// The visible region, once the map has reported one; detected trees are drawn only around it.
     @State private var viewport: MapViewport?
+    /// Where to move the map, such as to trees just loaded.
+    @State private var focus: MapFocus?
     @AppStorage("canopy.baseMap") private var baseMap = BaseMap.apple
 
     private let format = QuantityFormat()
@@ -93,6 +95,7 @@ struct MapScreen: View {
         switch baseMap {
         case .apple:
             CanopyMapView(layers: layers, selection: $selection, viewport: viewport ?? .goldenGatePark)
+                .focus(focus)
                 .onViewportChange {
                     viewport = $0
                     model.mapDidSettle($0)
@@ -102,6 +105,7 @@ struct MapScreen: View {
                 renderer: GerardusRenderer(), layers: layers, selection: $selection,
                 viewport: viewport ?? .goldenGatePark
             )
+            .focus(focus)
             .onViewportChange {
                 viewport = $0
                 model.mapDidSettle($0)
@@ -194,7 +198,14 @@ struct MapScreen: View {
             Section("Aerial LiDAR") {
                 Button("Load real trees in view", systemImage: "tree") {
                     let radius = viewport?.cornerDistance ?? AppModel.aerialRadiusLimit
-                    Task { await model.loadAerialTrees(around: centre, radius: radius) }
+                    let centre = centre
+                    Task {
+                        await model.loadAerialTrees(around: centre, radius: radius)
+                        // A zoomed-out map loads only its middle, which would be a dot: go to the trees that came.
+                        if case .done = model.aerial, radius > AppModel.aerialRadiusLimit * 1.5 {
+                            focus = MapFocus(MapViewport(center: centre, radius: AppModel.aerialRadiusLimit * 1.1))
+                        }
+                    }
                 }
                 .disabled(model.aerial.isWorking)
             }

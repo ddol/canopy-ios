@@ -242,6 +242,13 @@ public struct MapViewport: Equatable, Sendable {
         self.longitudeDelta = longitudeDelta
     }
 
+    /// The square region round a circle of `radius` metres.
+    public init(center: GeoPoint, radius: Double) {
+        self.init(
+            center: center, latitudeDelta: 2 * radius / 110_574,
+            longitudeDelta: 2 * radius / (111_320 * cos(center.latitude * .pi / 180)))
+    }
+
     /// The whole of Golden Gate Park, Panhandle included.
     public static let goldenGatePark = MapViewport(
         center: GeoPoint(latitude: 37.7694, longitude: -122.4770),

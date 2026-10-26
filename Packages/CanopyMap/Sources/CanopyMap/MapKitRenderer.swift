@@ -8,24 +8,27 @@ public struct MapKitRenderer: MapRenderer {
     public init() {}
 
     public func makeBody(
-        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport,
+        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport, focus: MapFocus?,
         onViewportChange: @escaping @MainActor (MapViewport) -> Void
     ) -> some View {
-        MapKitMap(layers: layers, selection: selection, viewport: viewport, onViewportChange: onViewportChange)
+        MapKitMap(
+            layers: layers, selection: selection, viewport: viewport, focus: focus, onViewportChange: onViewportChange)
     }
 }
 
 struct MapKitMap: View {
     let layers: MapLayers
+    let focus: MapFocus?
     let onViewportChange: @MainActor (MapViewport) -> Void
     @Binding var selection: UUID?
     @State private var position: MapCameraPosition
 
     init(
-        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport,
+        layers: MapLayers, selection: Binding<UUID?>, viewport: MapViewport, focus: MapFocus?,
         onViewportChange: @escaping @MainActor (MapViewport) -> Void
     ) {
         self.layers = layers
+        self.focus = focus
         self.onViewportChange = onViewportChange
         self._selection = selection
         self._position = State(initialValue: .region(MKCoordinateRegion(viewport)))
@@ -80,6 +83,10 @@ struct MapKitMap: View {
         .mapControls {
             MapUserLocationButton()
             MapCompass()
+        }
+        .onChange(of: focus) { _, focus in
+            guard let focus else { return }
+            withAnimation { position = .region(MKCoordinateRegion(focus.viewport)) }
         }
         .onMapCameraChange(frequency: .onEnd) { context in
             let region = context.region
