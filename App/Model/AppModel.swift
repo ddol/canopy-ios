@@ -168,11 +168,8 @@ final class AppModel {
         summary = await store.summary()
         changesets = (try? await store.changesets()) ?? []
         followedTiles = Set(((try? await store.sharedTiles()) ?? [:]).keys)
-        scanCount = (try? await store.allEvidence().count) ?? 0
-        let candidates = (try? await store.candidates()) ?? []
-        candidateSources = Dictionary(
-            candidates.compactMap { candidate in candidate.source.map { (candidate.id, $0) } },
-            uniquingKeysWith: { first, _ in first })
+        scanCount = (try? await store.evidenceCount()) ?? 0
+        candidateSources = await store.candidateSources()
     }
 
     // MARK: Census actions
