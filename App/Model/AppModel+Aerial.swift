@@ -124,13 +124,16 @@ extension AppModel {
             if result.osmRefused {
                 message += " The server sends OpenStreetMap only to its admins, so it was left out."
             }
-            if let saved = await saveDetectedTrees(result) {
-                message += " " + saved
-            }
+            var detail = ""
             #if DEBUG || TESTING_TOOLS
-                message += "\n" + timing
+                detail = "\n" + timing
             #endif
-            aerial = .done(message)
+            // The trees are on the map: say so now, and what the server made of them when it answers.
+            let shown = AerialProgress.done(message + detail)
+            aerial = shown
+            if let saved = await saveDetectedTrees(result), aerial == shown {
+                aerial = .done(message + " " + saved + detail)
+            }
             syncSoon(after: .zero)
         } catch let error as AerialTrees.Failure {
             aerial = .failed(error.localizedDescription)
