@@ -6,6 +6,10 @@ public final class CountingTransport: GRPCTransport, @unchecked Sendable {
     public let base: any GRPCTransport
     private let lock = NSLock()
     private var counted = StandInServer.Stats()
+    private var keptMessages: [Data] = []
+
+    /// The reference stream messages received since the last reset, to price other encodings of them.
+    public var references: [Data] { lock.withLock { keptMessages } }
 
     public init(_ base: any GRPCTransport) {
         self.base = base
@@ -14,7 +18,10 @@ public final class CountingTransport: GRPCTransport, @unchecked Sendable {
     public var stats: StandInServer.Stats { lock.withLock { counted } }
 
     public func reset() {
-        lock.withLock { counted = StandInServer.Stats() }
+        lock.withLock {
+            counted = StandInServer.Stats()
+            keptMessages = []
+        }
     }
 
     public func call(_ path: String, requests: [Data]) -> AsyncThrowingStream<Data, any Error> {
@@ -26,7 +33,10 @@ public final class CountingTransport: GRPCTransport, @unchecked Sendable {
                 do {
                     for try await message in messages {
                         // The message and its five-byte gRPC frame, as it came (after any decompression).
-                        self.lock.withLock { self.counted.bytes[method, default: 0] += message.count + 5 }
+                        self.lock.withLock {
+                            self.counted.bytes[method, default: 0] += message.count + 5
+                            if method == "StreamReference" { self.keptMessages.append(message) }
+                        }
                         continuation.yield(message)
                     }
                     continuation.finish()

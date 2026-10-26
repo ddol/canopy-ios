@@ -120,6 +120,24 @@ public enum Volume {
         return rows
     }
 
+    /// What gzip, and leaving out intensity, would make of reference messages as a server sent them.
+    public static func encodings(of messages: [Data]) throws -> (sent: Int, gzip: Int, noIntensity: Int, both: Int) {
+        let lean = try messages.map { data -> Data in
+            let message = try ReferenceMessage(serialized: data)
+            guard case .points(let layer, let block) = message.chunk else { return data }
+            var w = ProtoWriter()
+            w.enumValue(1, layer.rawValue)
+            w.message(2, PointBlock(x: block.x, y: block.y, z: block.z, classification: block.classification))
+            w.bool(5, message.complete)
+            return w.data
+        }
+        let sent = messages.reduce(0) { $0 + $1.count + 5 }
+        let gzip = messages.reduce(0) { $0 + Gzip.compress($1).count + 5 }
+        let noIntensity = lean.reduce(0) { $0 + $1.count + 5 }
+        let both = lean.reduce(0) { $0 + Gzip.compress($1).count + 5 }
+        return (sent, gzip, noIntensity, both)
+    }
+
     static func compressed(_ data: Data) -> Int {
         ((try? (data as NSData).compressed(using: .zlib)) as Data?)?.count ?? data.count
     }

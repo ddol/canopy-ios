@@ -47,6 +47,12 @@ logs it (`log stream --predicate 'subsystem == "io.github.ddol.canopy"'`). To pr
 UI automation, which keeps the map's accessibility busy and skews the profile, launch a debug build with
 `-canopy.gerardusURL http://127.0.0.1:50099 -canopy.loadTreesAtLaunch YES` and attach Time Profiler.
 
+**Against the real server.** With `CANOPY_GERARDUS_URL` set, `LiveCacheTests` checks on real 3DEP points at Stow Lake
+that kept, nudged and pieced-together loads find the same trees as a download (positions to a millimetre: the
+server's datum transformation uses today's date, so two georeference fits differ by nanometres). It reads only.
+Measured from the Mac mini over the tailnet, a 150 m load there took 0.4 to 1.1 s from the server and 0.10 s from the
+cache.
+
 **What the tests hold.** `swift test` in `Packages/CanopyHarness` (and the `Canopy` scheme) runs the real client
 against the stand-in:
 
@@ -130,7 +136,8 @@ download before, 1 to 2 % after).
 - **Coarser voxels are not free.** The 0.5 m canopy model grows false tops from sparse points: at 2 m most trees found
   are not trees. Coarser data would need the detector retuned (a coarser model), and checking on real 3DEP.
 - **Compression is one line on the server.** Tonic's `send_compressed(CompressionEncoding::Gzip)` on the site service
-  (with tonic's `gzip` feature) would make every load a third smaller now that the client accepts gzip. Tried with
+  (with tonic's `gzip` feature) would make every load smaller now that the client accepts gzip (a fifth on real data,
+  below). Tried with
   `gerardus serve` built that way: it answers in gzip and the client reads it (a test keeps its bytes). Measured with
   the stand-in compressing, a first load over `cellular` takes 5.1 s instead of 6.6 s.
 - **Intensity** is 12 % of every load and Canopy never reads it: a request flag to leave it out would help, more so
@@ -138,7 +145,9 @@ download before, 1 to 2 % after).
 - **Quantised coordinates** (centimetre offsets per block) would halve the points, two thirds with gzip, but need a
   new message.
 
-These are synthetic numbers; real 3DEP points compress differently, so check against a real site before deciding.
+Those are synthetic. On the real server, the same 150 m load at Stow Lake is 8.8 MB (483,000 points: real 3DEP there
+is about twice as dense as the synthetic park), and `canopy-harness measure` prices it: gzip 80 % of that, without
+intensity 86 %, both 67 %. So compression would save a fifth of a real load, and both changes a third.
 
 ## Still to do
 

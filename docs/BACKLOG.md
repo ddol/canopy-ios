@@ -23,8 +23,9 @@ pan only what is new, and kept areas load offline), fits the georeference in a r
 [PERFORMANCE.md](PERFORMANCE.md) has the measurements and a stand-in server to repeat them. Still open:
 
 - **Compression on the server.** The client accepts gzip; tonic's `send_compressed(Gzip)` on the site service would
-  make every load about 30 % smaller (synthetic data; check a real site).
-- **Leaving out intensity.** 12 % of every load, unused by Canopy: a request flag on `StreamReferenceRequest`.
+  make every load about 20 % smaller (measured on the real Stow Lake stream).
+- **Leaving out intensity.** 14 % of every real load, unused by Canopy: a request flag on `StreamReferenceRequest`.
+  With compression, the two save a third.
 - **Encoding.** Centimetre int16 offsets per block would halve the points (two thirds with gzip); needs a new message.
 - **Downsampling.** Measured on the synthetic park: 2 m voxels are 38 % of the bytes but most trees found are false
   (the 0.5 m canopy model is speckled); 1.5 m keeps recall but loses some precision. Only with the detector retuned,

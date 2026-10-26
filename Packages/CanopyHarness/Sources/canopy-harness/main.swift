@@ -139,6 +139,14 @@ case "measure":
             exit(1)
         }
         let result = loaded
+        if pass == "from the server", let sizes = try? Volume.encodings(of: transport.references) {
+            print(
+                String(
+                    format: "reference stream: %.2f MB as sent; gzip %.0f %%, without intensity %.0f %%, both %.0f %%",
+                    Double(sizes.sent) / 1e6, Double(sizes.gzip) / Double(sizes.sent) * 100,
+                    Double(sizes.noIntensity) / Double(sizes.sent) * 100, Double(sizes.both) / Double(sizes.sent) * 100)
+            )
+        }
         let seconds = (ContinuousClock.now - start).timeInterval
         let steps = result.timings.map { String(format: "%@ %.2f", $0.step, $0.seconds) }.joined(separator: ", ")
         let stats = transport.stats
