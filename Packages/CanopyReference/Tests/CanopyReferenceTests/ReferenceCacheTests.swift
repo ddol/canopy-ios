@@ -90,4 +90,37 @@ import Testing
         #expect(cache.streamBytes == 0)
         #expect(!FileManager.default.fileExists(atPath: streams.appending(path: "orphan.grpc").path))
     }
+
+    /// Every point of the wanted circle is in a kept circle or a patch, whatever the radii (the samples once stopped
+    /// up to a spacing short of the far edge).
+    @Test func patchesLeaveNoGaps() throws {
+        // The case that found it: 2r is not a multiple of the spacing.
+        let wanted = Circle(centre: .zero, radius: 22.45)
+        let kept = Circle(centre: SIMD2(-30, 0), radius: 52)
+        let patches = try #require(ReferencePatches.plan(wanted, kept: [kept], maxShare: 1))
+        #expect(kept.holds(22.4, 0) || patches.contains { $0.holds(22.4, 0) })
+
+        var random = SystemRandomNumberGenerator()
+        for _ in 0..<200 {
+            let r = Float.random(in: 8...200, using: &random)
+            let wanted = Circle(
+                centre: SIMD2(Double.random(in: -50...50, using: &random), Double.random(in: -50...50, using: &random)),
+                radius: r)
+            let offset = Double.random(in: 0...Double(r), using: &random)
+            let angle = Double.random(in: 0..<(2 * .pi), using: &random)
+            let kept = Circle(
+                centre: wanted.centre + SIMD2(cos(angle), sin(angle)) * offset,
+                radius: r + Float.random(in: -5...10, using: &random))
+            guard let patches = ReferencePatches.plan(wanted, kept: [kept], maxShare: 1) else { continue }
+            for ring in stride(from: 0.0, through: 1, by: 0.02) {
+                for step in 0..<180 {
+                    let a = Double(step) * .pi / 90
+                    let p = wanted.centre + SIMD2(cos(a), sin(a)) * Double(r) * ring
+                    let (x, y) = (Float(p.x), Float(p.y))
+                    guard wanted.holds(x, y) else { continue }
+                    #expect(kept.holds(x, y) || patches.contains { $0.holds(x, y) }, "gap at \(p) for r \(r)")
+                }
+            }
+        }
+    }
 }

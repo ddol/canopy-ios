@@ -22,6 +22,31 @@ public final class StandInAlign: @unchecked Sendable {
     /// How long `PrepareSite` takes, in progress steps a tenth of it apart.
     public var preparation: Duration
 
+    /// The site model the ground layer comes from, named in its messages as the real server names it.
+    public var model: String {
+        get { lock.withLock { siteModel.id } }
+        set { lock.withLock { siteModel.id = newValue } }
+    }
+
+    /// Accepts a scan, as an operator would on the real server: the site model, and so the ground, changes while the
+    /// bundle stays the same. Here the ground rises by `raise` metres.
+    public func acceptScan(raise: Float) {
+        lock.withLock {
+            siteModel.id = "model-\(UUID().uuidString.prefix(8))"
+            siteModel.raise += raise
+        }
+    }
+
+    /// Reference streams stop after this many messages, as one does when the server fails part-way: over HTTP/1.1 the
+    /// status is in trailers the client never sees, so the stream just ends. Nil: streams finish.
+    public var cutAfter: Int? {
+        get { lock.withLock { cut } }
+        set { lock.withLock { cut = newValue } }
+    }
+
+    private var siteModel = (id: "model-1", raise: Float(0))
+    private var cut: Int?
+
     private let preparedAtFirst: Bool
     private var prepared: Set<String> = []
     private var others: [String: SyntheticSite] = [:]
@@ -279,21 +304,25 @@ public final class StandInAlign: @unchecked Sendable {
                     }
                 }
             case .groundMesh:
+                let (model, raise) = lock.withLock { (siteModel.id, siteModel.raise) }
                 send(.groundMesh, complete: true) { w in
-                    guard
-                        let crop = site.ground.cropped(centre: centre, radius: radius > 0 ? Double(radius) : .infinity)
-                    else { return }
-                    w.message(7) { h in
-                        h.message(1, crop.origin)
-                        h.float(2, Float(crop.cellSize))
-                        h.uint(3, UInt64(crop.nx))
-                        h.uint(4, UInt64(crop.ny))
-                        h.packedFloats(5, crop.z)
+                    if let crop = site.ground.cropped(centre: centre, radius: radius > 0 ? Double(radius) : .infinity) {
+                        w.message(7) { h in
+                            h.message(1, crop.origin)
+                            h.float(2, Float(crop.cellSize))
+                            h.uint(3, UInt64(crop.nx))
+                            h.uint(4, UInt64(crop.ny))
+                            h.packedFloats(5, crop.z.map { $0 + raise })
+                        }
                     }
+                    w.string(8, model)
                 }
             default:
                 send(layer, complete: true, nil)
             }
+        }
+        if let cut = cutAfter, messages.count > cut {
+            return GRPCReply(events: messages.prefix(cut).map { .init(after: .zero, data: $0) }, status: 13)
         }
         return .messages(messages)
     }

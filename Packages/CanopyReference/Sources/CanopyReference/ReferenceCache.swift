@@ -6,8 +6,11 @@ import Foundation
 /// A site's reference stream is kept as it arrived, under the site's `bundle_id` (which changes whenever any input
 /// changes) and what was asked for: layers, classes, voxel size and the circle. A later request for the same bundle
 /// is answered from a kept stream whose layers and classes include the ones asked for and whose circle contains the
-/// one asked for, cut to that circle exactly as the server cuts it. The site itself is kept too, so a load can go
-/// ahead when the server cannot be reached, and so is the site georeference, which depends only on the site frame.
+/// one asked for, cut to that circle exactly as the server cuts it. Only streams in which every layer finished are
+/// kept. The ground model comes from the server's site model, which changes when it accepts a scan while the bundle
+/// does not, so kept ground is used only when it is the server's current model (`AlignClient.currentModel`), or when
+/// the server cannot be reached. The site itself is kept too, so a load can go ahead when the server cannot be
+/// reached, and so is the site georeference, which depends only on the site frame.
 ///
 /// Streams are evicted least recently used first once they pass `byteLimit` (250 MB unless given). The folder belongs in Caches: the system
 /// may empty it, and everything in it can be downloaded again.
@@ -29,6 +32,9 @@ public final class ReferenceCache: @unchecked Sendable {
         var radius: Float
         var bytes: Int
         var lastUsed: Date
+        /// The site model its ground came from (`ReferenceMessage.modelID`): the ground changes when the server accepts
+        /// a scan, while the bundle stays the same. Nil without ground.
+        var model: String?
     }
 
     private let lock = NSLock()
@@ -115,11 +121,17 @@ public final class ReferenceCache: @unchecked Sendable {
 
     // MARK: Reference streams
 
-    /// A kept stream that answers `request` for the bundle, as its messages and the circle it was kept for.
-    func messages(for request: StreamReferenceRequest, bundleID: String) -> [Data]? {
-        lock.withLock {
+    /// A kept stream that answers `request` for the bundle, as its messages. With a `model`, a request for the ground
+    /// is answered only by a stream whose ground came from that site model.
+    func messages(for request: StreamReferenceRequest, bundleID: String, model: String? = nil) -> [Data]? {
+        let needsModel = model != nil && request.layers.contains(.groundMesh)
+        return lock.withLock {
             var entries = loadIndex()
-            guard let k = entries.firstIndex(where: { Self.entry($0, answers: request, bundleID: bundleID) }) else {
+            guard
+                let k = entries.firstIndex(where: {
+                    Self.entry($0, answers: request, bundleID: bundleID) && (!needsModel || $0.model == model)
+                })
+            else {
                 return nil
             }
             guard let data = try? Data(contentsOf: directory.appending(path: "streams/\(entries[k].file)"))
@@ -159,8 +171,14 @@ public final class ReferenceCache: @unchecked Sendable {
         }
     }
 
-    /// Keeps a complete stream. Streams already kept that this one answers for are dropped.
-    func store(_ messages: [Data], for request: StreamReferenceRequest, bundleID: String) {
+    /// Whether some kept stream answers `request`, whatever site model its ground came from.
+    func holds(_ request: StreamReferenceRequest, bundleID: String) -> Bool {
+        lock.withLock { loadIndex().contains { Self.entry($0, answers: request, bundleID: bundleID) } }
+    }
+
+    /// Keeps a complete stream (every layer asked for finished), whose ground came from `model`. Streams already kept
+    /// that this one answers for are dropped.
+    func store(_ messages: [Data], for request: StreamReferenceRequest, bundleID: String, model: String?) {
         let data = Self.frame(messages)
         guard data.count <= byteLimit else { return }
         lock.withLock {
@@ -170,7 +188,7 @@ public final class ReferenceCache: @unchecked Sendable {
                 layers: Set(request.layers.map(\.rawValue)).sorted(), classes: Set(request.aerialClasses).sorted(),
                 voxel: Self.voxel(request.voxelSize),
                 centre: request.centre.map { SIMD2($0.x, $0.y) } ?? .zero, radius: max(0, request.radius),
-                bytes: data.count, lastUsed: .now)
+                bytes: data.count, lastUsed: .now, model: request.layers.contains(.groundMesh) ? model ?? "" : nil)
             guard write(data, to: "streams/\(entry.file)") else { return }
             // A kept stream for an older bundle of the site, or one this stream covers, is no use any more.
             let stale = entries.filter { old in
@@ -222,7 +240,7 @@ public final class ReferenceCache: @unchecked Sendable {
 
     /// Whether a kept stream holds what `request` asks for wherever their circles overlap.
     static func compatible(_ entry: Entry, _ request: StreamReferenceRequest, _ bundleID: String) -> Bool {
-        guard entry.token == request.l16Token, entry.bundleID == bundleID,
+        guard !request.layers.isEmpty, entry.token == request.l16Token, entry.bundleID == bundleID,
             entry.voxel == voxel(request.voxelSize),
             Set(request.layers.map(\.rawValue)).isSubset(of: entry.layers)
         else { return false }
@@ -313,8 +331,10 @@ extension ReferenceCache.Entry {
 
 extension AlignClient {
     /// Reference layers for a prepared site, from `cache` when it holds them, otherwise from the server, keeping a
-    /// stream that finishes whole. Kept data is cut to the request's circle exactly as the server cuts it, so the
-    /// chunks are the same either way. `fromCache` is told which it was before the first chunk.
+    /// stream in which every layer finished. Kept data is cut to the request's circle exactly as the server cuts it, so
+    /// the chunks are the same either way. `fromCache` is told which it was before the first chunk. A stream that
+    /// ends before every layer has finished (the server stopped part-way; HTTP/1.1 hides why) fails with
+    /// `GRPCTransportError.incomplete` rather than giving trees from part of the points.
     ///
     /// With `padding`, a stream the cache does not hold is asked for `padding` metres wider than `request` and kept
     /// that wide, then cut to `request`: a later request that has moved a few metres is then inside what is kept.
@@ -324,22 +344,33 @@ extension AlignClient {
     ) -> AsyncThrowingStream<ReferenceChunk, any Error> {
         let transport = transport
         let limit = timeouts.reference
+        // The server reads no layers as six of its own choosing: not something to keep.
+        let cache = request.layers.isEmpty ? nil : cache
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    if let cache, let kept = cache.messages(for: request, bundleID: bundleID) {
+                    // Kept ground is the server's current site model, or the server cannot say (offline, older).
+                    var model: String?
+                    if let cache, request.layers.contains(.groundMesh) {
+                        var ground = request
+                        ground.layers = [.groundMesh]
+                        if cache.holds(ground, bundleID: bundleID) { model = await currentModel(request) }
+                    }
+                    if let cache, let kept = cache.messages(for: request, bundleID: bundleID, model: model) {
                         fromCache(true)
                         let cut = ReferenceCut(request)
                         for data in kept {
                             let message = try ReferenceMessage(serialized: data)
-                            guard request.layers.isEmpty || request.layers.contains(message.layer) else { continue }
+                            guard request.layers.contains(message.layer) else { continue }
                             if let chunk = cut.apply(message.chunk) { continuation.yield(chunk) }
                         }
                         continuation.finish()
                         return
                     }
                     fromCache(false)
-                    if let cache, try await composed(request, bundleID: bundleID, cache: cache, into: continuation) {
+                    if let cache,
+                        try await composed(request, bundleID: bundleID, cache: cache, model: model, into: continuation)
+                    {
                         continuation.finish()
                         return
                     }
@@ -347,14 +378,19 @@ extension AlignClient {
                     if cache != nil, padding > 0, request.radius > 0 { fetch.radius += padding }
                     let cut = fetch.radius == request.radius ? nil : ReferenceCut(request)
                     var received: [Data] = []
+                    var finished = StreamCompletion(fetch.layers)
                     for try await data in transport.call(
                         Self.site + "StreamReference", [fetch.serialized], limit: limit)
                     {
+                        let message = try ReferenceMessage(serialized: data)
+                        finished.note(message)
                         if cache != nil { received.append(data) }
-                        let chunk = try ReferenceMessage(serialized: data).chunk
-                        if let chunk = cut.map({ $0.apply(chunk) }) ?? chunk { continuation.yield(chunk) }
+                        if let chunk = cut.map({ $0.apply(message.chunk) }) ?? message.chunk {
+                            continuation.yield(chunk)
+                        }
                     }
-                    cache?.store(received, for: fetch, bundleID: bundleID)
+                    try finished.check()
+                    cache?.store(received, for: fetch, bundleID: bundleID, model: finished.model)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -363,15 +399,69 @@ extension AlignClient {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    /// The site model the server's ground layer comes from now: a few cells of ground round the request's centre,
+    /// which name it. Nil when the server cannot be asked; an older server without site models names none ("").
+    func currentModel(_ request: StreamReferenceRequest) async -> String? {
+        var probe = request
+        probe.layers = [.groundMesh]
+        probe.radius = 1
+        do {
+            for try await data in transport.call(
+                Self.site + "StreamReference", [probe.serialized], limit: timeouts.unary)
+            {
+                let message = try ReferenceMessage(serialized: data)
+                if message.layer == .groundMesh { return message.modelID }
+            }
+        } catch {}
+        return nil
+    }
+
+    /// The messages of one request, checked to have finished every layer.
+    func complete(
+        _ request: StreamReferenceRequest, transport: any GRPCTransport, limit: Duration
+    ) async throws -> (messages: [Data], model: String?) {
+        var messages: [Data] = []
+        var finished = StreamCompletion(request.layers)
+        for try await data in transport.call(Self.site + "StreamReference", [request.serialized], limit: limit) {
+            finished.note(try ReferenceMessage(serialized: data))
+            messages.append(data)
+        }
+        try finished.check()
+        return (messages, finished.model)
+    }
+}
+
+/// Which layers of a stream have finished (the server marks each layer's last message), and the site model its
+/// ground came from.
+struct StreamCompletion {
+    var waiting: Set<ReferenceLayer>
+    var model: String?
+
+    init(_ layers: [ReferenceLayer]) {
+        waiting = Set(layers)
+    }
+
+    mutating func note(_ message: ReferenceMessage) {
+        if message.complete { waiting.remove(message.layer) }
+        if message.layer == .groundMesh { model = message.modelID }
+    }
+
+    /// Throws unless every layer finished; a cancelled task's stream simply ends, so that is checked too.
+    func check() throws {
+        try Task.checkCancellation()
+        guard waiting.isEmpty else { throw GRPCTransportError.incomplete }
+    }
 }
 
 extension AlignClient {
     /// Answers `request` from kept streams that each hold part of it, asking the server only for the rest: a few small
-    /// circles round what no kept stream holds, and the ground model for the whole circle. Each point and line is
-    /// taken from the first stream whose circle holds it, so nothing comes twice and the result is what one request
-    /// would have sent (in another order). False, with nothing sent, when kept streams hold too little to be worth it.
+    /// circles round what no kept stream holds, and the ground model for the whole circle unless it is kept for
+    /// `model`. Each point and line is taken from the first stream whose circle holds it, so nothing comes twice and
+    /// the result is what one request would have sent (in another order). False, with nothing sent, when kept streams
+    /// hold too little to be worth it.
     func composed(
-        _ request: StreamReferenceRequest, bundleID: String, cache: ReferenceCache,
+        _ request: StreamReferenceRequest, bundleID: String, cache: ReferenceCache, model: String?,
         into continuation: AsyncThrowingStream<ReferenceChunk, any Error>.Continuation
     ) async throws -> Bool {
         let kept = cache.overlapping(request, bundleID: bundleID)
@@ -380,7 +470,6 @@ extension AlignClient {
         }
         let transport = transport
         let limit = timeouts.reference
-        let wantsGround = request.layers.contains(.groundMesh)
         var fetched: [(circle: Circle, messages: [Data])] = []
         var ground: [Data] = []
         try await withThrowingTaskGroup(of: (Int, [Data]).self) { group in
@@ -389,30 +478,22 @@ extension AlignClient {
                 part.layers.removeAll { $0 == .groundMesh }
                 part.centre = Vector3(x: patch.centre.x, y: patch.centre.y, z: 0)
                 part.radius = patch.radius
+                guard !part.layers.isEmpty else { continue }
                 group.addTask {
-                    var messages: [Data] = []
-                    for try await data in transport.call(Self.site + "StreamReference", [part.serialized], limit: limit)
-                    {
-                        messages.append(data)
-                    }
-                    cache.store(messages, for: part, bundleID: bundleID)
+                    let (messages, _) = try await complete(part, transport: transport, limit: limit)
+                    cache.store(messages, for: part, bundleID: bundleID, model: nil)
                     return (k, messages)
                 }
             }
-            if wantsGround {
+            if request.layers.contains(.groundMesh) {
                 var only = request
                 only.layers = [.groundMesh]
-                if let held = cache.messages(for: only, bundleID: bundleID) {
+                if let held = cache.messages(for: only, bundleID: bundleID, model: model) {
                     ground = held
                 } else {
                     group.addTask {
-                        var messages: [Data] = []
-                        for try await data in transport.call(
-                            Self.site + "StreamReference", [only.serialized], limit: limit)
-                        {
-                            messages.append(data)
-                        }
-                        cache.store(messages, for: only, bundleID: bundleID)
+                        let (messages, model) = try await complete(only, transport: transport, limit: limit)
+                        cache.store(messages, for: only, bundleID: bundleID, model: model)
                         return (-1, messages)
                     }
                 }
@@ -514,14 +595,17 @@ enum ReferencePatches {
     ) -> [Circle]? {
         let r = Double(wanted.radius)
         let reach = spacing * 0.5.squareRoot()
+        // A centimetre to spare, for points stored as floats.
+        let spare = 0.01
         var open: [SIMD2<Double>] = []
+        // Squares `spacing` wide from -r until they pass +r, so together they cover the whole circle.
         var x = -r
-        while x <= r {
+        while x - spacing / 2 < r {
             var y = -r
-            while y <= r {
+            while y - spacing / 2 < r {
                 let p = wanted.centre + SIMD2(x, y)
                 if wanted.distance(to: p) <= r + reach,
-                    !kept.contains(where: { $0.distance(to: p) + reach <= Double($0.radius) })
+                    !kept.contains(where: { $0.distance(to: p) + reach + spare <= Double($0.radius) })
                 {
                     open.append(p)
                 }

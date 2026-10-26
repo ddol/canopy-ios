@@ -37,7 +37,7 @@ import Testing
         server.resetStats()
         let kept = try await AerialTrees.load(tile: tile, area: inner, label: "test", client: client, cache: cache)
         #expect(kept.fromCache)
-        #expect(server.stats.calls == ["GetSite": 1])
+        #expect(onlyChecked(server.stats))
         let fresh = try await AerialTrees.load(tile: tile, area: inner, label: "test", client: client)
         #expect(!fresh.fromCache)
         #expect(kept.pointCount == fresh.pointCount)
@@ -63,7 +63,7 @@ import Testing
         // The same area again: the site is checked, nothing else.
         server.resetStats()
         _ = try await AerialTrees.load(tile: tile, area: area(0, 0, 150), label: "test", client: client, cache: cache)
-        #expect(server.stats.calls == ["GetSite": 1])
+        #expect(onlyChecked(server.stats))
         #expect(server.stats.totalBytes < 2_000)
 
         // After a relaunch: a new client and a new cache object on the same folder.
@@ -73,14 +73,15 @@ import Testing
         let again = try await AerialTrees.load(
             tile: tile, area: area(0, 0, 100), label: "test", client: client, cache: relaunched)
         #expect(again.fromCache)
-        #expect(server.stats.calls == ["GetSite": 1])
+        #expect(onlyChecked(server.stats))
 
         // Somewhere it has not been: points again, but not the georeference.
         server.resetStats()
         let moved = try await AerialTrees.load(
             tile: tile, area: area(-100, 80, 120), label: "test", client: client, cache: relaunched)
         #expect(!moved.fromCache)
-        #expect(server.stats.calls == ["GetSite": 1, "StreamReference": 1])
+        #expect(server.stats.calls("GetSite") == 1 && server.stats.calls("PoseFromHint") == 0)
+        #expect(server.stats.bytes("StreamReference") > 100_000)
 
         // The whole site answers for every area after it.
         _ = try await AerialTrees.load(tile: tile, label: "test", client: client, cache: relaunched)
@@ -88,7 +89,7 @@ import Testing
         let anywhere = try await AerialTrees.load(
             tile: tile, area: area(150, 150, 60), label: "test", client: client, cache: relaunched)
         #expect(anywhere.fromCache)
-        #expect(server.stats.calls == ["GetSite": 1])
+        #expect(onlyChecked(server.stats))
     }
 
     @Test func aLoadAFewMetresAwayUsesTheKeptPoints() async throws {
@@ -108,7 +109,7 @@ import Testing
         server.resetStats()
         let kept = try await AerialTrees.load(tile: tile, area: nudged, label: "test", client: client, cache: cache)
         #expect(kept.fromCache)
-        #expect(server.stats.calls == ["GetSite": 1])
+        #expect(onlyChecked(server.stats))
         let fresh = try await AerialTrees.load(tile: tile, area: nudged, label: "test", client: client)
         #expect(kept.candidates == fresh.candidates)
         #expect(kept.pointCount == fresh.pointCount)
@@ -189,10 +190,17 @@ import Testing
         #expect(cache.streamBytes == sizes[1] + sizes[2])
         server.resetStats()
         _ = try await AerialTrees.load(tile: tile, area: areas[2], label: "test", client: client, cache: cache)
-        #expect(server.stats.calls("StreamReference") == 0)
+        #expect(onlyChecked(server.stats))
+        server.resetStats()
         _ = try await AerialTrees.load(tile: tile, area: areas[0], label: "test", client: client, cache: cache)
-        #expect(server.stats.calls("StreamReference") == 1)
+        #expect(server.stats.bytes("StreamReference") > 100_000)
     }
+}
+
+/// A load that found everything kept: the site checked, and at most a probe of the site model a few hundred bytes long.
+func onlyChecked(_ stats: StandInServer.Stats) -> Bool {
+    stats.calls("GetSite") == 1 && stats.calls("StreamReference") <= 1 && stats.bytes("StreamReference") < 2_000
+        && stats.totalCalls <= 2
 }
 
 /// Loads that kept circles hold only part of: the rest is asked for in small circles, and the trees are the same.
@@ -238,7 +246,7 @@ import Testing
         server.resetStats()
         let again = try await AerialTrees.load(
             tile: tile, area: area(100, -40, 150), label: "test", client: client, cache: cache)
-        #expect(server.stats.calls == ["GetSite": 1])
+        #expect(onlyChecked(server.stats))
         #expect(again.candidates == fresh.candidates)
     }
 
@@ -256,5 +264,93 @@ import Testing
         // Overlapping a little: not worth piecing together.
         _ = try await AerialTrees.load(tile: tile, area: area(80, 0, 100), label: "test", client: client, cache: cache)
         #expect(server.stats.calls("StreamReference") == 1)
+    }
+}
+
+/// What the cache must never keep or reuse.
+@Suite struct CacheSafetyTests {
+    let site = Shared.site
+    var tile: S2CellID { S2CellID(token: site.token)! }
+
+    func area(_ x: Double, _ y: Double, _ radius: Double) -> AerialTrees.Area {
+        AerialTrees.Area(centre: site.geo(SIMD2(x, y)), radius: radius)
+    }
+
+    func temporaryCache() -> ReferenceCache {
+        ReferenceCache(directory: FileManager.default.temporaryDirectory.appending(path: "cache-\(UUID().uuidString)"))
+    }
+
+    @Test func aStreamCutShortIsNeitherUsedNorKept() async throws {
+        let align = StandInAlign(site: site)
+        let server = StandInServer(align: align)
+        try await server.start()
+        defer { server.stop() }
+        let client = AlignClient(baseURL: server.url)
+        let cache = temporaryCache()
+        defer { cache.removeAll() }
+        // The server fails after two blocks; over HTTP/1.1 the client only sees the stream end.
+        align.cutAfter = 2
+        await #expect(throws: GRPCTransportError.incomplete) {
+            _ = try await AerialTrees.load(
+                tile: tile, area: area(0, 0, 150), label: "test", client: client, cache: cache)
+        }
+        #expect(cache.streamBytes == 0)
+        await #expect(throws: GRPCTransportError.incomplete) {
+            _ = try await AerialTrees.load(tile: tile, area: area(0, 0, 150), label: "test", client: client)
+        }
+        align.cutAfter = nil
+        let whole = try await AerialTrees.load(
+            tile: tile, area: area(0, 0, 150), label: "test", client: client, cache: cache)
+        #expect(!whole.fromCache)
+        #expect(whole.candidates.count > 100)
+    }
+
+    @Test func aCancelledLoadKeepsNothing() async throws {
+        let server = StandInServer(
+            align: StandInAlign(site: site),
+            profile: NetworkProfile(name: "slow", rtt: .zero, bytesPerSecond: 2_000_000))
+        try await server.start()
+        defer { server.stop() }
+        let client = AlignClient(baseURL: server.url)
+        let cache = temporaryCache()
+        defer { cache.removeAll() }
+        let tile = tile
+        let area = area(0, 0, 150)
+        let load = Task {
+            try await AerialTrees.load(tile: tile, area: area, label: "test", client: client, cache: cache)
+        }
+        try await Task.sleep(for: .milliseconds(600))
+        load.cancel()
+        _ = await load.result
+        #expect(cache.streamBytes == 0)
+    }
+
+    @Test func keptGroundFollowsTheSiteModel() async throws {
+        let align = StandInAlign(site: site)
+        let server = StandInServer(align: align)
+        try await server.start()
+        defer { server.stop() }
+        let client = AlignClient(baseURL: server.url)
+        let cache = temporaryCache()
+        defer { cache.removeAll() }
+        let before = try await AerialTrees.load(
+            tile: tile, area: area(60, -40, 150), label: "test", client: client, cache: cache)
+
+        // An operator accepts a scan: the ground model changes; the bundle, and so the points, do not.
+        align.acceptScan(raise: 0.5)
+        server.resetStats()
+        let after = try await AerialTrees.load(
+            tile: tile, area: area(60, -40, 150), label: "test", client: client, cache: cache)
+        let fresh = try await AerialTrees.load(tile: tile, area: area(60, -40, 150), label: "test", client: client)
+        #expect(after.candidates == fresh.candidates)
+        #expect(after.canopy?.heights == fresh.canopy?.heights)
+        #expect(after.candidates.map(\.height) != before.candidates.map(\.height))
+
+        // Only the ground came down again, and now it is kept for the new model.
+        server.resetStats()
+        let again = try await AerialTrees.load(
+            tile: tile, area: area(60, -40, 150), label: "test", client: client, cache: cache)
+        #expect(onlyChecked(server.stats))
+        #expect(again.candidates == fresh.candidates)
     }
 }

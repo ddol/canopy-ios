@@ -105,10 +105,10 @@ public struct SiteGeoreference: Sendable {
             }
         }
         let wanted = 6
-        var answers: [(index: Int, geo: GeoPoint, site: SIMD2<Double>)] = []
+        var samples: [(geo: GeoPoint, site: SIMD2<Double>)] = []
         for start in stride(from: 0, to: offsets.count, by: wanted) {
             let batch = Array(offsets.enumerated())[start..<min(offsets.count, start + wanted)]
-            try await withThrowingTaskGroup(of: (Int, GeoPoint, SIMD2<Double>)?.self) { group in
+            let answers = await withTaskGroup(of: (Int, Result<(GeoPoint, SIMD2<Double>)?, any Error>).self) { group in
                 for (index, (east, north)) in batch {
                     let geo = frame.geoPoint(of: ENU(east: east, north: north, up: 0)).point
                     group.addTask {
@@ -117,20 +117,25 @@ public struct SiteGeoreference: Sendable {
                                 l16Token: site.l16Token, sensorID: sensorID,
                                 hint: PoseHint(
                                     position: GeodeticPosition(latitude: geo.latitude, longitude: geo.longitude)))
-                            return (index, geo, SIMD2(pose.translation.x, pose.translation.y))
+                            return (index, .success((geo, SIMD2(pose.translation.x, pose.translation.y))))
                         } catch let error as GRPCStatusError where error.code == 9 {
-                            return nil  // FAILED_PRECONDITION: no ground height there
+                            return (index, .success(nil))  // FAILED_PRECONDITION: no ground height there
+                        } catch {
+                            return (index, .failure(error))
                         }
                     }
                 }
-                for try await answer in group {
-                    if let answer { answers.append((answer.0, answer.1, answer.2)) }
-                }
+                var answers: [(Int, Result<(GeoPoint, SIMD2<Double>)?, any Error>)] = []
+                for await answer in group { answers.append(answer) }
+                return answers.sorted { $0.0 < $1.0 }.map(\.1)
             }
-            if answers.count >= wanted { break }
+            // In order, as asking one at a time would have: an error after the sixth sample is never reached.
+            for answer in answers where samples.count < wanted {
+                if let sample = try answer.get() { samples.append((geo: sample.0, site: sample.1)) }
+            }
+            if samples.count >= wanted { break }
         }
-        let samples = answers.sorted { $0.index < $1.index }.prefix(wanted).map { (geo: $0.geo, site: $0.site) }
-        let georeference = try SiteGeoreference(origin: centre, samples: Array(samples))
+        let georeference = try SiteGeoreference(origin: centre, samples: samples)
         cache?.store(georeference, for: site)
         return georeference
     }

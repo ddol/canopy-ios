@@ -30,6 +30,8 @@ public enum GRPCTransportError: Error, Equatable, LocalizedError {
     case noResponse
     /// The call ran past its time limit and was cancelled.
     case timedOut(seconds: Int)
+    /// A reference stream ended before every layer had finished.
+    case incomplete
 
     public var errorDescription: String? {
         switch self {
@@ -38,6 +40,7 @@ public enum GRPCTransportError: Error, Equatable, LocalizedError {
         case .compressedMessage: "The server sent a message compressed in a way Canopy cannot read."
         case .noResponse: "The server closed the call without an answer."
         case .timedOut(let seconds): "The server did not finish within \(seconds)\u{202F}s."
+        case .incomplete: "The server stopped before sending all of the area. Try again."
         }
     }
 }
