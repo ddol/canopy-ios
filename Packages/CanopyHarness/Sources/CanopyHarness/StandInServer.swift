@@ -81,6 +81,7 @@ public final class StandInServer: @unchecked Sendable {
     public var url: URL { URL(string: "http://127.0.0.1:\(port)")! }
 
     private let handler: Handler
+    private let started = Date()
     private let queue = DispatchQueue(label: "canopy.harness.server")
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: Connection] = [:]
@@ -169,6 +170,14 @@ public final class StandInServer: @unchecked Sendable {
     fileprivate func respond(to request: HTTPRequest, on connection: Connection, firstOnConnection: Bool) {
         let method = request.path.split(separator: "/").last.map(String.init) ?? request.path
         counted.calls[method, default: 0] += 1
+        let start = DispatchTime.now() + link.profile.rtt.timeInterval * (firstOnConnection ? 2 : 1)
+        if request.method == "GET" {
+            let page = Self.statusPage(started: started)
+            let head =
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: \(page.count)\r\n\r\n"
+            connection.send([Data(head.utf8) + page], at: start, count: { _ in })
+            return
+        }
         // gRPC framing: one flag byte, a big-endian length, the message. Requests carry one message here.
         var message: [UInt8] = []
         if request.body.count >= 5 {
@@ -176,8 +185,6 @@ public final class StandInServer: @unchecked Sendable {
             if request.body.count >= 5 + length { message = Array(request.body[5..<(5 + length)]) }
         }
         let reply = handler(request.path, message)
-        let start =
-            DispatchTime.now() + link.profile.rtt.timeInterval * (firstOnConnection ? 2 : 1)
 
         if reply.events.isEmpty {
             let status = reply.status == 0 ? GRPCStatusError.unimplemented : reply.status

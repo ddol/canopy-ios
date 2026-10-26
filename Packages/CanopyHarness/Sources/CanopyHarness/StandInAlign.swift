@@ -2,31 +2,55 @@ import CanopyModel
 import CanopyReference
 import Foundation
 
-/// The align service (`gerardus.align.v1alpha1`) for one synthetic site, answering as the Rust server does: the same
+/// The align service (`gerardus.align.v1alpha1`) for synthetic sites, answering as the Rust server does: the same
 /// messages, the same layer order and block size, intensity included, and the same status codes. Field numbers
-/// follow `AlignMessages.swift`.
+/// follow `AlignMessages.swift`. With `anywhere`, any tile asked about gets a synthetic site of its own (made the
+/// first time, with the same seed), so the app can load trees wherever its map is.
 public final class StandInAlign: @unchecked Sendable {
+    /// The site for `site.token`.
     public let site: SyntheticSite
+    public let anywhere: Bool
     /// The real server's block size when the request names none.
     public static let pointsPerMessage = 65_536
     static let verticesPerMessage = 60_000
 
     /// Whether `GetSite` finds the site; `PrepareSite` prepares it.
     public var isPrepared: Bool {
-        get { lock.withLock { prepared } }
-        set { lock.withLock { prepared = newValue } }
+        get { isPrepared(site.token) }
+        set { lock.withLock { if newValue { prepared.insert(site.token) } else { prepared.remove(site.token) } } }
     }
     /// How long `PrepareSite` takes, in progress steps a tenth of it apart.
     public var preparation: Duration
 
-    private var prepared: Bool
-    private var thinned: [Int: SyntheticSite.Points] = [:]
+    private let preparedAtFirst: Bool
+    private var prepared: Set<String> = []
+    private var others: [String: SyntheticSite] = [:]
+    private var thinned: [String: SyntheticSite.Points] = [:]
     private let lock = NSLock()
 
-    public init(site: SyntheticSite, prepared: Bool = true, preparation: Duration = .seconds(1)) {
+    public init(
+        site: SyntheticSite, prepared: Bool = true, preparation: Duration = .seconds(1), anywhere: Bool = false
+    ) {
         self.site = site
-        self.prepared = prepared
+        self.preparedAtFirst = prepared
         self.preparation = preparation
+        self.anywhere = anywhere
+    }
+
+    func isPrepared(_ token: String) -> Bool {
+        lock.withLock { preparedAtFirst || prepared.contains(token) }
+    }
+
+    /// The site for a tile, if this server has one.
+    func site(_ token: String) -> SyntheticSite? {
+        guard let cell = S2CellID(token: token), cell.level >= S2CellID.tileLevel else { return nil }
+        let tile = cell.parent(level: S2CellID.tileLevel).token
+        if tile == site.token { return site }
+        guard anywhere else { return nil }
+        if let made = lock.withLock({ others[tile] }) { return made }
+        let made = SyntheticSite(token: tile)
+        lock.withLock { others[tile] = made }
+        return made
     }
 
     /// Answers one call.
@@ -43,27 +67,32 @@ public final class StandInAlign: @unchecked Sendable {
         case "ListSites":
             guard isPrepared else { return .messages([Data()]) }
             var w = ProtoWriter()
-            w.message(1) { encodeSite(to: &$0) }
+            w.message(1) { encode(site, to: &$0) }
             return .messages([w.data])
         case "GetSite":
-            guard fields.first(where: { $0.number == 1 })?.string == site.token else {
-                return .status(GRPCStatusError.notFound, "site is not prepared; call PrepareSite")
-            }
-            guard isPrepared else {
-                return .status(GRPCStatusError.notFound, "site \(site.token) is not prepared; call PrepareSite")
+            let token = fields.first { $0.number == 1 }?.string ?? ""
+            guard let site = site(token), isPrepared(site.token) else {
+                return .status(GRPCStatusError.notFound, "site \(token) is not prepared; call PrepareSite")
             }
             var w = ProtoWriter()
-            w.message(1) { encodeSite(to: &$0) }
+            w.message(1) { encode(site, to: &$0) }
             return .messages([w.data])
         case "PrepareSite":
-            return prepare()
+            let token = fields.first { $0.number == 1 }?.string ?? ""
+            guard let site = site(token) else { return .status(3, "no aerial data for \(token)") }
+            return prepare(site)
         case "StreamReference":
-            guard isPrepared else {
-                return .status(GRPCStatusError.notFound, "site \(site.token) is not prepared; call PrepareSite")
+            let token = fields.first { $0.number == 1 }?.string ?? ""
+            guard let site = site(token), isPrepared(site.token) else {
+                return .status(GRPCStatusError.notFound, "site \(token) is not prepared; call PrepareSite")
             }
-            return stream(fields)
+            return stream(site, fields)
         case "PoseFromHint":
-            return pose(fields)
+            let token = fields.first { $0.number == 1 }?.string ?? ""
+            guard let site = site(token), isPrepared(site.token) else {
+                return .status(9, "site \(token) is not prepared; call PrepareSite")
+            }
+            return pose(site, fields)
         default:
             return .status(GRPCStatusError.unimplemented, "\(path) is not implemented by the stand-in")
         }
@@ -71,7 +100,7 @@ public final class StandInAlign: @unchecked Sendable {
 
     // MARK: Sites
 
-    func encodeSite(to w: inout ProtoWriter) {
+    func encode(_ site: SyntheticSite, to w: inout ProtoWriter) {
         w.string(1, site.token)
         w.string(2, "canopy-harness")
         w.message(3) { f in
@@ -110,10 +139,10 @@ public final class StandInAlign: @unchecked Sendable {
         w.string(7, site.bundleID)
     }
 
-    func prepare() -> GRPCReply {
-        if isPrepared {
+    func prepare(_ site: SyntheticSite) -> GRPCReply {
+        if isPrepared(site.token) {
             var ready = ProtoWriter()
-            ready.message(2) { encodeSite(to: &$0) }
+            ready.message(2) { encode(site, to: &$0) }
             return .messages([ready.data])
         }
         var events: [GRPCReply.Event] = []
@@ -129,11 +158,12 @@ public final class StandInAlign: @unchecked Sendable {
         }
         // The site is ready once the last step has passed, whether or not the caller is still listening.
         let delay = preparation
+        let token = site.token
         DispatchQueue.global().asyncAfter(deadline: .now() + delay.timeInterval) { [weak self] in
-            self?.isPrepared = true
+            self?.lock.withLock { _ = self?.prepared.insert(token) }
         }
         var ready = ProtoWriter()
-        ready.message(2) { encodeSite(to: &$0) }
+        ready.message(2) { encode(site, to: &$0) }
         events.append(.init(after: preparation, data: ready.data))
         return GRPCReply(events: events)
     }
@@ -142,10 +172,11 @@ public final class StandInAlign: @unchecked Sendable {
 
     /// The points thinned to `voxel` metres, keeping the first return in each voxel. The site is made at 1 m, so finer
     /// voxels give the 1 m points.
-    func points(voxel: Float) -> SyntheticSite.Points {
+    func points(_ site: SyntheticSite, voxel: Float) -> SyntheticSite.Points {
         let key = Int((max(1, voxel) * 100).rounded())
         if key == 100 { return site.points }
-        if let cached = lock.withLock({ thinned[key] }) { return cached }
+        let name = "\(site.token)/\(key)"
+        if let cached = lock.withLock({ thinned[name] }) { return cached }
         let size = Float(key) / 100
         let all = site.points
         var seen = Set<SIMD3<Int32>>()
@@ -161,11 +192,11 @@ public final class StandInAlign: @unchecked Sendable {
             out.classification.append(all.classification[k])
             out.intensity.append(all.intensity[k])
         }
-        lock.withLock { thinned[key] = out }
+        lock.withLock { thinned[name] = out }
         return out
     }
 
-    func stream(_ fields: [ProtoField]) -> GRPCReply {
+    func stream(_ site: SyntheticSite, _ fields: [ProtoField]) -> GRPCReply {
         var layers: [ReferenceLayer] = []
         var centre = SIMD2(0.0, 0.0)
         var radius: Float = 0
@@ -174,8 +205,6 @@ public final class StandInAlign: @unchecked Sendable {
         var per = 0
         for f in fields {
             switch f.number {
-            case 1:
-                guard f.string == site.token else { return .status(GRPCStatusError.notFound, "no such site") }
             case 2: layers += ((try? f.varints()) ?? []).compactMap { ReferenceLayer(rawValue: Int($0)) }
             case 3:
                 let v = Vector3(fields: (try? ProtoReader.fields(f.bytes)) ?? [])
@@ -209,7 +238,7 @@ public final class StandInAlign: @unchecked Sendable {
         for layer in layers {
             switch layer {
             case .aerialPoints:
-                let all = points(voxel: voxel)
+                let all = points(site, voxel: voxel)
                 var block = PointBlock()
                 func flush(complete: Bool) {
                     let full = block
@@ -251,7 +280,9 @@ public final class StandInAlign: @unchecked Sendable {
                 }
             case .groundMesh:
                 send(.groundMesh, complete: true) { w in
-                    guard let crop = self.crop(centre: centre, radius: Double(radius)) else { return }
+                    guard
+                        let crop = site.ground.cropped(centre: centre, radius: radius > 0 ? Double(radius) : .infinity)
+                    else { return }
                     w.message(7) { h in
                         h.message(1, crop.origin)
                         h.float(2, Float(crop.cellSize))
@@ -267,33 +298,9 @@ public final class StandInAlign: @unchecked Sendable {
         return .messages(messages)
     }
 
-    /// The ground model cut to the square round a circle, as the server crops it; the whole model for no radius.
-    func crop(centre: SIMD2<Double>, radius: Double) -> Heightfield? {
-        let g = site.ground
-        guard radius > 0 else { return g }
-        let i0 = max(0, Int(((centre.x - radius - g.origin.x) / g.cellSize).rounded(.down)))
-        let j0 = max(0, Int(((centre.y - radius - g.origin.y) / g.cellSize).rounded(.down)))
-        let i1 = min(g.nx - 1, Int(((centre.x + radius - g.origin.x) / g.cellSize).rounded(.up)))
-        let j1 = min(g.ny - 1, Int(((centre.y + radius - g.origin.y) / g.cellSize).rounded(.up)))
-        guard i0 <= i1, j0 <= j1 else { return nil }
-        let nx = i1 - i0 + 1
-        let ny = j1 - j0 + 1
-        var z = [Float](repeating: .nan, count: nx * ny)
-        for j in 0..<ny {
-            for i in 0..<nx { z[j * nx + i] = g.z[(j + j0) * g.nx + i + i0] }
-        }
-        return Heightfield(
-            origin: Vector3(
-                x: g.origin.x + Double(i0) * g.cellSize, y: g.origin.y + Double(j0) * g.cellSize, z: 0),
-            cellSize: g.cellSize, nx: nx, ny: ny, z: z)
-    }
-
     // MARK: Poses
 
-    func pose(_ fields: [ProtoField]) -> GRPCReply {
-        guard fields.first(where: { $0.number == 1 })?.string == site.token else {
-            return .status(9, "site is not prepared; call PrepareSite")
-        }
+    func pose(_ site: SyntheticSite, _ fields: [ProtoField]) -> GRPCReply {
         guard let sensor = fields.first(where: { $0.number == 2 })?.string, !sensor.isEmpty else {
             return .status(3, "sensor_id is required")
         }

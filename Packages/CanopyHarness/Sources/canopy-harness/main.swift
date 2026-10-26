@@ -1,6 +1,9 @@
 import CanopyHarness
 import Foundation
 
+// Line by line, so a script reading the output sees each line as it is printed.
+setvbuf(stdout, nil, _IOLBF, 0)
+
 // canopy-harness serve  — a stand-in Gerardus server with a synthetic park, for the simulator or a phone.
 // canopy-harness bench  — measure loading real trees under each network profile, and the work on the phone.
 // See docs/PERFORMANCE.md.
@@ -49,11 +52,12 @@ func shell(_ command: String) -> String {
 switch command {
 case "serve":
     let site = SyntheticSite()
-    let align = StandInAlign(site: site, prepared: !flag("--unprepared"), preparation: .seconds(8))
-    let server = StandInServer(align: align, profile: profile(named: option("--profile") ?? "loopback"))
+    let align = StandInAlign(site: site, prepared: !flag("--unprepared"), preparation: .seconds(8), anywhere: true)
+    let server = StandInServer(
+        align: align, map: StandInMap(), profile: profile(named: option("--profile") ?? "loopback"))
     try await server.start(port: UInt16(option("--port") ?? "50099") ?? 50099, anyInterface: flag("--any-interface"))
     print("Serving \(site.token) (\(site.trees.count) trees, \(site.points.count) points) at \(server.url)")
-    print("Link: \(server.profile). Set it in Canopy → Me → Settings; the site is at Stow Lake. Ctrl-C stops.")
+    print("Link: \(server.profile). Set it in Canopy → Me → Settings. Every tile has a synthetic site. Ctrl-C stops.")
     while true {
         try await Task.sleep(for: .seconds(30))
         let stats = server.stats
