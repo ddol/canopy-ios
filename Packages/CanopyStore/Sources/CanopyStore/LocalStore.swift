@@ -149,6 +149,13 @@ public actor LocalStore {
         /// Candidates there before that are not there now, and how many of those were the made-up sample.
         public var gone: Int
         public var samplesGone: Int
+
+        public init(replaced: Int, added: Int, gone: Int, samplesGone: Int) {
+            self.replaced = replaced
+            self.added = added
+            self.gone = gone
+            self.samplesGone = samplesGone
+        }
     }
 
     /// Replaces the candidates in an area (where `covers` is true) with new ones, such as the aerial trees found there,

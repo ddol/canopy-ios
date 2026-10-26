@@ -108,7 +108,8 @@ extension AppModel {
             let replacement = try await store.replaceCandidates(
                 where: { result.covers($0) }, with: result.candidates)
             UserDefaults.standard.set(result.attribution, forKey: Self.attributionKey)
-            aerialReference = Self.reference(result)
+            // Converting the canopy grid and outlines for the map is a few hundred thousand cells: off the main actor.
+            aerialReference = await Task.detached(priority: .userInitiated) { Self.reference(result) }.value
             await refresh()
             var timed = result
             timed.timings.append(.init(step: "store", seconds: Self.seconds(ContinuousClock.now - stored)))
