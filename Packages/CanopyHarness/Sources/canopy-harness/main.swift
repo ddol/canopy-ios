@@ -12,6 +12,7 @@ let usage = """
     usage: canopy-harness serve [--port 50099] [--profile loopback|lan|cellular|poor] [--any-interface] [--unprepared]
            canopy-harness bench [--profiles loopback,lan,cellular,poor] [--out report.json] [--compare base.json]
                                 [--loads-only | --work-only] [--no-cache]
+           canopy-harness volume
     """
 
 guard CommandLine.arguments.count > 1 else {
@@ -101,6 +102,11 @@ case "bench":
         let before = try decoder.decode(Bench.Report.self, from: Data(contentsOf: URL(fileURLWithPath: base)))
         print(Bench.compare(before, report))
     }
+
+case "volume":
+    let site = SyntheticSite()
+    print("What a 150 m area costs to download, and what detection finds, on the synthetic site:\n")
+    print(Volume.table(try Volume.rows(site: site)))
 
 default:
     print(usage)

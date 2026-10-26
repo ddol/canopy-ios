@@ -194,3 +194,67 @@ import Testing
         #expect(server.stats.calls("StreamReference") == 1)
     }
 }
+
+/// Loads that kept circles hold only part of: the rest is asked for in small circles, and the trees are the same.
+@Suite struct ComposedLoadTests {
+    let site = Shared.site
+    var tile: S2CellID { S2CellID(token: site.token)! }
+
+    func area(_ x: Double, _ y: Double, _ radius: Double) -> AerialTrees.Area {
+        AerialTrees.Area(centre: site.geo(SIMD2(x, y)), radius: radius)
+    }
+
+    @Test func aPannedLoadAsksOnlyForWhatIsNew() async throws {
+        let server = StandInServer(align: StandInAlign(site: site))
+        try await server.start()
+        defer { server.stop() }
+        let client = AlignClient(baseURL: server.url)
+        let cache = ReferenceCache(
+            directory: FileManager.default.temporaryDirectory.appending(path: "cache-\(UUID().uuidString)"))
+        defer { cache.removeAll() }
+        _ = try await AerialTrees.load(
+            tile: tile, area: area(60, -40, 150), label: "test", client: client, cache: cache)
+        server.resetStats()
+        _ = try await AerialTrees.load(tile: tile, area: area(100, -40, 150), label: "test", client: client)
+        let whole = server.stats.bytes("StreamReference")
+
+        // Panned 40 m east: the kept circle holds most of it.
+        server.resetStats()
+        let panned = try await AerialTrees.load(
+            tile: tile, area: area(100, -40, 150), label: "test", client: client, cache: cache)
+        let composed = server.stats
+        print("PANNED \(composed.bytes("StreamReference")) of \(whole) bytes in \(composed.calls) calls")
+        #expect(composed.bytes("StreamReference") * 2 < whole)
+        #expect(composed.calls("StreamReference") >= 2)  // patches and the ground
+
+        // The same trees as one request for it all.
+        let fresh = try await AerialTrees.load(tile: tile, area: area(100, -40, 150), label: "test", client: client)
+        #expect(panned.pointCount == fresh.pointCount)
+        #expect(panned.candidates == fresh.candidates)
+        #expect(panned.canopy?.heights == fresh.canopy?.heights)
+        #expect(Set(panned.lines.map(\.featureID)) == Set(fresh.lines.map(\.featureID)))
+
+        // And now that area is all kept.
+        server.resetStats()
+        let again = try await AerialTrees.load(
+            tile: tile, area: area(100, -40, 150), label: "test", client: client, cache: cache)
+        #expect(server.stats.calls == ["GetSite": 1])
+        #expect(again.candidates == fresh.candidates)
+    }
+
+    @Test func farAwayIsOneRequest() async throws {
+        let server = StandInServer(align: StandInAlign(site: site))
+        try await server.start()
+        defer { server.stop() }
+        let client = AlignClient(baseURL: server.url)
+        let cache = ReferenceCache(
+            directory: FileManager.default.temporaryDirectory.appending(path: "cache-\(UUID().uuidString)"))
+        defer { cache.removeAll() }
+        _ = try await AerialTrees.load(
+            tile: tile, area: area(-100, 0, 100), label: "test", client: client, cache: cache)
+        server.resetStats()
+        // Overlapping a little: not worth piecing together.
+        _ = try await AerialTrees.load(tile: tile, area: area(80, 0, 100), label: "test", client: client, cache: cache)
+        #expect(server.stats.calls("StreamReference") == 1)
+    }
+}

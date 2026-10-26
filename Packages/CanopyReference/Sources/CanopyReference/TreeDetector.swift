@@ -130,9 +130,14 @@ public struct TreeDetector: Sendable {
                 let i = Int((px - area.x.lowerBound) / cellSize)
                 let j = Int((py - area.y.lowerBound) / cellSize)
                 let index = j * nx + i
+                // The ground under the cell's centre, so a cell's height does not depend on which return came first.
                 var g = groundCache[index]
                 if g.isNaN {
-                    guard let h = ground.height(x: px, y: py) else { continue }
+                    guard
+                        let h = ground.height(
+                            x: area.x.lowerBound + (Double(i) + 0.5) * cellSize,
+                            y: area.y.lowerBound + (Double(j) + 0.5) * cellSize)
+                    else { continue }
                     g = Float(h)
                     groundCache[index] = g
                 }

@@ -125,6 +125,31 @@ public final class ReferenceCache: @unchecked Sendable {
         }
     }
 
+    /// Kept streams that hold part of what `request` asks for: the same site, bundle and voxels, the layers (but the
+    /// ground model, which is not cut into parts) and classes asked for, and a circle that overlaps the request's. Each
+    /// comes with its circle.
+    func overlapping(_ request: StreamReferenceRequest, bundleID: String) -> [(circle: Circle, messages: [Data])] {
+        guard request.radius > 0 else { return [] }
+        let wanted = Circle(request)
+        var parts = request
+        parts.layers.removeAll { $0 == .groundMesh }
+        return lock.withLock {
+            var entries = loadIndex()
+            var out: [(Circle, [Data])] = []
+            for k in entries.indices where entries[k].radius > 0 && Self.compatible(entries[k], parts, bundleID) {
+                let circle = Circle(entries[k].request)
+                guard circle.overlaps(wanted),
+                    let data = try? Data(contentsOf: directory.appending(path: "streams/\(entries[k].file)")),
+                    let messages = Self.unframe(data)
+                else { continue }
+                entries[k].lastUsed = .now
+                out.append((circle, messages))
+            }
+            saveIndex(entries)
+            return out
+        }
+    }
+
     /// Keeps a complete stream. Streams already kept that this one answers for are dropped.
     func store(_ messages: [Data], for request: StreamReferenceRequest, bundleID: String) {
         let data = Self.frame(messages)
@@ -178,6 +203,16 @@ public final class ReferenceCache: @unchecked Sendable {
 
     /// Whether a kept stream holds everything `request` asks for.
     static func entry(_ entry: Entry, answers request: StreamReferenceRequest, bundleID: String) -> Bool {
+        guard compatible(entry, request, bundleID) else { return false }
+        guard entry.radius > 0 else { return true }
+        guard request.radius > 0 else { return false }
+        let centre = request.centre.map { SIMD2($0.x, $0.y) } ?? .zero
+        let d = centre - entry.centre
+        return (d * d).sum().squareRoot() + Double(request.radius) <= Double(entry.radius)
+    }
+
+    /// Whether a kept stream holds what `request` asks for wherever their circles overlap.
+    static func compatible(_ entry: Entry, _ request: StreamReferenceRequest, _ bundleID: String) -> Bool {
         guard entry.token == request.l16Token, entry.bundleID == bundleID,
             entry.voxel == voxel(request.voxelSize),
             Set(request.layers.map(\.rawValue)).isSubset(of: entry.layers)
@@ -189,11 +224,7 @@ public final class ReferenceCache: @unchecked Sendable {
         } else if request.aerialClasses.contains(where: { $0 == 7 || $0 == 18 }) {
             return false  // noise is never in a stream that asked for no classes
         }
-        guard entry.radius > 0 else { return true }
-        guard request.radius > 0 else { return false }
-        let centre = request.centre.map { SIMD2($0.x, $0.y) } ?? .zero
-        let d = centre - entry.centre
-        return (d * d).sum().squareRoot() + Double(request.radius) <= Double(entry.radius)
+        return true
     }
 
     // MARK: Files
@@ -288,6 +319,10 @@ extension AlignClient {
                         return
                     }
                     fromCache(false)
+                    if let cache, try await composed(request, bundleID: bundleID, cache: cache, into: continuation) {
+                        continuation.finish()
+                        return
+                    }
                     var fetch = request
                     if cache != nil, padding > 0, request.radius > 0 { fetch.radius += padding }
                     let cut = fetch.radius == request.radius ? nil : ReferenceCut(request)
@@ -307,6 +342,207 @@ extension AlignClient {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+}
+
+extension AlignClient {
+    /// Answers `request` from kept streams that each hold part of it, asking the server only for the rest: a few small
+    /// circles round what no kept stream holds, and the ground model for the whole circle. Each point and line is
+    /// taken from the first stream whose circle holds it, so nothing comes twice and the result is what one request
+    /// would have sent (in another order). False, with nothing sent, when kept streams hold too little to be worth it.
+    func composed(
+        _ request: StreamReferenceRequest, bundleID: String, cache: ReferenceCache,
+        into continuation: AsyncThrowingStream<ReferenceChunk, any Error>.Continuation
+    ) async throws -> Bool {
+        let kept = cache.overlapping(request, bundleID: bundleID)
+        guard !kept.isEmpty, let patches = ReferencePatches.plan(Circle(request), kept: kept.map(\.circle)) else {
+            return false
+        }
+        let transport = transport
+        let limit = timeouts.reference
+        let wantsGround = request.layers.contains(.groundMesh)
+        var fetched: [(circle: Circle, messages: [Data])] = []
+        var ground: [Data] = []
+        try await withThrowingTaskGroup(of: (Int, [Data]).self) { group in
+            for (k, patch) in patches.enumerated() {
+                var part = request
+                part.layers.removeAll { $0 == .groundMesh }
+                part.centre = Vector3(x: patch.centre.x, y: patch.centre.y, z: 0)
+                part.radius = patch.radius
+                group.addTask {
+                    var messages: [Data] = []
+                    for try await data in transport.call(Self.site + "StreamReference", [part.serialized], limit: limit)
+                    {
+                        messages.append(data)
+                    }
+                    cache.store(messages, for: part, bundleID: bundleID)
+                    return (k, messages)
+                }
+            }
+            if wantsGround {
+                var only = request
+                only.layers = [.groundMesh]
+                if let held = cache.messages(for: only, bundleID: bundleID) {
+                    ground = held
+                } else {
+                    group.addTask {
+                        var messages: [Data] = []
+                        for try await data in transport.call(
+                            Self.site + "StreamReference", [only.serialized], limit: limit)
+                        {
+                            messages.append(data)
+                        }
+                        cache.store(messages, for: only, bundleID: bundleID)
+                        return (-1, messages)
+                    }
+                }
+            }
+            var parts: [Int: [Data]] = [:]
+            for try await (k, messages) in group {
+                if k < 0 { ground = messages } else { parts[k] = messages }
+            }
+            fetched = patches.indices.map { (patches[$0], parts[$0] ?? []) }
+        }
+
+        let sources = kept + fetched
+        let cut = ReferenceCut(request)
+        var lines: [LineFeature] = []
+        var linesLayer = ReferenceLayer.footprints
+        for (k, source) in sources.enumerated() {
+            let earlier = sources[..<k].map(\.circle)
+            for data in source.messages {
+                let message = try ReferenceMessage(serialized: data)
+                guard request.layers.contains(message.layer), message.layer != .groundMesh else { continue }
+                switch cut.apply(message.chunk) {
+                case .points(let layer, let block):
+                    let keep = (0..<block.count).filter { i in
+                        !earlier.contains { $0.holds(block.x[i], block.y[i]) }
+                    }
+                    if keep.count == block.count {
+                        continuation.yield(.points(layer, block))
+                    } else if !keep.isEmpty {
+                        continuation.yield(.points(layer, block.subset(keep)))
+                    }
+                case .lines(let layer, let more):
+                    linesLayer = layer
+                    lines += more.filter { line in
+                        !earlier.contains { circle in
+                            stride(from: 0, to: line.xyz.count / 3 * 3, by: 3).contains {
+                                circle.holds(line.xyz[$0], line.xyz[$0 + 1])
+                            }
+                        }
+                    }
+                default:
+                    break
+                }
+            }
+        }
+        if !lines.isEmpty { continuation.yield(.lines(linesLayer, lines)) }
+        for data in ground {
+            let message = try ReferenceMessage(serialized: data)
+            guard message.layer == .groundMesh else { continue }
+            if let chunk = cut.apply(message.chunk) { continuation.yield(chunk) }
+        }
+        return true
+    }
+}
+
+/// A circle in a site frame, as a request names it: the radius is the request's float, so holding a point is the
+/// same test the server makes.
+struct Circle: Equatable, Sendable {
+    var centre: SIMD2<Double>
+    var radius: Float
+
+    init(centre: SIMD2<Double>, radius: Float) {
+        self.centre = centre
+        self.radius = radius
+    }
+
+    init(_ request: StreamReferenceRequest) {
+        centre = request.centre.map { SIMD2($0.x, $0.y) } ?? .zero
+        radius = request.radius
+    }
+
+    func holds(_ x: Float, _ y: Float) -> Bool {
+        let dx = Double(x) - centre.x
+        let dy = Double(y) - centre.y
+        return dx * dx + dy * dy <= Double(radius) * Double(radius)
+    }
+
+    func distance(to p: SIMD2<Double>) -> Double {
+        let d = p - centre
+        return (d * d).sum().squareRoot()
+    }
+
+    func overlaps(_ other: Circle) -> Bool {
+        distance(to: other.centre) < Double(radius) + Double(other.radius)
+    }
+
+    var area: Double { .pi * Double(radius) * Double(radius) }
+}
+
+/// Plans the requests that, with kept circles, cover a wanted one.
+enum ReferencePatches {
+    /// Circles to ask for so that, with `kept`, every point of `wanted` is in some circle: empty when the kept ones
+    /// already cover it between them, nil when the part they leave would cost nearly as much as asking for it all.
+    ///
+    /// The wanted circle is sampled every `spacing` metres; a sample counts as kept when the square round it lies
+    /// inside a kept circle. What is left is grouped on a grid and each group gets the smallest circle round its
+    /// squares, the grid growing until there are at most `maxPatches`.
+    static func plan(
+        _ wanted: Circle, kept: [Circle], spacing: Double = 5, maxPatches: Int = 6, maxShare: Double = 0.6
+    ) -> [Circle]? {
+        let r = Double(wanted.radius)
+        let reach = spacing * 0.5.squareRoot()
+        var open: [SIMD2<Double>] = []
+        var x = -r
+        while x <= r {
+            var y = -r
+            while y <= r {
+                let p = wanted.centre + SIMD2(x, y)
+                if wanted.distance(to: p) <= r + reach,
+                    !kept.contains(where: { $0.distance(to: p) + reach <= Double($0.radius) })
+                {
+                    open.append(p)
+                }
+                y += spacing
+            }
+            x += spacing
+        }
+        guard !open.isEmpty else { return [] }
+        var cell = 40.0
+        while cell <= 2 * r + spacing {
+            var groups: [SIMD2<Int>: [SIMD2<Double>]] = [:]
+            for p in open {
+                let d = (p - wanted.centre) / cell
+                groups[SIMD2(Int(d.x.rounded(.down)), Int(d.y.rounded(.down))), default: []].append(p)
+            }
+            if groups.count <= maxPatches {
+                let patches = groups.keys.sorted { ($0.x, $0.y) < ($1.x, $1.y) }.map { key in
+                    let points = groups[key]!
+                    let low = points.reduce(SIMD2(Double.infinity, .infinity)) { pointwiseMin($0, $1) }
+                    let high = points.reduce(SIMD2(-Double.infinity, -.infinity)) { pointwiseMax($0, $1) }
+                    let centre = (low + high) / 2
+                    let radius = points.map { (($0 - centre) * ($0 - centre)).sum().squareRoot() }.max()! + reach + 0.5
+                    return Circle(centre: centre, radius: Float(radius.rounded(.up)))
+                }
+                return patches.reduce(0) { $0 + $1.area } <= maxShare * wanted.area ? patches : nil
+            }
+            cell *= 1.5
+        }
+        return nil
+    }
+}
+
+extension PointBlock {
+    /// The points at `indices`, with whatever per-point fields the block has.
+    func subset(_ indices: [Int]) -> PointBlock {
+        var out = PointBlock(
+            x: indices.map { x[$0] }, y: indices.map { y[$0] }, z: indices.map { z[$0] })
+        if classification.count == count { out.classification = indices.map { classification[$0] } }
+        if intensity.count == count { out.intensity = indices.map { intensity[$0] } }
+        if confidence.count == count { out.confidence = indices.map { confidence[$0] } }
+        return out
     }
 }
 

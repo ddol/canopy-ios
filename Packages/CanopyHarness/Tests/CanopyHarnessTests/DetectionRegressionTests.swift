@@ -61,6 +61,6 @@ import Testing
         #expect(Self.fingerprint(chm) == Self.canopy)
     }
 
-    static let trees = "1865 15336.7500 -9360.2500 46288.1554 7581.6807 1676.3800 573807.0000"
-    static let canopy = "899×899 5681594.374"
+    static let trees = "1864 15502.0000 -9682.5000 46262.7812 7578.9299 1675.5200 573750.0000"
+    static let canopy = "899×899 5681597.397"
 }
