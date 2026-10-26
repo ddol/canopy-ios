@@ -11,7 +11,7 @@ setvbuf(stdout, nil, _IOLBF, 0)
 let usage = """
     usage: canopy-harness serve [--port 50099] [--profile loopback|lan|cellular|poor] [--any-interface] [--unprepared]
            canopy-harness bench [--profiles loopback,lan,cellular,poor] [--out report.json] [--compare base.json]
-                                [--loads-only | --work-only] [--no-cache]
+                                [--loads-only | --work-only] [--no-cache] [--gzip]
            canopy-harness volume
     """
 
@@ -78,7 +78,8 @@ case "bench":
         for name in names {
             let p = profile(named: name)
             print("Loads over \(p)")
-            loads += try await Bench.loads(site: site, profile: p, cached: !flag("--no-cache"), log: { print($0) })
+            loads += try await Bench.loads(
+                site: site, profile: p, cached: !flag("--no-cache"), compressed: flag("--gzip"), log: { print($0) })
         }
     }
     if !flag("--loads-only") {

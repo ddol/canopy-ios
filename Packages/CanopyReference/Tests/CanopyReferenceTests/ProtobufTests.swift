@@ -79,3 +79,26 @@ import Testing
         #expect(field.height(x: -5, y: 0) == nil)
     }
 }
+
+@Suite struct GzipTests {
+    @Test func roundTripsAndChecksItsCRC() throws {
+        var random = SystemRandomNumberGenerator()
+        for size in [0, 1, 100, 70_000] {
+            let data = Data((0..<size).map { _ in UInt8.random(in: 0...20, using: &random) })
+            #expect(try Gzip.decompress(Gzip.compress(data)) == data)
+        }
+        var damaged = Gzip.compress(Data(repeating: 7, count: 1000))
+        damaged[damaged.count - 6] ^= 0xFF  // the CRC
+        #expect(throws: Gzip.Failure.corrupt) { try Gzip.decompress(damaged) }
+        #expect(throws: Gzip.Failure.notGzip) { try Gzip.decompress(Data("hello, not gzip at all".utf8)) }
+    }
+
+    /// `gzip -c` of "canopy\n", as a real gzip writes it: a file name and a modification time in the header.
+    @Test func readsWhatGzipWrites() throws {
+        let file = Data([
+            0x1F, 0x8B, 0x08, 0x08, 0xD4, 0xF8, 0xDE, 0x6A, 0x00, 0x03, 0x63, 0x00, 0x4B, 0x4E, 0xCC, 0xCB,
+            0x2F, 0xA8, 0xE4, 0x02, 0x00, 0x71, 0x38, 0x04, 0xEB, 0x07, 0x00, 0x00, 0x00,
+        ])
+        #expect(try Gzip.decompress(file) == Data("canopy\n".utf8))
+    }
+}

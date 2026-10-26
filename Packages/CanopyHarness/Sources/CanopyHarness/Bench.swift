@@ -72,9 +72,10 @@ public enum Bench {
     /// false). A step with a new client also gets a new cache object on the same folder, as after a relaunch.
     public static func loads(
         site: SyntheticSite, profile: NetworkProfile, steps: [Step] = Bench.steps, cached: Bool = true,
-        log: (String) -> Void = { _ in }
+        compressed: Bool = false, log: (String) -> Void = { _ in }
     ) async throws -> [Load] {
         let server = StandInServer(align: StandInAlign(site: site), profile: profile)
+        server.compresses = compressed
         try await server.start()
         defer { server.stop() }
         let folder = FileManager.default.temporaryDirectory.appending(path: "canopy-bench-\(UUID().uuidString)")
@@ -97,7 +98,8 @@ public enum Bench {
             let seconds = stages.elapsed
             let stats = server.stats
             let load = Load(
-                scenario: step.name, profile: profile.name, seconds: seconds, stages: stages.marks, calls: stats.calls,
+                scenario: step.name, profile: profile.name + (compressed ? "+gzip" : ""), seconds: seconds,
+                stages: stages.marks, calls: stats.calls,
                 bytes: stats.totalBytes, connections: stats.connections, points: result.pointCount,
                 candidates: result.candidates.count,
                 score: DetectionScore(candidates: result.candidates, site: site, covers: result.covers))

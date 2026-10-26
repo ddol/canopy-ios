@@ -35,7 +35,7 @@ public enum GRPCTransportError: Error, Equatable, LocalizedError {
         switch self {
         case .http(let code): "The server answered with HTTP \(code)."
         case .notGRPC(let type): "The server did not answer with gRPC (\(type))."
-        case .compressedMessage: "The server sent a compressed message, which Canopy does not support."
+        case .compressedMessage: "The server sent a message compressed in a way Canopy cannot read."
         case .noResponse: "The server closed the call without an answer."
         case .timedOut(let seconds): "The server did not finish within \(seconds)\u{202F}s."
         }
@@ -67,6 +67,8 @@ public enum GerardusIdentity {
 /// gRPC over HTTP/1.1 with URLSession, which cannot speak cleartext HTTP/2. The Gerardus align server accepts
 /// HTTP/1.1. HTTP/1.1 trailers are not visible to URLSession, so a status the server sends after messages is
 /// lost; a failure before any message arrives in the headers ("trailers-only") and is reported.
+///
+/// Calls accept gzip: a server that compresses its answers (`grpc-encoding: gzip`) sends a third or so less.
 public final class URLSessionGRPCTransport: GRPCTransport {
     public let baseURL: URL
     /// Request metadata sent with every call, such as the player's identity (`GerardusIdentity`).
@@ -98,7 +100,7 @@ public final class URLSessionGRPCTransport: GRPCTransport {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = "POST"
         request.setValue("application/grpc", forHTTPHeaderField: "Content-Type")
-        request.setValue("identity", forHTTPHeaderField: "grpc-accept-encoding")
+        request.setValue("gzip, identity", forHTTPHeaderField: "grpc-accept-encoding")
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
@@ -126,6 +128,8 @@ public final class URLSessionGRPCTransport: GRPCTransport {
     final class Call {
         let continuation: AsyncThrowingStream<Data, any Error>.Continuation
         var buffer = Data()
+        /// The server's `grpc-encoding`, which compressed messages are in.
+        var encoding = "identity"
 
         init(continuation: AsyncThrowingStream<Data, any Error>.Continuation) {
             self.continuation = continuation
@@ -138,8 +142,16 @@ public final class URLSessionGRPCTransport: GRPCTransport {
                 let compressed = buffer[start]
                 let length = buffer[(start + 1)..<(start + 5)].reduce(0) { $0 << 8 | Int($1) }
                 guard buffer.count >= 5 + length else { return }
-                guard compressed == 0 else { throw GRPCTransportError.compressedMessage }
-                continuation.yield(Data(buffer[(start + 5)..<(start + 5 + length)]))
+                let message = Data(buffer[(start + 5)..<(start + 5 + length)])
+                switch (compressed, encoding) {
+                case (0, _): continuation.yield(message)
+                case (1, "gzip"):
+                    guard let plain = try? Gzip.decompress(message) else {
+                        throw GRPCTransportError.compressedMessage
+                    }
+                    continuation.yield(plain)
+                default: throw GRPCTransportError.compressedMessage
+                }
                 buffer.removeSubrange(start..<(start + 5 + length))
             }
         }
@@ -200,6 +212,9 @@ public final class URLSessionGRPCTransport: GRPCTransport {
                 finish(id, error: GRPCTransportError.notGRPC(type))
                 completionHandler(.cancel)
                 return
+            }
+            if let encoding = http.value(forHTTPHeaderField: "grpc-encoding") {
+                call(id)?.encoding = encoding
             }
             completionHandler(.allow)
         }

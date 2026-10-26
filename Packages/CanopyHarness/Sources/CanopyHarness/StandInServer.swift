@@ -73,6 +73,13 @@ public final class StandInServer: @unchecked Sendable {
 
     public typealias Handler = @Sendable (_ path: String, _ request: [UInt8]) -> GRPCReply
 
+    /// Whether answers are compressed with gzip for clients that accept it, as a server with compression on does.
+    public var compresses: Bool {
+        get { queue.sync { compressing } }
+        set { queue.sync { compressing = newValue } }
+    }
+    private var compressing = false
+
     public var profile: NetworkProfile {
         get { queue.sync { link.profile } }
         set { queue.sync { link.profile = newValue } }
@@ -196,14 +203,19 @@ public final class StandInServer: @unchecked Sendable {
                 [Data(head.utf8)], at: start, count: { [weak self] in self?.counted.bytes[method, default: 0] += $0 })
             return
         }
-        let head = "HTTP/1.1 200 OK\r\ncontent-type: application/grpc\r\ntransfer-encoding: chunked\r\n\r\n"
+        // Compressed as tonic's send_compressed(Gzip) would, when asked to and the client accepts it.
+        let gzip = compressing && (request.headers["grpc-accept-encoding"] ?? "").contains("gzip")
+        let head =
+            "HTTP/1.1 200 OK\r\ncontent-type: application/grpc\r\ntransfer-encoding: chunked\r\n"
+            + (gzip ? "grpc-encoding: gzip\r\n" : "") + "\r\n"
         connection.send([Data(head.utf8)], at: start, count: { _ in })
         for event in reply.events {
-            var frame = Data(capacity: event.data.count + 16)
-            frame.append(contentsOf: Array(String(event.data.count + 5, radix: 16).utf8))
-            frame.append(contentsOf: [13, 10, 0])
-            withUnsafeBytes(of: UInt32(event.data.count).bigEndian) { frame.append(contentsOf: $0) }
-            frame.append(event.data)
+            let payload = gzip ? Gzip.compress(event.data) : event.data
+            var frame = Data(capacity: payload.count + 16)
+            frame.append(contentsOf: Array(String(payload.count + 5, radix: 16).utf8))
+            frame.append(contentsOf: [13, 10, gzip ? 1 : 0])
+            withUnsafeBytes(of: UInt32(payload.count).bigEndian) { frame.append(contentsOf: $0) }
+            frame.append(payload)
             frame.append(contentsOf: [13, 10])
             connection.send(
                 Self.slices(frame), at: start + event.after.timeInterval,

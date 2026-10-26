@@ -109,3 +109,26 @@ enum Shared {
         #expect(elapsed >= Double(bytes) / 1_000_000 * 0.9)
     }
 }
+
+@Suite struct CompressionTests {
+    @Test func aServerThatCompressesSendsLessAndTheTreesAreTheSame() async throws {
+        let site = Shared.site
+        let tile = try #require(S2CellID(token: site.token))
+        let area = AerialTrees.Area(centre: site.geo(SIMD2(60, -40)), radius: 150)
+        let server = StandInServer(align: StandInAlign(site: site))
+        try await server.start()
+        defer { server.stop() }
+        let plain = try await AerialTrees.load(
+            tile: tile, area: area, label: "test", client: AlignClient(baseURL: server.url))
+        let plainBytes = server.stats.bytes("StreamReference")
+
+        server.compresses = true
+        server.resetStats()
+        let compressed = try await AerialTrees.load(
+            tile: tile, area: area, label: "test", client: AlignClient(baseURL: server.url))
+        let compressedBytes = server.stats.bytes("StreamReference")
+        print("GZIP \(compressedBytes) of \(plainBytes) bytes")
+        #expect(compressedBytes * 10 < plainBytes * 8)
+        #expect(compressed.candidates == plain.candidates)
+    }
+}
