@@ -12,7 +12,8 @@ public enum LocalStoreError: Error, Equatable {
 /// those.
 ///
 /// Every write re-derives the current state (`CensusState.derive`) and brings the `trees` and `tags` tables up to
-/// date in the same transaction, so the tables always match the log. Opening a store re-derives too.
+/// date in the same transaction, so the tables always match the log. Opening a store re-derives too, and rewrites
+/// those tables only when the schema or the derivation has changed since they were written (`Schema.derived`).
 ///
 /// What derivation reads (the candidates, the shared map, the log and the changesets' states) is kept in memory as it
 /// is in the database, so a write decodes only what it adds, and only the rows of trees and tags that changed are
@@ -74,7 +75,15 @@ public actor LocalStore {
         self.db = db
         self.inputs = try Self.readInputs(db)
         self.current = Self.derive(inputs)
-        try Self.materialize(current, replacing: nil, in: db)
+        // Every write keeps the tables in step, so they need writing again only when what writes them has changed:
+        // with a park's worth of trees that is seconds at launch.
+        if try Self.derivedStamp(db) != Schema.derived {
+            let current = current
+            try db.transaction {
+                try Self.materialize(current, replacing: nil, in: db)
+                try Self.stampDerived(db)
+            }
+        }
     }
 
     // MARK: Reading
@@ -392,6 +401,7 @@ public actor LocalStore {
             let inputs = try Self.readInputs(db)
             let state = Self.derive(inputs)
             try Self.materialize(state, replacing: nil, in: db)
+            try Self.stampDerived(db)
             return (inputs, state)
         }
         self.inputs = inputs
@@ -419,6 +429,7 @@ public actor LocalStore {
         sortedCandidates = nil
         decodedChangesets = nil
         try Self.materialize(current, replacing: nil, in: db)
+        try Self.stampDerived(db)
     }
 
     // MARK: Internals
@@ -441,6 +452,15 @@ public actor LocalStore {
         }
         self.inputs = inputs
         current = next
+    }
+
+    /// What wrote the `trees` and `tags` tables last, or nil before any stamp.
+    static func derivedStamp(_ db: SQLiteDatabase) throws -> String? {
+        try db.query("SELECT value FROM store_meta WHERE key = 'derived'") { $0.string(0) }.first
+    }
+
+    private static func stampDerived(_ db: SQLiteDatabase) throws {
+        try db.run("INSERT OR REPLACE INTO store_meta (key, value) VALUES ('derived', ?)", [.text(Schema.derived)])
     }
 
     private static func readInputs(_ db: SQLiteDatabase) throws -> Inputs {
@@ -701,7 +721,21 @@ enum Schema {
             synced_at INTEGER NOT NULL
         );
         """,
+        // 4: what wrote the derived tables, so opening a store rewrites them only when that changes.
+        """
+        CREATE TABLE store_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """,
     ]
+
+    /// Bump when `CensusState.derive` or `LocalStore.materialize` changes what the `trees` and `tags` tables hold:
+    /// every store then rewrites them once, when it is next opened.
+    static let derivation = 1
+
+    /// The stamp of the tables as this version writes them.
+    static var derived: String { "schema \(migrations.count), derivation \(derivation)" }
 
     static func migrate(_ db: SQLiteDatabase) throws {
         let version = try db.userVersion

@@ -136,3 +136,39 @@ extension LocalStore {
         }
     }
 }
+
+/// Opening a store writes the derived tables only when what writes them has changed.
+@Suite struct OpeningTests {
+    @Test func reopeningLeavesTheTablesAloneUnlessTheDerivationChanged() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "opening-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let candidates = (0..<50).map { k in
+            TreeCandidate(
+                id: UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", k))!,
+                location: GeoPoint(latitude: 37.769 + Double(k) * 1e-4, longitude: -122.477), confidence: 0.8,
+                isSynthetic: false)
+        }
+        let store = try LocalStore(directory: folder)
+        try await store.importCandidates(candidates)
+        #expect(try await store.tableCount("trees") == 50)
+        #expect(try await store.derived() == Schema.derived)
+
+        // Rows lost behind the store's back stay lost on reopening: it did not rewrite the tables.
+        try await store.execute("DELETE FROM trees")
+        let reopened = try LocalStore(directory: folder)
+        #expect(try await reopened.tableCount("trees") == 0)
+        #expect(await reopened.state().trees.count == 50)
+
+        // A store written by an older derivation (or none) is rewritten once.
+        try await reopened.execute("UPDATE store_meta SET value = 'schema 4, derivation 0'")
+        let upgraded = try LocalStore(directory: folder)
+        #expect(try await upgraded.tableCount("trees") == 50)
+        #expect(try await upgraded.derived() == Schema.derived)
+    }
+}
+
+extension LocalStore {
+    func derived() throws -> String? {
+        try Self.derivedStamp(databaseForTesting)
+    }
+}

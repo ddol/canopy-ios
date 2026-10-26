@@ -87,6 +87,7 @@ Over `poor` the same area again went from 22 s to 0.4 s, and a 40 m pan from 21 
 | Load an area into the store, with 2,000 / 30,000 candidates | 0.7 s / 7.3 s | 17 ms / 156 ms |
 | One Confirm tap, with 2,000 / 30,000 candidates | 0.5 s / 4.6 s | 12 ms / 99 ms |
 | Read the candidates (each refresh did), 30,000 | 514 ms | none: kept decoded |
+| Open the store at launch, with 2,000 / 30,000 candidates | 0.5 s / 8.2 s | 35 ms / 0.55 s |
 
 In the simulator, a Release build loading 571 trees spent 8.0 s of main-thread time before and 2.6 s after: the map
 no longer lays out every tree annotation again on each progress message (30 to 40 % of the main thread during the
@@ -101,7 +102,8 @@ download before, 1 to 2 % after).
   player, so connections are reused (screens used to make a URLSession on every draw).
 - **Detection**: the canopy model built once rather than twice, no allocation per cell, classes as a bitmask, ground
   read at cell centres (so the result does not depend on point order).
-- **The store** keeps what derivation reads in memory and writes only the rows that change.
+- **The store** keeps what derivation reads in memory and writes only the rows that change, and on opening rewrites
+  the derived tables only when the schema or the derivation has changed (`Schema.derived`).
 - **The map** draws again only when what it shows changes, and moves to the trees a zoomed-out load found.
 - **gzip**: the client accepts it; the server does not send it yet.
 

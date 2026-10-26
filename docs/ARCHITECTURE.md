@@ -66,7 +66,10 @@ everything on the simulator.
   ones (see [DATA-MODEL.md](DATA-MODEL.md)). Rejected changesets drop their observations from the fold.
 - **Writes cost what they change.** What derivation reads is kept in memory as it is in the database, updated from
   each write once its transaction commits, and only the candidate, tree and tag rows that changed are written. With a
-  park's worth of candidates (30,000) a tap takes about a tenth of a second rather than seconds.
+  park's worth of candidates (30,000) a tap takes about a tenth of a second rather than seconds. Opening a store
+  rewrites the derived tables only when the schema or `Schema.derivation` has changed since they were written, so
+  launch takes half a second with that many candidates rather than eight; bump `Schema.derivation` when derivation
+  changes what the tables hold.
 - **Evidence is immutable and content-addressed.** A trunk or limb scan is cropped, written as GLB, stored
   under its SHA-256 and referenced by hash from observations and changesets.
 - **Sync goes through one boundary.** `GerardusClient` is the whole contract with a Gerardus server: upload

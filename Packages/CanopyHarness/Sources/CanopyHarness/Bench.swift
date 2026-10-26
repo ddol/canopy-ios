@@ -204,6 +204,13 @@ public enum Bench {
             try await measureAsync("store: read candidates", detail: "\(count) in the store") {
                 _ = try await store.candidates()
             }
+            // Opening the store from its file, as the app does at launch.
+            let folder = FileManager.default.temporaryDirectory.appending(path: "bench-store-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: folder) }
+            try await LocalStore(directory: folder).importCandidates(base)
+            try measure("store: open from its file", detail: "\(count) in the store") {
+                _ = try LocalStore(directory: folder)
+            }
         }
         return out
     }
