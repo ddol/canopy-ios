@@ -346,11 +346,15 @@ func onlyChecked(_ stats: StandInServer.Stats) -> Bool {
         #expect(after.canopy?.heights == fresh.canopy?.heights)
         #expect(after.candidates.map(\.height) != before.candidates.map(\.height))
 
-        // Only the ground came down again, and now it is kept for the new model.
+        // Only the ground came down again, and now it is kept for the new model, a little wider, like any load.
         server.resetStats()
         let again = try await AerialTrees.load(
             tile: tile, area: area(60, -40, 150), label: "test", client: client, cache: cache)
         #expect(onlyChecked(server.stats))
         #expect(again.candidates == fresh.candidates)
+        server.resetStats()
+        _ = try await AerialTrees.load(
+            tile: tile, area: area(64, -37, 150), label: "test", client: client, cache: cache)
+        #expect(onlyChecked(server.stats))
     }
 }

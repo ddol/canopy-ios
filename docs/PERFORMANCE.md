@@ -51,7 +51,10 @@ UI automation, which keeps the map's accessibility busy and skews the profile, l
 against the stand-in:
 
 - a load finds the trees (recall and precision over 0.7 in dense groves; 0.89 and 0.99 in practice);
-- a load from kept points, after a nudge, or pieced together after a pan finds exactly the trees a download does;
+- a load from kept points, after a nudge, or pieced together after a pan finds exactly the trees a download does,
+  and the circles planned for a pan leave no gap, for any radius;
+- a stream the server cuts short fails the load and is not kept, a cancelled load keeps nothing, and kept ground
+  is downloaded again once the server accepts a scan (its site model changes);
 - the calls and bytes of each kind of load: a kept area costs one small `GetSite`, a pan asks only for what is new,
   a far move is one request, a new bundle is downloaded again, the oldest streams are evicted first;
 - a kept area loads with no server;
@@ -69,25 +72,27 @@ bytes and calls do not. A 150 m area, its 20 m margin and, after, 10 m of paddin
 
 | Over `cellular` | Before | After |
 |---|---|---|
-| First load | 6.9 s, 4.5 MB, 8 calls in a row | 6.5 s, 5.0 MB, 8 calls (6 at once) |
-| The same area again | 6.9 s, 4.5 MB | **0.19 s**, 1 small call |
-| Moved 8 m | (a full load) | **0.18 s**, 1 small call |
-| Panned 40 m | 6.5 s, 4.2 MB | **2.0 s, 1.5 MB** |
-| Zoomed in | 3.1 s, 1.6 MB | **0.16 s**, 1 small call |
-| After a relaunch | 7.1 s, 4.5 MB | **0.32 s**, 1 small call |
-| The whole site | 14.3 s, 10.2 MB | 12.4 s, 10.2 MB, 2 calls |
+| First load | 6.9 s, 4.5 MB, 8 calls in a row | 6.7 s, 5.0 MB, 8 calls (6 at once) |
+| The same area again | 6.9 s, 4.5 MB | **0.32 s**, 2 small calls |
+| Moved 8 m | (a full load) | **0.32 s**, 2 small calls |
+| Panned 40 m | 6.5 s, 4.2 MB | **2.1 s, 1.5 MB** |
+| Zoomed in | 3.1 s, 1.6 MB | **0.29 s**, 2 small calls |
+| After a relaunch | 7.1 s, 4.5 MB | **0.45 s**, 2 small calls |
+| The whole site | 14.3 s, 10.2 MB | 12.7 s, 10.2 MB, 2 calls |
 | A kept area, no server | fails | loads |
 
-Over `poor` the same area again went from 22 s to 0.4 s, and a 40 m pan from 21 s to 7 s.
+The two small calls of a kept load are `GetSite`, which says whether the bundle has changed, and a few cells of
+ground, which say whether the site model (and so the ground) has. Over `poor` the same area again went from 22 s to
+0.7 s, and a 40 m pan from 21 s to 7 s.
 
 | Work on the phone | Before | After |
 |---|---|---|
-| Detect trees in a whole site (626,000 points) | 300 ms | 65 ms |
+| Detect trees in a whole site (626,000 points) | 300 ms | 68 ms |
 | …and build the canopy model to draw, as a load does | 325 ms | 68 ms |
 | Load an area into the store, with 2,000 / 30,000 candidates | 0.7 s / 7.3 s | 17 ms / 156 ms |
 | One Confirm tap, with 2,000 / 30,000 candidates | 0.5 s / 4.6 s | 12 ms / 99 ms |
 | Read the candidates (each refresh did), 30,000 | 514 ms | none: kept decoded |
-| Open the store at launch, with 2,000 / 30,000 candidates | 0.5 s / 8.2 s | 35 ms / 0.55 s |
+| Open the store at launch, with 2,000 / 30,000 candidates | 0.5 s / 8.2 s | 32 ms / 0.51 s |
 
 In the simulator, a Release build loading 571 trees spent 8.0 s of main-thread time before and 2.6 s after: the map
 no longer lays out every tree annotation again on each progress message (30 to 40 % of the main thread during the
@@ -127,7 +132,7 @@ download before, 1 to 2 % after).
 - **Compression is one line on the server.** Tonic's `send_compressed(CompressionEncoding::Gzip)` on the site service
   (with tonic's `gzip` feature) would make every load a third smaller now that the client accepts gzip. Tried with
   `gerardus serve` built that way: it answers in gzip and the client reads it (a test keeps its bytes). Measured with
-  the stand-in compressing, a first load over `cellular` takes 5.1 s instead of 6.5 s.
+  the stand-in compressing, a first load over `cellular` takes 5.1 s instead of 6.6 s.
 - **Intensity** is 12 % of every load and Canopy never reads it: a request flag to leave it out would help, more so
   with compression.
 - **Quantised coordinates** (centimetre offsets per block) would halve the points, two thirds with gzip, but need a

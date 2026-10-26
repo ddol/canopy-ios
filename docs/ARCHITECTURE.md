@@ -185,8 +185,13 @@ detection finds the same trees. A load asks for 10 m more than it needs and keep
 small nudge needs no download. When no kept stream holds all of an area but some overlap it (a pan), the cache plans
 up to six small circles round what they leave, asks for them at once with the area's ground model, and takes each
 point and outline from the first stream whose circle holds it; it does this only when the circles cost under 60 % of
-the whole. The site and its georeference are kept too, so a kept area loads with one small `GetSite` call, or with
-none when the server cannot be reached. Settings shows the saved data's size and can clear it.
+the whole. A stream is kept only when every layer sent its completion flag and the load was not cancelled; a stream
+that ends early (HTTP/1.1 hides the server's error) fails the load rather than giving trees from part of the area.
+The ground comes from the server's site model, which changes when it accepts a scan while the bundle does not: kept
+ground records its model, and a load that could reuse it first asks for a few cells of ground to learn the current
+one, downloading the ground again when it has changed. The site and its georeference are kept too, so a kept area
+loads with `GetSite` and that small probe, or with nothing from the server when it cannot be reached. Settings shows
+the saved data's size and can clear it.
 
 If a server has no ground layer, the ground model is built from the ground and water returns instead (lowest return
 per cell, gaps filled from their neighbours).

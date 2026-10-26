@@ -354,7 +354,13 @@ extension AlignClient {
                     if let cache, request.layers.contains(.groundMesh) {
                         var ground = request
                         ground.layers = [.groundMesh]
-                        if cache.holds(ground, bundleID: bundleID) { model = await currentModel(request) }
+                        if cache.holds(ground, bundleID: bundleID) {
+                            do {
+                                model = try await currentModel(request)
+                            } catch  where Self.isOffline(error) {
+                                model = nil  // offline: the kept ground is the best there is
+                            }
+                        }
                     }
                     if let cache, let kept = cache.messages(for: request, bundleID: bundleID, model: model) {
                         fromCache(true)
@@ -369,7 +375,9 @@ extension AlignClient {
                     }
                     fromCache(false)
                     if let cache,
-                        try await composed(request, bundleID: bundleID, cache: cache, model: model, into: continuation)
+                        try await composed(
+                            request, bundleID: bundleID, cache: cache, model: model, padding: padding,
+                            into: continuation)
                     {
                         continuation.finish()
                         return
@@ -401,20 +409,23 @@ extension AlignClient {
     }
 
     /// The site model the server's ground layer comes from now: a few cells of ground round the request's centre,
-    /// which name it. Nil when the server cannot be asked; an older server without site models names none ("").
-    func currentModel(_ request: StreamReferenceRequest) async -> String? {
+    /// which name it (an older server without site models names none, ""). The first ground asked for after the
+    /// server accepts a scan is derived then, so this has the reference stream's time limit.
+    func currentModel(_ request: StreamReferenceRequest) async throws -> String {
         var probe = request
         probe.layers = [.groundMesh]
         probe.radius = 1
-        do {
-            for try await data in transport.call(
-                Self.site + "StreamReference", [probe.serialized], limit: timeouts.unary)
-            {
-                let message = try ReferenceMessage(serialized: data)
-                if message.layer == .groundMesh { return message.modelID }
-            }
-        } catch {}
-        return nil
+        return try await complete(probe, transport: transport, limit: timeouts.reference).model ?? ""
+    }
+
+    /// Whether a call failed because there is no connection to the server at all, as opposed to a slow or failing
+    /// server: only then is kept data used as it is.
+    static func isOffline(_ error: any Error) -> Bool {
+        guard let error = error as? URLError else { return false }
+        return [
+            .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+            .internationalRoamingOff, .dataNotAllowed, .secureConnectionFailed,
+        ].contains(error.code)
     }
 
     /// The messages of one request, checked to have finished every layer.
@@ -461,7 +472,7 @@ extension AlignClient {
     /// the result is what one request would have sent (in another order). False, with nothing sent, when kept streams
     /// hold too little to be worth it.
     func composed(
-        _ request: StreamReferenceRequest, bundleID: String, cache: ReferenceCache, model: String?,
+        _ request: StreamReferenceRequest, bundleID: String, cache: ReferenceCache, model: String?, padding: Float,
         into continuation: AsyncThrowingStream<ReferenceChunk, any Error>.Continuation
     ) async throws -> Bool {
         let kept = cache.overlapping(request, bundleID: bundleID)
@@ -491,9 +502,12 @@ extension AlignClient {
                 if let held = cache.messages(for: only, bundleID: bundleID, model: model) {
                     ground = held
                 } else {
+                    // Padded as a whole load is, so the next nudge finds it.
+                    var fetch = only
+                    if padding > 0, fetch.radius > 0 { fetch.radius += padding }
                     group.addTask {
-                        let (messages, model) = try await complete(only, transport: transport, limit: limit)
-                        cache.store(messages, for: only, bundleID: bundleID, model: model)
+                        let (messages, model) = try await complete(fetch, transport: transport, limit: limit)
+                        cache.store(messages, for: fetch, bundleID: bundleID, model: model)
                         return (-1, messages)
                     }
                 }
@@ -604,8 +618,12 @@ enum ReferencePatches {
             var y = -r
             while y - spacing / 2 < r {
                 let p = wanted.centre + SIMD2(x, y)
+                // A point of the wanted circle in this square is within reach of the sample, and within r of the
+                // wanted centre: whichever bound is tighter.
                 if wanted.distance(to: p) <= r + reach,
-                    !kept.contains(where: { $0.distance(to: p) + reach + spare <= Double($0.radius) })
+                    !kept.contains(where: {
+                        min($0.distance(to: p) + reach, $0.distance(to: wanted.centre) + r) + spare <= Double($0.radius)
+                    })
                 {
                     open.append(p)
                 }
