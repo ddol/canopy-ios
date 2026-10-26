@@ -56,7 +56,7 @@ import Testing
         let next = candidates(60..<180, height: 22)
         let removed = try await store.replaceCandidates(
             where: { $0.latitude < 37.7696 }, with: next.filter { $0.location.latitude < 37.7696 })
-        #expect(removed > 0)
+        #expect(removed.replaced > 0)
 
         // Another player's tree arrives from the shared map.
         var theirs = candidates(300..<301)[0].makeTree()

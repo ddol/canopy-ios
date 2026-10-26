@@ -9,7 +9,7 @@ import Foundation
 /// one asked for, cut to that circle exactly as the server cuts it. The site itself is kept too, so a load can go
 /// ahead when the server cannot be reached, and so is the site georeference, which depends only on the site frame.
 ///
-/// Streams are evicted least recently used first once they pass `byteLimit`. The folder belongs in Caches: the system
+/// Streams are evicted least recently used first once they pass `byteLimit` (250 MB unless given). The folder belongs in Caches: the system
 /// may empty it, and everything in it can be downloaded again.
 public final class ReferenceCache: @unchecked Sendable {
     public let directory: URL
@@ -34,7 +34,7 @@ public final class ReferenceCache: @unchecked Sendable {
     private let lock = NSLock()
     private var index: [Entry]?
 
-    public init(directory: URL, byteLimit: Int = 256 << 20) {
+    public init(directory: URL, byteLimit: Int = 250_000_000) {
         self.directory = directory
         self.byteLimit = byteLimit
     }
@@ -128,7 +128,7 @@ public final class ReferenceCache: @unchecked Sendable {
     /// Keeps a complete stream. Streams already kept that this one answers for are dropped.
     func store(_ messages: [Data], for request: StreamReferenceRequest, bundleID: String) {
         let data = Self.frame(messages)
-        guard data.count <= byteLimit / 2 else { return }
+        guard data.count <= byteLimit else { return }
         lock.withLock {
             var entries = loadIndex()
             let entry = Entry(
@@ -264,8 +264,11 @@ extension AlignClient {
     /// Reference layers for a prepared site, from `cache` when it holds them, otherwise from the server, keeping a
     /// stream that finishes whole. Kept data is cut to the request's circle exactly as the server cuts it, so the
     /// chunks are the same either way. `fromCache` is told which it was before the first chunk.
+    ///
+    /// With `padding`, a stream the cache does not hold is asked for `padding` metres wider than `request` and kept
+    /// that wide, then cut to `request`: a later request that has moved a few metres is then inside what is kept.
     public func reference(
-        _ request: StreamReferenceRequest, bundleID: String, cache: ReferenceCache?,
+        _ request: StreamReferenceRequest, bundleID: String, cache: ReferenceCache?, padding: Float = 0,
         fromCache: @escaping @Sendable (Bool) -> Void = { _ in }
     ) -> AsyncThrowingStream<ReferenceChunk, any Error> {
         let transport = transport
@@ -285,14 +288,18 @@ extension AlignClient {
                         return
                     }
                     fromCache(false)
+                    var fetch = request
+                    if cache != nil, padding > 0, request.radius > 0 { fetch.radius += padding }
+                    let cut = fetch.radius == request.radius ? nil : ReferenceCut(request)
                     var received: [Data] = []
                     for try await data in transport.call(
-                        Self.site + "StreamReference", [request.serialized], limit: limit)
+                        Self.site + "StreamReference", [fetch.serialized], limit: limit)
                     {
                         if cache != nil { received.append(data) }
-                        if let chunk = try ReferenceMessage(serialized: data).chunk { continuation.yield(chunk) }
+                        let chunk = try ReferenceMessage(serialized: data).chunk
+                        if let chunk = cut.map({ $0.apply(chunk) }) ?? chunk { continuation.yield(chunk) }
                     }
-                    cache?.store(received, for: request, bundleID: bundleID)
+                    cache?.store(received, for: fetch, bundleID: bundleID)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

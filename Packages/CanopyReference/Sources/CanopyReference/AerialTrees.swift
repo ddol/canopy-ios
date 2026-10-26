@@ -44,6 +44,18 @@ public enum AerialTrees {
         public var osmRefused: Bool
         /// The points came from the phone's cache rather than the server.
         public var fromCache = false
+        /// How long each step took, in order: finding the site, its georeference, the points, detection, placing.
+        public var timings: [Timing] = []
+
+        public struct Timing: Equatable, Sendable {
+            public var step: String
+            public var seconds: Double
+
+            public init(step: String, seconds: Double) {
+                self.step = step
+                self.seconds = seconds
+            }
+        }
 
         public init(
             site: Site, candidates: [TreeCandidate], tiles: Set<S2CellID>, area: Area? = nil, attribution: [String],
@@ -96,6 +108,10 @@ public enum AerialTrees {
     /// How far past an area points are streamed, in metres, so the crowns of trees on its edge are whole.
     public static let areaMargin = 20.0
 
+    /// How much wider than asked an area's points are downloaded and kept, in metres, so loading again after the map
+    /// has moved a little (a zoom, a nudge) finds them on the phone. About an eighth more to download.
+    public static let cachePadding: Float = 10
+
     /// Finds the trees in the site for `tile`, or only in `area` (which should be centred in `tile`), so less data
     /// comes down. Buildings are masked out of detection with DataSF footprints. `osm` adds OpenStreetMap buildings:
     /// for checking only, since the shared tree layer takes nothing from OpenStreetMap (Gerardus ADR-0005, ADR-0008),
@@ -109,6 +125,14 @@ public enum AerialTrees {
         progress: @Sendable (Stage) -> Void = { _ in }
     ) async throws -> SiteResult {
         let token = tile.parent(level: S2CellID.tileLevel).token
+        var timings: [SiteResult.Timing] = []
+        var lap = ContinuousClock.now
+        func time(_ step: String) {
+            let now = ContinuousClock.now
+            let elapsed = (now - lap).components
+            timings.append(.init(step: step, seconds: Double(elapsed.seconds) + Double(elapsed.attoseconds) * 1e-18))
+            lap = now
+        }
         let site: Site
         if let prepared = try await client.site(token, cache: cache) {
             site = prepared
@@ -119,7 +143,9 @@ public enum AerialTrees {
                 throw Failure.stillPreparing
             }
         }
+        time("site")
         let georeference = try await SiteGeoreference.fetch(for: site, client: client, cache: cache)
+        time("georeference")
         let centre = area.map { georeference.site(of: $0.centre) }
         func request(_ layers: [ReferenceLayer], classes: [UInt32]) -> StreamReferenceRequest {
             StreamReferenceRequest(
@@ -134,7 +160,8 @@ public enum AerialTrees {
         var layers: [ReferenceLayer] = [.aerialPoints, .footprints, .groundMesh]
         let saved = Flag()
         let stream = client.reference(
-            request(layers, classes: canopyClasses), bundleID: site.bundleID, cache: cache, fromCache: saved.set)
+            request(layers, classes: canopyClasses), bundleID: site.bundleID, cache: cache, padding: cachePadding,
+            fromCache: saved.set)
         for try await chunk in stream {
             switch chunk {
             case .points(_, let block):
@@ -177,9 +204,11 @@ public enum AerialTrees {
         }
         guard let ground else { throw GRPCTransportError.noResponse }
 
+        time("points")
         progress(.detecting)
         let buildings = lines.filter { $0.kind == .building && $0.points.count >= 3 }.map(\.points)
         let (trees, canopy) = detector.detectWithCanopy(points: blocks, ground: ground, buildings: buildings)
+        time("detection")
         progress(.placing)
         let aerialSource = site.sources.first { $0.layer == .aerialPoints }
         let source =
@@ -205,6 +234,8 @@ public enum AerialTrees {
         result.candidates = candidates(trees, georeference: georeference, source: source).filter {
             result.covers($0.location)
         }
+        time("placing")
+        result.timings = timings
         return result
     }
 

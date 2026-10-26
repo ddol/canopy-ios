@@ -60,6 +60,7 @@ public enum Bench {
     public static let steps: [Step] = [
         Step(name: "first", centre: SIMD2(60, -40), radius: 150, newClient: true),
         Step(name: "again", centre: SIMD2(60, -40), radius: 150, newClient: false),
+        Step(name: "nudged 8 m", centre: SIMD2(66, -35), radius: 150, newClient: false),
         Step(name: "panned 40 m", centre: SIMD2(100, -40), radius: 150, newClient: false),
         Step(name: "zoomed in", centre: SIMD2(70, -30), radius: 80, newClient: false),
         Step(name: "relaunch", centre: SIMD2(60, -40), radius: 150, newClient: true),

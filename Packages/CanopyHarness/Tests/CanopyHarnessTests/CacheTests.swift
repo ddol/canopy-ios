@@ -91,6 +91,35 @@ import Testing
         #expect(server.stats.calls == ["GetSite": 1])
     }
 
+    @Test func aLoadAFewMetresAwayUsesTheKeptPoints() async throws {
+        let server = StandInServer(align: StandInAlign(site: site))
+        try await server.start()
+        defer { server.stop() }
+        let client = AlignClient(baseURL: server.url)
+        let cache = temporaryCache()
+        defer { cache.removeAll() }
+        _ = try await AerialTrees.load(
+            tile: tile, area: area(60, -40, 150), label: "test", client: client, cache: cache)
+        // The first load asked for a little more than its area and margin, and kept it.
+        #expect(server.stats.calls("StreamReference") == 1)
+
+        // The map settled 8 m away: still inside, and the same trees as a download there would find.
+        let nudged = area(66, -35, 150)
+        server.resetStats()
+        let kept = try await AerialTrees.load(tile: tile, area: nudged, label: "test", client: client, cache: cache)
+        #expect(kept.fromCache)
+        #expect(server.stats.calls == ["GetSite": 1])
+        let fresh = try await AerialTrees.load(tile: tile, area: nudged, label: "test", client: client)
+        #expect(kept.candidates == fresh.candidates)
+        #expect(kept.pointCount == fresh.pointCount)
+
+        // 40 m away is not.
+        server.resetStats()
+        let moved = try await AerialTrees.load(
+            tile: tile, area: area(100, -40, 150), label: "test", client: client, cache: cache)
+        #expect(!moved.fromCache)
+    }
+
     @Test func aNewBundleIsDownloadedAgain() async throws {
         let cache = temporaryCache()
         defer { cache.removeAll() }
@@ -139,21 +168,29 @@ import Testing
         try await server.start()
         defer { server.stop() }
         let client = AlignClient(baseURL: server.url)
-        // Room for two of these areas (0.5 to 1 MB each, the middle one mostly lake), not three.
+        let areas = [area(-120, 0, 60), area(0, 0, 60), area(120, 0, 60)]
+        // How big each area's stream is.
+        var sizes: [Int] = []
+        for a in areas {
+            let measure = temporaryCache()
+            _ = try await AerialTrees.load(tile: tile, area: a, label: "test", client: client, cache: measure)
+            sizes.append(measure.streamBytes)
+            measure.removeAll()
+        }
+        // Room for the last two, not all three: the first, least recently used, goes.
+        let limit = sizes[1] + sizes[2] + 1
         let cache = ReferenceCache(
             directory: FileManager.default.temporaryDirectory.appending(path: "cache-\(UUID().uuidString)"),
-            byteLimit: 2_100_000)
+            byteLimit: limit)
         defer { cache.removeAll() }
-        for x in [-120.0, 0, 120] {
-            _ = try await AerialTrees.load(
-                tile: tile, area: area(x, 0, 60), label: "test", client: client, cache: cache)
+        for a in areas {
+            _ = try await AerialTrees.load(tile: tile, area: a, label: "test", client: client, cache: cache)
         }
-        #expect(cache.streamBytes <= 2_100_000)
-        #expect(cache.streamBytes > 1_000_000)
+        #expect(cache.streamBytes == sizes[1] + sizes[2])
         server.resetStats()
-        _ = try await AerialTrees.load(tile: tile, area: area(120, 0, 60), label: "test", client: client, cache: cache)
+        _ = try await AerialTrees.load(tile: tile, area: areas[2], label: "test", client: client, cache: cache)
         #expect(server.stats.calls("StreamReference") == 0)
-        _ = try await AerialTrees.load(tile: tile, area: area(-120, 0, 60), label: "test", client: client, cache: cache)
+        _ = try await AerialTrees.load(tile: tile, area: areas[0], label: "test", client: client, cache: cache)
         #expect(server.stats.calls("StreamReference") == 1)
     }
 }

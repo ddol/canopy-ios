@@ -102,8 +102,12 @@ import Testing
                 id: UUID(), location: GeoPoint(latitude: 37.7705, longitude: -122.5091), height: 14, crownRadius: 3,
                 confidence: 0.8, isSynthetic: false, source: "USGS 3DEP"),
         ]
-        let removed = try await store.replaceCandidates(where: { tiles.contains($0.tile) }, with: real)
-        #expect(removed == 1)  // the unobserved candidate in those tiles
+        let replacement = try await store.replaceCandidates(where: { tiles.contains($0.tile) }, with: real)
+        // The unobserved candidate in those tiles goes; the replacement next to the observed one is the same tree.
+        #expect(replacement == .init(replaced: 1, added: 1, gone: 1, samplesGone: 1))
+        // The same trees again: nothing new, nothing gone.
+        let again = try await store.replaceCandidates(where: { tiles.contains($0.tile) }, with: real)
+        #expect(again == .init(replaced: 1, added: 0, gone: 0, samplesGone: 0))
         let ids = Set(try await store.candidates().map(\.id))
         #expect(ids == [observed.id, candidates[2].id, real[1].id])
         let state = await store.state()

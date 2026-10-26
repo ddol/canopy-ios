@@ -2,7 +2,9 @@ import CanopyDesign
 import CanopyMap
 import CanopyModel
 import CanopyReference
+import CanopyStore
 import Foundation
+import os
 
 /// Where loading aerial trees has got to.
 enum AerialProgress: Equatable {
@@ -97,26 +99,36 @@ extension AppModel {
             updates.cancel()
         }
         do {
+            let start = ContinuousClock.now
             let result = try await AerialTrees.load(
                 tile: centre.tile, area: area, osm: isAdmin && adminSettings.useOSM, label: "canopy-ggp",
                 client: client, cache: referenceCache
             ) { stageSink.yield($0) }
-            let removed = try await store.replaceCandidates(where: { result.covers($0) }, with: result.candidates)
+            let stored = ContinuousClock.now
+            let replacement = try await store.replaceCandidates(
+                where: { result.covers($0) }, with: result.candidates)
             UserDefaults.standard.set(result.attribution, forKey: Self.attributionKey)
             aerialReference = Self.reference(result)
             await refresh()
+            var timed = result
+            timed.timings.append(.init(step: "store", seconds: Self.seconds(ContinuousClock.now - stored)))
+            let timing = Self.describe(timed, total: ContinuousClock.now - start)
+            Self.aerialLog.info("Loaded \(result.candidates.count) trees. \(timing, privacy: .public)")
             let format = QuantityFormat()
             var message =
                 "\(format.count(result.candidates.count)) trees from aerial LiDAR within "
                 + "\(format.length(area.radius, fractionDigits: 0)) of the map centre"
                 + (result.fromCache ? ", from data saved on this phone" : "")
-                + (removed > 0 ? ", replacing \(format.count(removed)) sample candidates." : ".")
+                + Self.describe(replacement)
             if result.osmRefused {
                 message += " The server sends OpenStreetMap only to its admins, so it was left out."
             }
             if let saved = await saveDetectedTrees(result) {
                 message += " " + saved
             }
+            #if DEBUG || TESTING_TOOLS
+                message += "\n" + timing
+            #endif
             aerial = .done(message)
             syncSoon(after: .zero)
         } catch let error as AerialTrees.Failure {
@@ -182,6 +194,40 @@ extension AppModel {
                 kind: kind, points: line.points.map { georeference.geo(x: $0.x, y: $0.y) }, closed: line.closed)
         }
         return MapLayers.Reference(canopies: canopy.map { [$0] } ?? [], lines: lines)
+    }
+
+    static let aerialLog = Logger(subsystem: "io.github.ddol.canopy", category: "aerial")
+
+    /// Where a load's time went, for measuring a link: "2.1 s: site 0.12, georeference 0.00, points 1.43 (270,132
+    /// downloaded), detection 0.38, placing 0.01, store 0.16".
+    nonisolated static func describe(_ result: AerialTrees.SiteResult, total: Duration) -> String {
+        let format = QuantityFormat()
+        let steps = result.timings.map { timing in
+            String(format: "%@ %.2f", timing.step, timing.seconds)
+                + (timing.step == "points"
+                    ? " (\(format.count(result.pointCount)) \(result.fromCache ? "saved" : "downloaded"))" : "")
+        }
+        return String(format: "%.1f s: ", seconds(total)) + steps.joined(separator: ", ")
+    }
+
+    nonisolated static func seconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) * 1e-18
+    }
+
+    /// What a load changed among the candidates, ending the sentence: the sample it replaced, or the trees that are new
+    /// or gone since this area was last loaded.
+    nonisolated static func describe(_ replacement: LocalStore.CandidateReplacement) -> String {
+        let format = QuantityFormat()
+        if replacement.samplesGone > 0 {
+            return ", replacing \(format.count(replacement.samplesGone)) sample candidates."
+        }
+        switch (replacement.added, replacement.gone) {
+        case (0, 0): return "."
+        case (let added, 0): return ", \(format.count(added)) of them new."
+        case (0, let gone): return "; \(format.count(gone)) found before are gone."
+        case (let added, let gone):
+            return ", \(format.count(added)) of them new; \(format.count(gone)) found before are gone."
+        }
     }
 
     nonisolated static func describe(_ stage: AerialTrees.Stage) -> String {

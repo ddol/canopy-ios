@@ -140,15 +140,26 @@ public actor LocalStore {
 
     // MARK: Writing
 
+    /// What replacing an area's candidates did.
+    public struct CandidateReplacement: Equatable, Sendable {
+        /// Candidates in the area that were replaced: all of them but those a player has observed.
+        public var replaced: Int
+        /// Candidates there now that were not there before.
+        public var added: Int
+        /// Candidates there before that are not there now, and how many of those were the made-up sample.
+        public var gone: Int
+        public var samplesGone: Int
+    }
+
     /// Replaces the candidates in an area (where `covers` is true) with new ones, such as the aerial trees found there,
     /// keeping every candidate elsewhere. A candidate in the area that a player has already observed stays, so their
     /// work is not orphaned, and a replacement within `duplicateRadius` metres of one it keeps is dropped as the same
-    /// tree. Returns how many candidates were removed.
+    /// tree. Loading the same area again replaces its candidates with the same ones: nothing is added or gone.
     @discardableResult
     public func replaceCandidates(
         where covers: @Sendable (GeoPoint) -> Bool, with replacements: [TreeCandidate],
         duplicateRadius: Double = 2.5
-    ) throws -> Int {
+    ) throws -> CandidateReplacement {
         let current = inputs.candidates.values
         let observed = Set(inputs.observations.map(\.kind.subject.id))
         let kept = current.filter { !covers($0.location) || observed.contains($0.id) }
@@ -159,8 +170,13 @@ public actor LocalStore {
             let frame = LocalFrame(origin: replacement.location)
             return !keptInArea.contains { frame.enu(of: $0.location).horizontalDistance < duplicateRadius }
         }
+        let before = inputs.candidates
         try importCandidates(kept + added)
-        return current.count - kept.count
+        let after = inputs.candidates
+        let gone = before.values.filter { after[$0.id] == nil }
+        return CandidateReplacement(
+            replaced: current.count - kept.count, added: after.keys.filter { before[$0] == nil }.count,
+            gone: gone.count, samplesGone: gone.filter(\.isSynthetic).count)
     }
 
     /// Replaces the aerial base layer. Only the rows that change are written.
