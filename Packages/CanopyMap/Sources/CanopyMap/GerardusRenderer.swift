@@ -13,11 +13,22 @@ public struct GerardusRenderer: MapRenderer {
         onViewportChange: @escaping @MainActor (MapViewport) -> Void
     ) -> some View {
         GerardusMap(
-            layers: layers, selection: selection, viewport: viewport, focus: focus, onViewportChange: onViewportChange)
+            layers: layers, selection: selection, viewport: viewport, focus: focus, onViewportChange: onViewportChange
+        )
+        .equatable()
     }
 }
 
 /// Points on screen from metres east and north of a centre. Flat, which is plenty across a park a few kilometres wide.
+/// Drawn again only when what it draws changes, as `MapKitMap` is.
+extension GerardusMap: Equatable {
+    nonisolated static func == (lhs: GerardusMap, rhs: GerardusMap) -> Bool {
+        MainActor.assumeIsolated {
+            lhs.layers == rhs.layers && lhs.focus == rhs.focus && lhs.selection == rhs.selection
+        }
+    }
+}
+
 struct FlatProjection {
     static let metresPerDegreeNorth = 110_574.0
 

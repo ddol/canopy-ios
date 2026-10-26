@@ -179,7 +179,11 @@ public struct MapLayers: Equatable, Sendable {
         }
         let trees =
             shown
-            .sorted { ($0.position.geo.latitude, $0.id.uuidString) > ($1.position.geo.latitude, $1.id.uuidString) }
+            // North first; the id only breaks ties, so its string is made only then.
+            .sorted { a, b in
+                a.position.geo.latitude != b.position.geo.latitude
+                    ? a.position.geo.latitude > b.position.geo.latitude : a.id.uuidString > b.id.uuidString
+            }
             .map { tree in
                 TreeMarker(
                     id: tree.id, location: tree.position.geo, status: tree.displayStatus,

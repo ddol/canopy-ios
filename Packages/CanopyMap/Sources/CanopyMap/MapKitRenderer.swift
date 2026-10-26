@@ -12,7 +12,9 @@ public struct MapKitRenderer: MapRenderer {
         onViewportChange: @escaping @MainActor (MapViewport) -> Void
     ) -> some View {
         MapKitMap(
-            layers: layers, selection: selection, viewport: viewport, focus: focus, onViewportChange: onViewportChange)
+            layers: layers, selection: selection, viewport: viewport, focus: focus, onViewportChange: onViewportChange
+        )
+        .equatable()
     }
 }
 
@@ -94,6 +96,17 @@ struct MapKitMap: View {
                 MapViewport(
                     center: GeoPoint(latitude: region.center.latitude, longitude: region.center.longitude),
                     latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta))
+        }
+    }
+}
+
+/// Every annotation is a hosted view that MapKit lays out again whenever the map's content is applied, which with
+/// hundreds of trees takes the main thread for seconds. So the map is drawn again only when what it draws changes,
+/// not whenever the screen around it does (a progress message, a banner).
+extension MapKitMap: Equatable {
+    nonisolated static func == (lhs: MapKitMap, rhs: MapKitMap) -> Bool {
+        MainActor.assumeIsolated {
+            lhs.layers == rhs.layers && lhs.focus == rhs.focus && lhs.selection == rhs.selection
         }
     }
 }
