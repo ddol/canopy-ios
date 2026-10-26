@@ -13,8 +13,9 @@ enum VectorGeometry {
         SIMD3(point.x, point.z - elevation, -point.y)
     }
 
-    /// Ear clipping in the polygon's dominant plane, for concave footprints and vertical wall/roof faces alike.
-    /// Invalid or degenerate faces keep their outlines but get no fill.
+    /// Ear clipping in the polygon's own plane, for concave footprints and vertical wall/roof faces alike: a box
+    /// wall whose top follows the roofline can be concave where a step meets a gable. Invalid or degenerate faces keep
+    /// their outlines but get no fill.
     static func face(_ input: [SIMD3<Float>]) -> Face {
         var vertices: [SIMD3<Float>] = []
         for p in input where vertices.last != p { vertices.append(p) }
@@ -24,14 +25,20 @@ enum VectorGeometry {
         else {
             return Face(vertices: [], triangles: [])
         }
+        // Newell's normal about the centroid, so site-frame coordinates hundreds of metres out keep their precision.
+        let centre = vertices.reduce(SIMD3<Float>.zero, +) / Float(vertices.count)
+        let local = vertices.map { $0 - centre }
         var normal = SIMD3<Float>.zero
-        for i in vertices.indices { normal += simd_cross(vertices[i], vertices[(i + 1) % vertices.count]) }
+        for i in local.indices { normal += simd_cross(local[i], local[(i + 1) % local.count]) }
+        guard simd_length(normal) > 0.0002 else { return Face(vertices: vertices, triangles: []) }
+        normal = simd_normalize(normal)
+        // An in-plane basis, from the world axis least like the normal: true metres in the face, so a vertical wall
+        // is never squashed onto the ground plane.
         let n = simd_abs(normal)
-        let points = vertices.map { p -> SIMD2<Float> in
-            if n.x >= n.y && n.x >= n.z { return SIMD2(p.y, p.z) }
-            if n.y >= n.z { return SIMD2(p.x, p.z) }
-            return SIMD2(p.x, p.y)
-        }
+        let axis: SIMD3<Float> = n.x <= n.y && n.x <= n.z ? [1, 0, 0] : n.y <= n.z ? [0, 1, 0] : [0, 0, 1]
+        let u = simd_normalize(simd_cross(normal, axis))
+        let v = simd_cross(normal, u)
+        let points = local.map { SIMD2(simd_dot($0, u), simd_dot($0, v)) }
         func cross(_ a: SIMD2<Float>, _ b: SIMD2<Float>, _ c: SIMD2<Float>) -> Float {
             let u = b - a
             let v = c - a
@@ -72,10 +79,14 @@ enum VectorGeometry {
     }
 
     /// `height_m` is an extrusion above each vertex, never an absolute elevation. Explicit wall and roof planes
-    /// already carry their full z and must never be extruded a second time.
-    static func faces(_ line: LineFeature, layer: ReferenceLayer) -> [Face] {
-        let ring = line.vertices
+    /// already carry their full z and must never be extruded a second time. `wallSurfaces` says the BUILDINGS layer
+    /// sent `WALL_SURFACE`s: then a building part is only its base outline, and its walls are those surfaces. An older
+    /// server sends none, and its parts are extruded to their `height`.
+    static func faces(_ line: LineFeature, layer: ReferenceLayer, wallSurfaces: Bool = false) -> [Face] {
+        var ring = line.vertices
         guard line.closed, ring.count >= 3 else { return [] }
+        if ring.first == ring.last { ring.removeLast() }
+        if line.kind == .buildingPart, wallSurfaces { return [Face(vertices: ring, triangles: [])] }
         let height: Float
         if line.kind == .buildingPart {
             height =
@@ -87,8 +98,6 @@ enum VectorGeometry {
         if layer == .footprints || line.kind == .buildingPart,
             height.isFinite, height > 0
         {
-            var ring = ring
-            if ring.first == ring.last { ring.removeLast() }
             let up = SIMD3<Float>(0, 0, height)
             return ring.indices.map { i in
                 let a = ring[i]

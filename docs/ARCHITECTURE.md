@@ -275,8 +275,8 @@ site first if needed. It converts them from the site frame to the map with `Site
 (`AppModel.vectorAreas`), so panning and loading builds up an area.
 
 `AppModel.lineKind` decides how each layer draws from above:
-- footprints and buildings as building outlines;
-- box walls and measured facade planes as walls;
+- footprints, building parts and roof planes as building outlines;
+- box walls, LoD2 wall surfaces and measured facade planes as walls;
 - city streets as roads and paths;
 - kerbs;
 - street use as surfaces.

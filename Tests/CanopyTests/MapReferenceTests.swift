@@ -13,6 +13,8 @@ import Testing
         #expect(AppModel.lineKind(layer: .footprints, kind: .building) == .building)
         #expect(AppModel.lineKind(layer: .boxes, kind: .building) == .wall)
         #expect(AppModel.lineKind(layer: .observed, kind: .wallPlane) == .wall)
+        #expect(AppModel.lineKind(layer: .buildings, kind: .wallSurface) == .wall)
+        #expect(AppModel.lineKind(layer: .buildings, kind: .buildingPart) == .building)
         #expect(AppModel.lineKind(layer: .observed, kind: .sensor) == nil)
         #expect(AppModel.lineKind(layer: .cityStreets, kind: .road) == .road)
         #expect(AppModel.lineKind(layer: .cityStreets, kind: .path) == .path)
