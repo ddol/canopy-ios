@@ -81,8 +81,11 @@ extension AppModel {
             case .pole: return .other
             default: return nil  // sensor positions and corrections
             }
-        case .footprints, .buildings:
+        case .footprints:
             return .building
+        case .buildings:
+            // A wall surface is vertical, so from above it is a line, like a box wall.
+            return kind == .wallSurface ? .wall : .building
         case .kerbs:
             return .kerb
         case .streetUse:
@@ -96,7 +99,7 @@ extension AppModel {
             case .path: return .path
             case .kerb, .island: return .kerb
             case .surface, .driveway, .parkingSpace: return .surface
-            case .wallPlane, .facade: return .wall
+            case .wallPlane, .facade, .wallSurface: return .wall
             case .sensor, .correction, .tree: return nil
             default: return .other
             }

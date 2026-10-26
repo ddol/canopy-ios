@@ -50,15 +50,18 @@ public struct VectorMapView: View {
         let walls = reference.features.filter { $0.layer == .boxes }.count
         let measured = reference.features.filter { $0.line.kind == .wallPlane }.count
         let roofs = reference.features.filter { $0.line.kind == .roofPlane }.count
+        let surfaces = reference.features.filter { $0.line.kind == .wallSurface }.count
         let footprints = reference.features.filter { $0.layer == .footprints }.count
         let buildings = walls > 0 ? "\(walls) box walls" : "\(footprints) building outlines"
         return "\(buildings) · \(measured) measured wall planes · "
             + (roofs == 0 ? "No LoD2 roofs" : "\(roofs) roof planes")
+            + (surfaces == 0 ? "" : " · \(surfaces) wall surfaces")
     }
 }
 
 private enum VectorGroup: String, CaseIterable {
     case buildings = "Buildings"
+    case lod2 = "Roofs and wall surfaces"
     case observed = "Measured facades"
     case streets = "Streets and kerbs"
     case ground = "Ground"
@@ -66,6 +69,7 @@ private enum VectorGroup: String, CaseIterable {
     var color: UIColor {
         switch self {
         case .buildings: UIColor(red: 0.75, green: 0.69, blue: 0.55, alpha: 1)
+        case .lod2: UIColor(red: 0.78, green: 0.58, blue: 0.47, alpha: 1)
         case .observed: UIColor(red: 0.23, green: 0.56, blue: 0.45, alpha: 1)
         case .streets: UIColor(red: 0.48, green: 0.48, blue: 0.37, alpha: 1)
         case .ground: UIColor(red: 0.90, green: 0.91, blue: 0.85, alpha: 1)
@@ -117,6 +121,8 @@ private struct VectorSceneView: UIViewRepresentable {
         let elevation = heights.isEmpty ? (featureHeights.first ?? 0) : heights[heights.count / 2]
         var groups: [VectorGroup: VectorMesh] = [:]
         let hasBoxes = reference.features.contains { $0.layer == .boxes || $0.layer == .buildings }
+        // A server that sends wall surfaces has its parts' walls drawn by them; an older one has its parts extruded.
+        let wallSurfaces = reference.features.contains { $0.layer == .buildings && $0.line.kind == .wallSurface }
         for feature in reference.features {
             let line = feature.line
             // Box walls already encode the shifted outline and measured heights.
@@ -125,12 +131,13 @@ private struct VectorSceneView: UIViewRepresentable {
             if line.kind == .sensor || line.kind == .correction { continue }
             let group: VectorGroup =
                 switch feature.layer {
-                case .footprints, .boxes, .buildings: .buildings
+                case .footprints, .boxes: .buildings
+                case .buildings: .lod2
                 case .observed: .observed
                 default: .streets
                 }
             var mesh = groups[group] ?? VectorMesh()
-            mesh.add(line, layer: feature.layer, elevation: elevation)
+            mesh.add(line, layer: feature.layer, wallSurfaces: wallSurfaces, elevation: elevation)
             groups[group] = mesh
         }
         if let ground = reference.ground { groups[.ground] = VectorMesh(ground: ground, elevation: elevation) }
@@ -160,8 +167,8 @@ private struct VectorMesh {
 
     init() {}
 
-    mutating func add(_ line: LineFeature, layer: ReferenceLayer, elevation: Float) {
-        for face in VectorGeometry.faces(line, layer: layer) {
+    mutating func add(_ line: LineFeature, layer: ReferenceLayer, wallSurfaces: Bool, elevation: Float) {
+        for face in VectorGeometry.faces(line, layer: layer, wallSurfaces: wallSurfaces) {
             let start = UInt32(vertices.count)
             vertices += face.vertices.map { SCNVector3(VectorGeometry.scenePoint($0, elevation: elevation)) }
             triangles += face.triangles.map { start + $0 }

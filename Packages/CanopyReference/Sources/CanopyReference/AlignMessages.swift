@@ -1,7 +1,8 @@
 import Foundation
 
 // Swift versions of the gerardus.align.v1alpha1 messages Canopy uses. Field numbers follow the server's
-// align.proto (read by gRPC reflection); unknown fields are skipped, so newer servers stay compatible.
+// align.proto (read by gRPC reflection), as of Gerardus commit 5f565a9 (FEATURE_KIND_WALL_SURFACE); unknown fields
+// are skipped, so newer servers stay compatible.
 
 // MARK: - Geometry
 
@@ -283,6 +284,8 @@ public enum FeatureKind: Int, Sendable {
     case laneMarking = 19
     case sign = 20
     case tree = 21
+    /// A vertical wall of a building part up to its roofline (BUILDINGS); its vertices carry their z.
+    case wallSurface = 22
 }
 
 public struct SiteFrame: Equatable, Sendable, ProtoDecodable {
