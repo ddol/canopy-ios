@@ -60,7 +60,7 @@ public struct VectorReference: Sendable {
     public var attribution: [String]
 
     public enum Failure: LocalizedError, Equatable {
-        case unprepared, unavailable, incomplete, mixedModels, tooLarge
+        case unprepared, unavailable, incomplete, mixedModels, tooLarge, stillBuilding
 
         public var errorDescription: String? {
             switch self {
@@ -69,6 +69,9 @@ public struct VectorReference: Sendable {
             case .incomplete: "The server stopped before all vector layers finished. Try loading again."
             case .mixedModels: "The site's model changed while loading. Reload to get one consistent model."
             case .tooLarge: "This vector scene is too large. Try a smaller area."
+            case .stillBuilding:
+                "The server took too long to send this site. After being idle it builds the site's model first, "
+                    + "which can take a minute or two. Try again shortly."
             }
         }
     }
@@ -84,27 +87,32 @@ public struct VectorReference: Sendable {
         var completed: Set<ReferenceLayer> = []
         var vertexCount = 0
         let request = StreamReferenceRequest(l16Token: token, layers: layers, radius: 220)
-        for try await message in client.referenceMessages(request) {
-            try Task.checkCancellation()
-            guard layers.contains(message.layer) else { continue }
-            if !message.modelID.isEmpty { modelIDs.insert(message.modelID) }
-            guard modelIDs.count <= 1 else { throw Failure.mixedModels }
-            if message.complete { completed.insert(message.layer) }
-            switch message.chunk {
-            case .lines(let layer, let lines):
-                vertexCount += lines.reduce(0) { $0 + $1.xyz.count / 3 }
-                guard vertexCount <= 250_000 else { throw Failure.tooLarge }
-                features += lines.filter { line in
-                    line.xyz.count >= 6 && line.xyz.count.isMultiple(of: 3) && line.xyz.allSatisfy(\.isFinite)
-                }.map { Feature(layer: layer, line: $0) }
-            case .groundMesh(let field):
-                guard field.nx > 0, field.ny > 0, field.nx <= 1000, field.ny <= 1000,
-                    field.z.count == field.nx * field.ny, field.cellSize.isFinite, field.cellSize > 0,
-                    field.origin.x.isFinite, field.origin.y.isFinite, field.origin.z.isFinite
-                else { throw Failure.tooLarge }
-                ground = field
-            default: break
+        do {
+            for try await message in client.referenceMessages(request) {
+                try Task.checkCancellation()
+                guard layers.contains(message.layer) else { continue }
+                if !message.modelID.isEmpty { modelIDs.insert(message.modelID) }
+                guard modelIDs.count <= 1 else { throw Failure.mixedModels }
+                if message.complete { completed.insert(message.layer) }
+                switch message.chunk {
+                case .lines(let layer, let lines):
+                    vertexCount += lines.reduce(0) { $0 + $1.xyz.count / 3 }
+                    guard vertexCount <= 250_000 else { throw Failure.tooLarge }
+                    features += lines.filter { line in
+                        line.xyz.count >= 6 && line.xyz.count.isMultiple(of: 3) && line.xyz.allSatisfy(\.isFinite)
+                    }.map { Feature(layer: layer, line: $0) }
+                case .groundMesh(let field):
+                    guard field.nx > 0, field.ny > 0, field.nx <= 1000, field.ny <= 1000,
+                        field.z.count == field.nx * field.ny, field.cellSize.isFinite, field.cellSize > 0,
+                        field.origin.x.isFinite, field.origin.y.isFinite, field.origin.z.isFinite
+                    else { throw Failure.tooLarge }
+                    ground = field
+                default: break
+                }
             }
+        } catch  where AlignClient.timedOut(error) {
+            // The server went quiet past the time limit, usually while it builds the site's model; it carries on.
+            throw Failure.stillBuilding
         }
         guard completed.isSuperset(of: layers) else { throw Failure.incomplete }
         guard !features.isEmpty || ground?.z.contains(where: \.isFinite) == true else { throw Failure.unavailable }

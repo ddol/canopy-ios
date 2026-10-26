@@ -357,8 +357,10 @@ extension AlignClient {
                         if cache.holds(ground, bundleID: bundleID) {
                             do {
                                 model = try await currentModel(request)
-                            } catch  where Self.isOffline(error) {
-                                model = nil  // offline: the kept ground is the best there is
+                            } catch  where Self.isOffline(error) || AlignClient.timedOut(error) {
+                                // Offline, or busy deriving its model (after accepting a scan, or after being idle):
+                                // the kept ground is the best there is now, and the next load asks again.
+                                model = nil
                             }
                         }
                     }
@@ -409,13 +411,13 @@ extension AlignClient {
     }
 
     /// The site model the server's ground layer comes from now: a few cells of ground round the request's centre,
-    /// which name it (an older server without site models names none, ""). The first ground asked for after the
-    /// server accepts a scan is derived then, so this has the reference stream's time limit.
-    func currentModel(_ request: StreamReferenceRequest) async throws -> String {
+    /// which name it (an older server without site models names none, ""). Given a few seconds only: a server that
+    /// takes longer is deriving its model, which can take minutes, and a load from kept points should not wait.
+    func currentModel(_ request: StreamReferenceRequest, limit: Duration = .seconds(5)) async throws -> String {
         var probe = request
         probe.layers = [.groundMesh]
         probe.radius = 1
-        return try await complete(probe, transport: transport, limit: timeouts.reference).model ?? ""
+        return try await complete(probe, transport: transport, limit: limit).model ?? ""
     }
 
     /// Whether a call failed because there is no connection to the server at all, as opposed to a slow or failing

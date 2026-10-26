@@ -357,4 +357,38 @@ func onlyChecked(_ stats: StandInServer.Stats) -> Bool {
             tile: tile, area: area(64, -37, 150), label: "test", client: client, cache: cache)
         #expect(onlyChecked(server.stats))
     }
+
+    @Test func aSlowServerSaysToTryAgain() async throws {
+        let align = StandInAlign(site: site)
+        align.slowStart = .seconds(2)
+        let server = StandInServer(align: align)
+        try await server.start()
+        defer { server.stop() }
+        // A one-second idle limit stands in for URLSession's thirty.
+        let client = AlignClient(transport: URLSessionGRPCTransport(baseURL: server.url, idleTimeout: 1))
+        await #expect(throws: AerialTrees.Failure.slowServer) {
+            _ = try await AerialTrees.load(tile: tile, area: area(0, 0, 100), label: "test", client: client)
+        }
+    }
+
+    @Test func aBusyServerDoesNotHoldUpAKeptLoad() async throws {
+        let align = StandInAlign(site: site)
+        let server = StandInServer(align: align)
+        try await server.start()
+        defer { server.stop() }
+        let client = AlignClient(baseURL: server.url)
+        let cache = temporaryCache()
+        defer { cache.removeAll() }
+        let first = try await AerialTrees.load(
+            tile: tile, area: area(0, 0, 120), label: "test", client: client, cache: cache)
+
+        // The server is deriving its model: the probe gives up after a few seconds and the kept ground is used.
+        align.slowStart = .seconds(20)
+        let start = ContinuousClock.now
+        let kept = try await AerialTrees.load(
+            tile: tile, area: area(0, 0, 120), label: "test", client: client, cache: cache)
+        #expect(ContinuousClock.now - start < .seconds(8))
+        #expect(kept.fromCache)
+        #expect(kept.candidates == first.candidates)
+    }
 }

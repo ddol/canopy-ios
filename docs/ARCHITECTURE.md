@@ -137,7 +137,10 @@ are reported. The message definitions come from the server by gRPC reflection. E
 (`AlignClient.Timeouts`: 10 s for single answers, 30 s to prepare a site, 45 s to stream reference layers, 180 s for
 registration) and a call that receives nothing for 30 s fails, so a slow server or link shows an error instead of
 a spinner. The server keeps preparing a site after the call that asked for it gives up, so the app says the area is
-still being prepared and the next try finds it ready. Calls accept gzip (`grpc-encoding: gzip`, decompressed with the
+still being prepared and the next try finds it ready. The same goes for a site's model: after being idle (or after
+accepting a scan) the server builds it on first asking, which can take a minute or two, so a reference stream that
+goes quiet past its time limit tells the player the server took too long and to try again shortly
+(`AerialTrees.Failure.slowServer`, `VectorReference.Failure.stillBuilding`) rather than "The request timed out". Calls accept gzip (`grpc-encoding: gzip`, decompressed with the
 Compression framework), which saves about a third of a load once the server compresses its answers. The app keeps
 one align client and one map client per server and player (`AppModel.gerardus`), so calls reuse connections.
 
@@ -189,7 +192,8 @@ the whole. A stream is kept only when every layer sent its completion flag and t
 that ends early (HTTP/1.1 hides the server's error) fails the load rather than giving trees from part of the area.
 The ground comes from the server's site model, which changes when it accepts a scan while the bundle does not: kept
 ground records its model, and a load that could reuse it first asks for a few cells of ground to learn the current
-one, downloading the ground again when it has changed. The site and its georeference are kept too, so a kept area
+one, downloading the ground again when it has changed. That question gets five seconds: a server still building its
+model would hold up a load from the phone for minutes, so then the kept ground is used and the next load asks again. The site and its georeference are kept too, so a kept area
 loads with `GetSite` and that small probe, or with nothing from the server when it cannot be reached. Settings shows
 the saved data's size and can clear it.
 

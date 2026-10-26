@@ -88,6 +88,15 @@ public struct AlignClient: Sendable {
         }
     }
 
+    /// Whether a call timed out: no data within URLSession's idle limit, or past its own time limit. Before any message
+    /// that usually means the server is still working (preparing a site, or deriving its model after a scan was
+    /// accepted or after it has been idle), and the work carries on, so asking again shortly finds it done.
+    public static func timedOut(_ error: any Error) -> Bool {
+        if let error = error as? URLError { return error.code == .timedOut }
+        if case GRPCTransportError.timedOut = error { return true }
+        return false
+    }
+
     /// Whether a call failed for want of a connection (no network, the server down or out of reach, or no answer in
     /// time) rather than because the server said no.
     public static func isUnreachable(_ error: any Error) -> Bool {

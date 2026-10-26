@@ -97,11 +97,17 @@ public enum AerialTrees {
         case stillPreparing
         /// The site was prepared without aerial points: the server has no 3DEP data there.
         case noAerialData
+        /// The stream went quiet past its time limit. After being idle, or after accepting a scan, the server builds
+        /// the site's model on first asking and carries on, so asking again shortly usually works.
+        case slowServer
 
         public var errorDescription: String? {
             switch self {
             case .stillPreparing: "The server is still preparing this area. Try again in a minute."
             case .noAerialData: "The server has no aerial LiDAR for this area, so there are no trees to find here."
+            case .slowServer:
+                "The server took too long to send this area. After being idle it builds the site first, which can "
+                    + "take a minute or two. Try again shortly."
             }
         }
     }
@@ -172,19 +178,24 @@ public enum AerialTrees {
         let stream = client.reference(
             request(layers, classes: canopyClasses), bundleID: site.bundleID, cache: cache, padding: cachePadding,
             fromCache: saved.set)
-        for try await chunk in stream {
-            switch chunk {
-            case .points(_, let block):
-                blocks.append(block)
-                count += block.count
-                progress(saved.value ? .readingSaved(points: count) : .downloading(points: count))
-            case .groundMesh(let field):
-                ground = field
-            case .lines(_, let more):
-                lines += more
-            default:
-                break
+        do {
+            for try await chunk in stream {
+                switch chunk {
+                case .points(_, let block):
+                    blocks.append(block)
+                    count += block.count
+                    progress(saved.value ? .readingSaved(points: count) : .downloading(points: count))
+                case .groundMesh(let field):
+                    ground = field
+                case .lines(_, let more):
+                    lines += more
+                default:
+                    break
+                }
             }
+        } catch  where AlignClient.timedOut(error) {
+            // The server went quiet past the time limit, usually while it derives the site's ground model.
+            throw Failure.slowServer
         }
         // OpenStreetMap on its own call: the server refuses a whole stream that names it for anyone but its admins, and
         // detection must work either way.

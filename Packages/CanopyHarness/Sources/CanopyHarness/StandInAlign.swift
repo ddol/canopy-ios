@@ -44,8 +44,16 @@ public final class StandInAlign: @unchecked Sendable {
         set { lock.withLock { cut = newValue } }
     }
 
+    /// How long a reference stream sends nothing before it starts, as when the server derives a site's model after
+    /// being idle.
+    public var slowStart: Duration {
+        get { lock.withLock { delay } }
+        set { lock.withLock { delay = newValue } }
+    }
+
     private var siteModel = (id: "model-1", raise: Float(0))
     private var cut: Int?
+    private var delay = Duration.zero
 
     private let preparedAtFirst: Bool
     private var prepared: Set<String> = []
@@ -321,10 +329,11 @@ public final class StandInAlign: @unchecked Sendable {
                 send(layer, complete: true, nil)
             }
         }
+        let start = slowStart
         if let cut = cutAfter, messages.count > cut {
-            return GRPCReply(events: messages.prefix(cut).map { .init(after: .zero, data: $0) }, status: 13)
+            return GRPCReply(events: messages.prefix(cut).map { .init(after: start, data: $0) }, status: 13)
         }
-        return .messages(messages)
+        return GRPCReply(events: messages.map { .init(after: start, data: $0) })
     }
 
     // MARK: Poses
