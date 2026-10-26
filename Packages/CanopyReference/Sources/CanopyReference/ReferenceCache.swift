@@ -39,15 +39,24 @@ public final class ReferenceCache: @unchecked Sendable {
         self.byteLimit = byteLimit
     }
 
-    /// The default place: the app's Caches folder, one folder per server so sites from two servers never mix.
+    /// The default place: the app's Caches folder, one folder per server so sites from two servers never mix. Asking
+    /// again for the same server gives the same cache: two on one folder would each keep an index of their own.
     public static func caches(for server: URL) -> ReferenceCache? {
         guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
             return nil
         }
         let name = [server.host() ?? "server", server.port.map(String.init) ?? ""].filter { !$0.isEmpty }
             .joined(separator: "-")
-        return ReferenceCache(directory: caches.appending(path: "Gerardus/reference/\(name)"))
+        let directory = caches.appending(path: "Gerardus/reference/\(name)")
+        return opened.withLock { opened in
+            if let cache = opened[directory.path] { return cache }
+            let cache = ReferenceCache(directory: directory)
+            opened[directory.path] = cache
+            return cache
+        }
     }
+
+    private static let opened = Locked<[String: ReferenceCache]>([:])
 
     // MARK: Sites
 
@@ -229,13 +238,24 @@ public final class ReferenceCache: @unchecked Sendable {
 
     // MARK: Files
 
+    /// The index, read once. Files it does not name (left by a crash between writing a stream and the index) are
+    /// removed, and entries whose file is missing are dropped, so the folder holds only what the index counts.
     private func loadIndex() -> [Entry] {
         if let index { return index }
         let decoder = JSONDecoder()
-        let loaded =
-            (try? Data(contentsOf: directory.appending(path: "streams/index.json")))
+        let streams = directory.appending(path: "streams")
+        var loaded =
+            (try? Data(contentsOf: streams.appending(path: "index.json")))
             .flatMap { try? decoder.decode([Entry].self, from: $0) } ?? []
+        let files = Set((try? FileManager.default.contentsOfDirectory(atPath: streams.path)) ?? [])
+        let named = Set(loaded.map(\.file))
+        for file in files where file != "index.json" && !named.contains(file) {
+            try? FileManager.default.removeItem(at: streams.appending(path: file))
+        }
+        let before = loaded.count
+        loaded.removeAll { !files.contains($0.file) }
         index = loaded
+        if loaded.count != before { saveIndex(loaded) }
         return loaded
     }
 
@@ -623,5 +643,19 @@ extension Heightfield {
             origin: Vector3(
                 x: origin.x + Double(i0) * cellSize, y: origin.y + Double(j0) * cellSize, z: origin.z),
             cellSize: cellSize, nx: i1 - i0 + 1, ny: j1 - j0 + 1, z: cut)
+    }
+}
+
+/// A value behind a lock.
+final class Locked<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    func withLock<Result>(_ body: (inout Value) -> Result) -> Result {
+        lock.withLock { body(&value) }
     }
 }

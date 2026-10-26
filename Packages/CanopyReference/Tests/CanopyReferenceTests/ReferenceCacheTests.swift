@@ -67,4 +67,27 @@ import Testing
         }
         #expect(missed == 0)
     }
+
+    @Test func theSameServerGetsTheSameCache() throws {
+        let a = try #require(ReferenceCache.caches(for: URL(string: "http://gerardus.local:50061")!))
+        let b = try #require(ReferenceCache.caches(for: URL(string: "http://gerardus.local:50061")!))
+        let other = try #require(ReferenceCache.caches(for: URL(string: "http://gerardus.local:50062")!))
+        #expect(a === b)
+        #expect(a !== other)
+        #expect(a.directory != other.directory)
+    }
+
+    @Test func filesTheIndexDoesNotNameAreTidiedAway() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "tidy-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let streams = folder.appending(path: "streams")
+        try FileManager.default.createDirectory(at: streams, withIntermediateDirectories: true)
+        // A stream written but never indexed, and an index entry whose stream is gone.
+        try Data([1, 2, 3]).write(to: streams.appending(path: "orphan.grpc"))
+        let missing = entry(request(0, 0, 100))
+        try JSONEncoder().encode([missing]).write(to: streams.appending(path: "index.json"))
+        let cache = ReferenceCache(directory: folder)
+        #expect(cache.streamBytes == 0)
+        #expect(!FileManager.default.fileExists(atPath: streams.appending(path: "orphan.grpc").path))
+    }
 }
