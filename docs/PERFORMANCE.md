@@ -37,7 +37,10 @@ make serve PROFILE=cellular     # the stand-in on port 50099 for the app in the 
 ```
 
 `canopy-harness bench --gzip` serves compressed answers, as the server would with compression on, and
-`canopy-harness volume` prices the other ways a load could be smaller (below).
+`canopy-harness volume` prices the other ways a load could be smaller (below). To measure a real server over a real
+link (from a Mac on the tailnet, say), `canopy-harness measure --server http://host:50061 [--token 8085876c1]` runs
+the app's load against it, first from the server and then from the cache, with each step's time and the bytes and
+calls counted on the client.
 
 In the app, debug and TestFlight builds show how long each step of a load took under its result, and every build
 logs it (`log stream --predicate 'subsystem == "io.github.ddol.canopy"'`). To profile a load with Instruments without

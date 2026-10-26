@@ -19,9 +19,16 @@ public struct SiteGeoreference: Sendable {
     /// What it was fitted from: WGS 84 points and their site-frame x and y.
     public let samples: [(geo: GeoPoint, site: SIMD2<Double>)]
 
-    public enum FitError: Error, Equatable {
+    public enum FitError: Error, Equatable, LocalizedError {
         case tooFewSamples
         case degenerate
+
+        public var errorDescription: String? {
+            switch self {
+            case .tooFewSamples: "The server could not place enough points in this area on its ground model."
+            case .degenerate: "The server placed points in this area in a line, so they cannot be fitted."
+            }
+        }
     }
 
     /// Fits from pairs of (WGS 84 point, site-frame x and y).

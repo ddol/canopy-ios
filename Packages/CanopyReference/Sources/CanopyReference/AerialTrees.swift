@@ -95,9 +95,14 @@ public enum AerialTrees {
     public enum Failure: Error, Equatable, LocalizedError {
         /// Preparing the site ran past its time limit. The server carries on, so the site is usually ready soon.
         case stillPreparing
+        /// The site was prepared without aerial points: the server has no 3DEP data there.
+        case noAerialData
 
         public var errorDescription: String? {
-            "The server is still preparing this area. Try again in a minute."
+            switch self {
+            case .stillPreparing: "The server is still preparing this area. Try again in a minute."
+            case .noAerialData: "The server has no aerial LiDAR for this area, so there are no trees to find here."
+            }
         }
     }
 
@@ -143,6 +148,11 @@ public enum AerialTrees {
                 throw Failure.stillPreparing
             }
         }
+        // A server without 3DEP for the area prepares the site anyway, empty: say so rather than fail to place it.
+        guard
+            site.layerCounts[.aerialPoints, default: 0] > 0
+                || site.sources.contains(where: { $0.layer == .aerialPoints })
+        else { throw Failure.noAerialData }
         time("site")
         let georeference = try await SiteGeoreference.fetch(for: site, client: client, cache: cache)
         time("georeference")

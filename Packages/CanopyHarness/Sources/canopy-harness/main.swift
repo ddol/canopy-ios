@@ -1,4 +1,6 @@
 import CanopyHarness
+import CanopyModel
+import CanopyReference
 import Foundation
 
 // Line by line, so a script reading the output sees each line as it is printed.
@@ -13,6 +15,7 @@ let usage = """
            canopy-harness bench [--profiles loopback,lan,cellular,poor] [--out report.json] [--compare base.json]
                                 [--loads-only | --work-only] [--no-cache] [--gzip]
            canopy-harness volume
+           canopy-harness measure --server http://host:50061 [--token 8085876c1] [--radius 150]
     """
 
 guard CommandLine.arguments.count > 1 else {
@@ -102,6 +105,48 @@ case "bench":
         decoder.dateDecodingStrategy = .iso8601
         let before = try decoder.decode(Bench.Report.self, from: Data(contentsOf: URL(fileURLWithPath: base)))
         print(Bench.compare(before, report))
+    }
+
+case "measure":
+    // A real server, from this machine: the app's load, first from the server and then from the cache.
+    guard let server = option("--server").flatMap(URL.init(string:)) else {
+        print("usage: canopy-harness measure --server http://host:50061 [--token 8085876c1] [--radius 150]")
+        exit(2)
+    }
+    let token = option("--token") ?? SyntheticSite.stowLake
+    guard let tile = S2CellID(token: token) else {
+        print("not an S2 token: \(token)")
+        exit(2)
+    }
+    let radius = option("--radius").flatMap(Double.init) ?? 150
+    let transport = CountingTransport(URLSessionGRPCTransport(baseURL: server))
+    let client = AlignClient(transport: transport)
+    let info = try await client.serverInfo()
+    print("\(server): \(info.serverVersion), \(info.apiVersion)")
+    let folder = FileManager.default.temporaryDirectory.appending(path: "canopy-measure-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let cache = ReferenceCache(directory: folder)
+    for pass in ["from the server", "from the cache"] {
+        transport.reset()
+        let start = ContinuousClock.now
+        let loaded: AerialTrees.SiteResult
+        do {
+            loaded = try await AerialTrees.load(
+                tile: tile, area: AerialTrees.Area(centre: tile.center, radius: radius), label: "canopy-harness",
+                client: client, cache: cache)
+        } catch {
+            print("\(pass): failed after \(transport.stats.calls): \(error.localizedDescription)")
+            exit(1)
+        }
+        let result = loaded
+        let seconds = (ContinuousClock.now - start).timeInterval
+        let steps = result.timings.map { String(format: "%@ %.2f", $0.step, $0.seconds) }.joined(separator: ", ")
+        let stats = transport.stats
+        print(
+            String(
+                format: "%@: %.2f s (%@), %d trees from %d points, %.2f MB in %d calls %@", pass as NSString, seconds,
+                steps as NSString, result.candidates.count, result.pointCount, Double(stats.totalBytes) / 1e6,
+                stats.totalCalls, "\(stats.calls)" as NSString))
     }
 
 case "volume":

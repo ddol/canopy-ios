@@ -333,7 +333,8 @@ public final class StandInAlign: @unchecked Sendable {
 }
 
 extension Duration {
-    var timeInterval: TimeInterval {
+    /// Seconds, as a Double.
+    public var timeInterval: TimeInterval {
         Double(components.seconds) + Double(components.attoseconds) * 1e-18
     }
 }
