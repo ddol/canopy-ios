@@ -179,7 +179,7 @@ public enum AerialTrees {
 
         progress(.detecting)
         let buildings = lines.filter { $0.kind == .building && $0.points.count >= 3 }.map(\.points)
-        let trees = detector.detect(points: blocks, ground: ground, buildings: buildings)
+        let (trees, canopy) = detector.detectWithCanopy(points: blocks, ground: ground, buildings: buildings)
         progress(.placing)
         let aerialSource = site.sources.first { $0.layer == .aerialPoints }
         let source =
@@ -196,7 +196,7 @@ public enum AerialTrees {
             },
             pointCount: count,
             georeference: georeference,
-            canopy: detector.canopyHeightModel(points: blocks, ground: ground),
+            canopy: canopy,
             lines: lines,
             usedOSM: usedOSM,
             osmRefused: osmRefused

@@ -224,17 +224,20 @@ public struct Heightfield: Equatable, Sendable, ProtoDecodable {
         let j1 = min(ny - 1, j0 + 1)
         let tx = max(0, min(1, fx - Double(i0)))
         let ty = max(0, min(1, fy - Double(j0)))
-        let corners = [
-            (i0, j0, (1 - tx) * (1 - ty)), (i1, j0, tx * (1 - ty)), (i0, j1, (1 - tx) * ty), (i1, j1, tx * ty),
-        ]
+        // The four corners in turn, without an array: this runs once per canopy cell.
         var total = 0.0
         var weight = 0.0
-        for (i, j, w) in corners where w > 0 {
+        func add(_ i: Int, _ j: Int, _ w: Double) {
+            guard w > 0 else { return }
             let value = z[j * nx + i]
-            guard value.isFinite else { continue }
+            guard value.isFinite else { return }
             total += Double(value) * w
             weight += w
         }
+        add(i0, j0, (1 - tx) * (1 - ty))
+        add(i1, j0, tx * (1 - ty))
+        add(i0, j1, (1 - tx) * ty)
+        add(i1, j1, tx * ty)
         return weight > 0.25 ? total / weight : nil
     }
 }

@@ -171,6 +171,9 @@ public enum Bench {
         measure("canopy height model, whole site") {
             _ = detector.canopyHeightModel(points: blocks, ground: ground)
         }
+        measure("detect and model together, whole site", detail: "as a load does") {
+            _ = detector.detectWithCanopy(points: blocks, ground: ground, buildings: buildings)
+        }
 
         // The local store with a park's worth of candidates: loading an area, and a player's tap.
         let candidates = parkCandidates(count: 30_000, seed: 7)

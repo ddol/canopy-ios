@@ -46,6 +46,20 @@ import Testing
 }
 
 @Suite struct TreeDetectorTests {
+    @Test func theMedianOfEightMatchesSorting() {
+        var random = SystemRandomNumberGenerator()
+        for trial in 0..<2_000 {
+            // Plenty of ties: canopy heights are often 0 or repeat.
+            let values = (0..<8).map { _ in
+                trial.isMultiple(of: 3) ? Float(Int.random(in: 0...3, using: &random)) : Float.random(in: -5...40)
+            }
+            let sorted = values.sorted()
+            let median = TreeDetector.median(
+                values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7])
+            #expect(median == (sorted[3] + sorted[4]) / 2)
+        }
+    }
+
     /// A flat 120 m square of ground at 90 m with cone-shaped crowns of points at known places.
     static func forest(
         _ trees: [(x: Double, y: Double, height: Double, radius: Double)], building: Bool = false
