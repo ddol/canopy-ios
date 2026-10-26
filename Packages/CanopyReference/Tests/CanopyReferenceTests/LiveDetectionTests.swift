@@ -18,9 +18,10 @@ import Testing
         var buildings: [[SIMD2<Double>]] = []
         var paths: [[SIMD2<Double>]] = []
         let voxel = Float(ProcessInfo.processInfo.environment["CANOPY_VOXEL"].flatMap(Double.init) ?? 1.0)
+        // The City's streets rather than OpenStreetMap, which the server sends only to its admins.
         let request = StreamReferenceRequest(
-            l16Token: site.l16Token, layers: [.aerialPoints, .osm, .footprints, .groundMesh], voxelSize: voxel,
-            aerialClasses: [1, 2])
+            l16Token: site.l16Token, layers: [.aerialPoints, .cityStreets, .footprints, .groundMesh],
+            voxelSize: voxel, aerialClasses: [1, 2])
         for try await chunk in client.reference(request) {
             switch chunk {
             case .points(_, let block): blocks.append(block)
@@ -55,7 +56,7 @@ import Testing
                 "STOWLAKE crown p10 \(crowns[crowns.count / 10]) p50 \(crowns[crowns.count / 2]) p90 \(crowns[crowns.count * 9 / 10])"
             )
         }
-        // Trees standing on a path centreline are suspicious.
+        // Trees standing on a street centreline are suspicious.
         let onPaths = trees.filter { tree in
             paths.contains { line in
                 zip(line, line.dropFirst()).contains { a, b in
@@ -84,7 +85,7 @@ import Testing
     }
 
     #if canImport(AppKit)
-        /// Draws the CHM in greens, OSM paths in grey, buildings in red and detected crowns as circles.
+        /// Draws the CHM in greens, streets in grey, buildings in red and detected crowns as circles.
         static func render(
             trees: [TreeDetector.Tree], blocks: [PointBlock], ground: Heightfield, paths: [[SIMD2<Double>]],
             buildings: [[SIMD2<Double>]], to url: URL
