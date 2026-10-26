@@ -13,7 +13,8 @@ import Testing
     /// Candidates on a grid near Stow Lake, about 11 m apart.
     func candidates(_ range: Range<Int>, height: Double = 20) -> [TreeCandidate] {
         range.map { k in
-            let location = GeoPoint(latitude: 37.7690 + Double(k / 20) * 1e-4, longitude: -122.4770 + Double(k % 20) * 1e-4)
+            let location = GeoPoint(
+                latitude: 37.7690 + Double(k / 20) * 1e-4, longitude: -122.4770 + Double(k % 20) * 1e-4)
             return TreeCandidate(
                 id: UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", k))!, location: location,
                 height: height, crownRadius: 4, confidence: 0.8, isSynthetic: false, source: "test \(k % 3)")

@@ -217,7 +217,8 @@ public struct SyntheticSite: Sendable {
                 }) {
                     let q = p + jitter()
                     // San Francisco's tiles leave many roofs unclassified: the footprints have to mask them.
-                    points.append(q.x, q.y, g + b.height, random.unit() < 0.5 ? 1 : 6, UInt16(random.unit(in: 900...2600)))
+                    points.append(
+                        q.x, q.y, g + b.height, random.unit() < 0.5 ? 1 : 6, UInt16(random.unit(in: 900...2600)))
                     continue
                 }
                 var top = 0.0
@@ -247,7 +248,8 @@ public struct SyntheticSite: Sendable {
                 }
                 if top > 0 {
                     var q = p + jitter()
-                    points.append(q.x, q.y, g + top + random.unit(in: -0.2...0.2), 1, UInt16(random.unit(in: 400...2200)))
+                    points.append(
+                        q.x, q.y, g + top + random.unit(in: -0.2...0.2), 1, UInt16(random.unit(in: 400...2200)))
                     var level = top - 1
                     while level > base {
                         if random.unit() < 0.6 {

@@ -145,7 +145,8 @@ import Testing
             byteLimit: 2_100_000)
         defer { cache.removeAll() }
         for x in [-120.0, 0, 120] {
-            _ = try await AerialTrees.load(tile: tile, area: area(x, 0, 60), label: "test", client: client, cache: cache)
+            _ = try await AerialTrees.load(
+                tile: tile, area: area(x, 0, 60), label: "test", client: client, cache: cache)
         }
         #expect(cache.streamBytes <= 2_100_000)
         #expect(cache.streamBytes > 1_000_000)

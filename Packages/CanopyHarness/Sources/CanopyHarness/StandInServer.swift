@@ -111,7 +111,8 @@ public final class StandInServer: @unchecked Sendable {
                 host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port) ?? .any)
         }
         let listener =
-            anyInterface ? try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port) ?? .any)
+            anyInterface
+            ? try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port) ?? .any)
             : try NWListener(using: parameters)
         listener.newConnectionHandler = { [weak self] connection in
             self?.accept(connection)
@@ -303,7 +304,8 @@ private final class Connection: @unchecked Sendable {
         var headers: [String: String] = [:]
         for line in lines {
             guard let colon = line.firstIndex(of: ":") else { continue }
-            headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(
+                in: .whitespaces)
         }
         let length = Int(headers["content-length"] ?? "0") ?? 0
         guard buffer.distance(from: end.upperBound, to: buffer.endIndex) >= length else { return nil }

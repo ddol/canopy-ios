@@ -41,7 +41,9 @@ public final class ReferenceCache: @unchecked Sendable {
 
     /// The default place: the app's Caches folder, one folder per server so sites from two servers never mix.
     public static func caches(for server: URL) -> ReferenceCache? {
-        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
         let name = [server.host() ?? "server", server.port.map(String.init) ?? ""].filter { !$0.isEmpty }
             .joined(separator: "-")
         return ReferenceCache(directory: caches.appending(path: "Gerardus/reference/\(name)"))
@@ -142,7 +144,9 @@ public final class ReferenceCache: @unchecked Sendable {
                     && (old.bundleID != bundleID
                         || Self.entry(entry, answers: old.request, bundleID: old.bundleID))
             }
-            for old in stale { try? FileManager.default.removeItem(at: directory.appending(path: "streams/\(old.file)")) }
+            for old in stale {
+                try? FileManager.default.removeItem(at: directory.appending(path: "streams/\(old.file)"))
+            }
             entries.removeAll { stale.contains($0) }
             entries.append(entry)
             // Least recently used first, until the rest fit.
@@ -282,7 +286,8 @@ extension AlignClient {
                     }
                     fromCache(false)
                     var received: [Data] = []
-                    for try await data in transport.call(Self.site + "StreamReference", [request.serialized], limit: limit)
+                    for try await data in transport.call(
+                        Self.site + "StreamReference", [request.serialized], limit: limit)
                     {
                         if cache != nil { received.append(data) }
                         if let chunk = try ReferenceMessage(serialized: data).chunk { continuation.yield(chunk) }

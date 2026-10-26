@@ -175,7 +175,8 @@ public enum Bench {
         // The local store with a park's worth of candidates: loading an area, and a player's tap.
         let candidates = parkCandidates(count: 30_000, seed: 7)
         let fresh = AerialTrees.candidates(
-            trees, georeference: try SiteGeoreference(
+            trees,
+            georeference: try SiteGeoreference(
                 origin: site.origin,
                 samples: [SIMD2(0.0, 0), SIMD2(100, 0), SIMD2(0, 100)].map { (geo: site.geo($0), site: $0) }),
             source: "synthetic")
@@ -275,7 +276,8 @@ extension Bench {
         lines.append("|---|---|---|")
         for item in after.work {
             let old = before.work.first { $0.name == item.name && $0.detail == item.detail }
-            let ms = old.map { String(format: "%.1f → %.1f", $0.seconds * 1000, item.seconds * 1000) }
+            let ms =
+                old.map { String(format: "%.1f → %.1f", $0.seconds * 1000, item.seconds * 1000) }
                 ?? String(format: "%.1f", item.seconds * 1000)
             lines.append("| \(item.name) | \(item.detail) | \(ms) |")
         }
