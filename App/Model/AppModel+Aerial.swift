@@ -16,6 +16,15 @@ enum AerialProgress: Equatable {
     }
 }
 
+/// The clients for one Gerardus server, calling as one player.
+struct GerardusConnection {
+    let url: URL
+    let player: Player
+    let align: AlignClient
+    let map: GerardusMapClient
+    let cache: ReferenceCache?
+}
+
 /// Real tree candidates and scan registration from a Gerardus align server.
 extension AppModel {
     static let attributionKey = "canopy.aerialAttribution"
@@ -24,10 +33,30 @@ extension AppModel {
     var gerardusURL: URL? { serverSettings.endpoint?.url }
 
     /// The align service, calling as the player: the server sends OpenStreetMap only to its admins.
-    var alignClient: AlignClient? { gerardusURL.map { AlignClient(baseURL: $0, player: player) } }
+    var alignClient: AlignClient? { gerardus?.align }
 
     /// The map service, where the shared tree census lives; nil until a server is set.
-    var mapClient: GerardusMapClient? { gerardusURL.map { GerardusMapClient(baseURL: $0, player: player) } }
+    var mapClient: GerardusMapClient? { gerardus?.map }
+
+    /// Aerial data kept on this phone for the server in Settings, so loading an area again costs no download.
+    var referenceCache: ReferenceCache? { gerardus?.cache }
+
+    /// The clients for the server in Settings, calling as the player. Made once per server and player and then
+    /// kept: each client holds a URLSession, so keeping them lets calls reuse connections, and screens can ask for
+    /// them as often as they draw.
+    var gerardus: GerardusConnection? {
+        guard let url = gerardusURL else { return nil }
+        if let kept = gerardusConnection, kept.url == url, kept.player == player { return kept }
+        let connection = GerardusConnection(
+            url: url, player: player, align: AlignClient(baseURL: url, player: player),
+            map: GerardusMapClient(baseURL: url, player: player),
+            cache: Self.isTesting()
+                ? ReferenceCache(
+                    directory: FileManager.default.temporaryDirectory.appending(path: "reference-\(UUID().uuidString)"))
+                : ReferenceCache.caches(for: url))
+        gerardusConnection = connection
+        return connection
+    }
 
     /// Thrown, or shown, when something needs the server and none is set.
     struct NoServerSet: LocalizedError {
@@ -70,7 +99,7 @@ extension AppModel {
         do {
             let result = try await AerialTrees.load(
                 tile: centre.tile, area: area, osm: isAdmin && adminSettings.useOSM, label: "canopy-ggp",
-                client: client
+                client: client, cache: referenceCache
             ) { stageSink.yield($0) }
             let removed = try await store.replaceCandidates(where: { result.covers($0) }, with: result.candidates)
             UserDefaults.standard.set(result.attribution, forKey: Self.attributionKey)
@@ -80,6 +109,7 @@ extension AppModel {
             var message =
                 "\(format.count(result.candidates.count)) trees from aerial LiDAR within "
                 + "\(format.length(area.radius, fractionDigits: 0)) of the map centre"
+                + (result.fromCache ? ", from data saved on this phone" : "")
                 + (removed > 0 ? ", replacing \(format.count(removed)) sample candidates." : ".")
             if result.osmRefused {
                 message += " The server sends OpenStreetMap only to its admins, so it was left out."
@@ -162,6 +192,8 @@ extension AppModel {
             return "Preparing the site on the server…"
         case .downloading(let points):
             return "Downloading \(QuantityFormat().count(points)) aerial points…"
+        case .readingSaved(let points):
+            return "Reading \(QuantityFormat().count(points)) saved aerial points…"
         case .detecting:
             return "Finding trees…"
         case .placing:
@@ -204,7 +236,7 @@ extension AppModel {
         let tile = GeoPoint(latitude: hint.position.latitude, longitude: hint.position.longitude).tile
         progress("Preparing the site…")
         let site: Site
-        if let prepared = try await client.site(tile.token) {
+        if let prepared = try await client.site(tile.token, cache: referenceCache) {
             site = prepared
         } else {
             do {
@@ -213,7 +245,7 @@ extension AppModel {
                 throw AerialTrees.Failure.stillPreparing
             }
         }
-        let georeference = try await SiteGeoreference.fetch(for: site, client: client)
+        let georeference = try await SiteGeoreference.fetch(for: site, client: client, cache: referenceCache)
 
         progress("Uploading \(QuantityFormat().count(points.count)) points…")
         let header = ScanHeader(

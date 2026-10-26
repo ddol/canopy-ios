@@ -63,6 +63,10 @@ final class AppModel {
     /// The tree the Tag screen should start with.
     var tagTarget: UUID?
 
+    /// The clients for the Gerardus server in Settings, kept so calls share connections and the reference cache
+    /// (see `AppModel+Aerial`).
+    @ObservationIgnored var gerardusConnection: GerardusConnection?
+
     let store: LocalStore
     let players: PlayerService
     /// The Gerardus server stand-in. In memory: it forgets everything when the app quits.

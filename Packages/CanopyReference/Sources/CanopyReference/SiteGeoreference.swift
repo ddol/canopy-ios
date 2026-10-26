@@ -16,6 +16,8 @@ public struct SiteGeoreference: Sendable {
     public let offset: SIMD2<Double>
     /// RMS residual of the fit, metres.
     public let rms: Double
+    /// What it was fitted from: WGS 84 points and their site-frame x and y.
+    public let samples: [(geo: GeoPoint, site: SIMD2<Double>)]
 
     public enum FitError: Error, Equatable {
         case tooFewSamples
@@ -56,6 +58,7 @@ public struct SiteGeoreference: Sendable {
         self.matrix = matrix
         self.offset = offset
         self.rms = (sum / Double(samples.count)).squareRoot()
+        self.samples = samples
     }
 
     /// Site-frame x and y of a WGS 84 point.
@@ -75,12 +78,15 @@ public struct SiteGeoreference: Sendable {
     }
 
     /// Asks the server for the site positions of points around the origin and fits. Points where the site has no
-    /// ground model (water, gaps) are skipped; at least three, not in a line, must answer.
+    /// ground model (water, gaps) are skipped; at least three, not in a line, must answer. The first six that answer,
+    /// in order, are used; they are asked for six at a time, so it takes a round trip or two rather than six. With a
+    /// `cache`, a site's georeference is fitted once: it depends only on the site frame.
     public static func fetch(
-        for site: Site, client: AlignClient, sensorID: String = "canopy-georef"
+        for site: Site, client: AlignClient, sensorID: String = "canopy-georef", cache: ReferenceCache? = nil
     ) async throws
         -> SiteGeoreference
     {
+        if let kept = cache?.georeference(for: site) { return kept }
         guard let origin = site.frame?.origin else { throw FitError.tooFewSamples }
         let centre = GeoPoint(latitude: origin.latitude, longitude: origin.longitude)
         let frame = LocalFrame(origin: centre)
@@ -91,20 +97,35 @@ public struct SiteGeoreference: Sendable {
                 offsets.append((radius * cos(angle), radius * sin(angle)))
             }
         }
-        var samples: [(geo: GeoPoint, site: SIMD2<Double>)] = []
-        for (east, north) in offsets {
-            let geo = frame.geoPoint(of: ENU(east: east, north: north, up: 0)).point
-            do {
-                let (pose, _) = try await client.poseFromHint(
-                    l16Token: site.l16Token, sensorID: sensorID,
-                    hint: PoseHint(position: GeodeticPosition(latitude: geo.latitude, longitude: geo.longitude)))
-                samples.append((geo, SIMD2(pose.translation.x, pose.translation.y)))
-            } catch let error as GRPCStatusError where error.code == 9 {
-                continue  // FAILED_PRECONDITION: no ground height there
+        let wanted = 6
+        var answers: [(index: Int, geo: GeoPoint, site: SIMD2<Double>)] = []
+        for start in stride(from: 0, to: offsets.count, by: wanted) {
+            let batch = Array(offsets.enumerated())[start..<min(offsets.count, start + wanted)]
+            try await withThrowingTaskGroup(of: (Int, GeoPoint, SIMD2<Double>)?.self) { group in
+                for (index, (east, north)) in batch {
+                    let geo = frame.geoPoint(of: ENU(east: east, north: north, up: 0)).point
+                    group.addTask {
+                        do {
+                            let (pose, _) = try await client.poseFromHint(
+                                l16Token: site.l16Token, sensorID: sensorID,
+                                hint: PoseHint(
+                                    position: GeodeticPosition(latitude: geo.latitude, longitude: geo.longitude)))
+                            return (index, geo, SIMD2(pose.translation.x, pose.translation.y))
+                        } catch let error as GRPCStatusError where error.code == 9 {
+                            return nil  // FAILED_PRECONDITION: no ground height there
+                        }
+                    }
+                }
+                for try await answer in group {
+                    if let answer { answers.append((answer.0, answer.1, answer.2)) }
+                }
             }
-            if samples.count >= 6 { break }
+            if answers.count >= wanted { break }
         }
-        return try SiteGeoreference(origin: centre, samples: samples)
+        let samples = answers.sorted { $0.index < $1.index }.prefix(wanted).map { (geo: $0.geo, site: $0.site) }
+        let georeference = try SiteGeoreference(origin: centre, samples: Array(samples))
+        cache?.store(georeference, for: site)
+        return georeference
     }
 
     static func solve3(_ a: [[Double]], _ b: [Double]) -> [Double]? {

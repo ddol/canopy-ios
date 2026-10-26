@@ -9,6 +9,8 @@ struct SettingsScreen: View {
     @Environment(AppModel.self) private var model
     @State private var address = ""
     @FocusState private var editing: Bool
+    /// The saved aerial data's size once cleared here; read from the cache otherwise.
+    @State private var savedBytes: Int?
     private let format = QuantityFormat()
 
     private var settings: ServerSettings { model.serverSettings }
@@ -19,6 +21,7 @@ struct SettingsScreen: View {
         Form {
             serverSection
             resultSections
+            savedSection
             adminSection
         }
         .navigationTitle("Settings")
@@ -85,6 +88,34 @@ struct SettingsScreen: View {
     private func forget() {
         address = ""
         settings.save(nil)
+    }
+
+    // MARK: Saved data
+
+    /// Aerial data kept from earlier loads, so loading an area again needs no download.
+    @ViewBuilder
+    private var savedSection: some View {
+        if let cache = model.referenceCache {
+            let bytes = savedBytes ?? cache.streamBytes
+            Section {
+                LabeledContent("Aerial data", value: Int64(bytes).formatted(.byteCount(style: .file)))
+                    .accessibilityIdentifier("saved-aerial-data")
+                Button("Clear saved aerial data", systemImage: "trash", role: .destructive) {
+                    cache.removeAll()
+                    savedBytes = 0
+                }
+                .disabled(bytes == 0)
+            } header: {
+                Text("Saved on this phone")
+            } footer: {
+                Text(
+                    """
+                    Load real trees keeps the aerial points it downloads, so the same area loads again without \
+                    downloading, even with no signal. Up to \
+                    \(Int64(cache.byteLimit).formatted(.byteCount(style: .file))); the oldest go first.
+                    """)
+            }
+        }
     }
 
     // MARK: Admin

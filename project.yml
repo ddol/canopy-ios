@@ -38,6 +38,9 @@ packages:
     path: Packages/CanopyPlayers
   CanopyReference:
     path: Packages/CanopyReference
+  # Test-only: the stand-in Gerardus server, synthetic site and benchmarks. Nothing in the app links it.
+  CanopyHarness:
+    path: Packages/CanopyHarness
 
 targets:
   Canopy:
@@ -148,6 +151,7 @@ schemes:
         - package: CanopyReference/CanopyReferenceTests
         - package: CanopySync/CanopySyncTests
         - package: CanopyPlayers/CanopyPlayersTests
+        - package: CanopyHarness/CanopyHarnessTests
     profile:
       config: Release
     archive:

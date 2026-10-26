@@ -66,34 +66,32 @@ public enum Bench {
         Step(name: "whole site", centre: .zero, radius: nil, newClient: false),
     ]
 
-    /// How the bench loads: the app's entry point with whatever caches it uses. Given the server's URL, whether the
-    /// client should be new, and where to keep anything on disk.
-    public typealias Loader = @Sendable (
-        _ client: AlignClient, _ tile: S2CellID, _ area: AerialTrees.Area?, _ progress: @escaping @Sendable (AerialTrees.Stage) -> Void
-    ) async throws -> AerialTrees.SiteResult
-
-    public static let defaultLoader: Loader = { client, tile, area, progress in
-        try await AerialTrees.load(tile: tile, area: area, label: "canopy-harness", client: client, progress: progress)
-    }
-
-    /// Runs the steps under one profile against a fresh server, with a fresh cache folder.
+    /// Runs the steps under one profile against a fresh server, with a fresh cache folder (none when `cached` is
+    /// false). A step with a new client also gets a new cache object on the same folder, as after a relaunch.
     public static func loads(
-        site: SyntheticSite, profile: NetworkProfile, steps: [Step] = Bench.steps,
-        client makeClient: @Sendable (URL) -> AlignClient = { AlignClient(baseURL: $0) },
-        loader: Loader = Bench.defaultLoader, log: (String) -> Void = { _ in }
+        site: SyntheticSite, profile: NetworkProfile, steps: [Step] = Bench.steps, cached: Bool = true,
+        log: (String) -> Void = { _ in }
     ) async throws -> [Load] {
         let server = StandInServer(align: StandInAlign(site: site), profile: profile)
         try await server.start()
         defer { server.stop() }
+        let folder = FileManager.default.temporaryDirectory.appending(path: "canopy-bench-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
         let tile = S2CellID(token: site.token)!
-        var client = makeClient(server.url)
+        var client = AlignClient(baseURL: server.url)
+        var cache = cached ? ReferenceCache(directory: folder) : nil
         var out: [Load] = []
         for step in steps {
-            if step.newClient { client = makeClient(server.url) }
+            if step.newClient {
+                client = AlignClient(baseURL: server.url)
+                cache = cached ? ReferenceCache(directory: folder) : nil
+            }
             server.resetStats()
             let area = step.radius.map { AerialTrees.Area(centre: site.geo(step.centre), radius: $0) }
             let stages = StageClock()
-            let result = try await loader(client, tile, area) { stages.mark($0) }
+            let result = try await AerialTrees.load(
+                tile: tile, area: area, label: "canopy-harness", client: client, cache: cache
+            ) { stages.mark($0) }
             let seconds = stages.elapsed
             let stats = server.stats
             let load = Load(
@@ -240,6 +238,7 @@ final class StageClock: @unchecked Sendable {
         switch stage {
         case .preparing: name = "preparing"
         case .downloading: name = "downloading"
+        case .readingSaved: name = "reading saved"
         case .detecting: name = "detecting"
         case .placing: name = "placing"
         }
