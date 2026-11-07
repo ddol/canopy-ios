@@ -111,6 +111,14 @@ much of the trunk's circumference 1.37 m above the ground is covered (aim for 27
 3. **Lean**: circles at 0.6 to 2.4 m give stem centres; a straight line through them gives the angle from
    vertical and, with north alignment, its direction.
 
+**Raw depth beside the mesh.** ARKit's mesh is smoothed over a few centimetres, which rounds a trunk off. While a
+scan runs the session also takes the LiDAR depth map (`ARFrame.sceneDepth`, high-confidence pixels within 3.5 m)
+a few times a second, unprojects it through the camera's intrinsics and transform (`DepthFrame`) and keeps the
+points round the trunk one per centimetre voxel, averaged (`DepthAccumulator`). With 40 or more of those points in
+the 10 cm band at breast height, `TrunkAnalysis` fits the circle to them instead of the mesh's slices (the lean's
+slices likewise), and the result says how many it used; with fewer it falls back to the mesh. The progress card
+shows the point count and which source the running diameter came from.
+
 The evidence is the kept mesh (positions and indices only) re-cropped around the fitted trunk centre: the trunk
 plus 0.6 m around it, at most 2 m. A trunk's position on the map comes from the GPS fix plus the AR offset from
 the camera to the trunk (`GeoReference`), with the GPS accuracy as its uncertainty.

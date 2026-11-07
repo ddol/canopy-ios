@@ -789,8 +789,13 @@ struct ScanProgressCard: View {
 
     private var detail: String {
         var parts = [format.count(progress.triangleCount) + " triangles kept"]
+        if progress.pointCount > 0 {
+            parts.append(format.count(progress.pointCount) + " depth points")
+        }
         if let diameter = progress.diameter {
-            parts.append("about " + format.length(diameter, fractionDigits: 2) + " across")
+            parts.append(
+                "about " + format.length(diameter, fractionDigits: 2) + " across"
+                    + (progress.fromDepthPoints ? " (depth)" : " (mesh)"))
         } else {
             parts.append("no trunk found " + height + " up yet")
         }

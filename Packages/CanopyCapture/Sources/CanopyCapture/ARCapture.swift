@@ -47,6 +47,9 @@
         @ObservationIgnored private var hasRun = false
         @ObservationIgnored private var accumulator: MeshAccumulator?
         @ObservationIgnored private var lastIngest: [UUID: TimeInterval] = [:]
+        /// Raw depth points round the trunk while a scan runs; nil on a device without scene depth.
+        @ObservationIgnored private var depth: DepthAccumulator?
+        @ObservationIgnored private var lastDepthIngest: TimeInterval = 0
         @ObservationIgnored private var refreshTask: Task<Void, Never>?
         @ObservationIgnored private let overlayAnchor = AnchorEntity(world: .zero)
         @ObservationIgnored private let overlay = ModelEntity()
@@ -58,6 +61,8 @@
 
         /// Minimum time between two ingests of the same mesh anchor, in seconds.
         static let ingestInterval: TimeInterval = 0.3
+        /// Minimum time between two depth frames taken into a scan, in seconds.
+        static let depthInterval: TimeInterval = 0.2
 
         public override init() {
             view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
@@ -81,6 +86,9 @@
             configuration.worldAlignment = .gravityAndHeading
             configuration.planeDetection = [.horizontal]
             configuration.environmentTexturing = .none
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                configuration.frameSemantics.insert(.sceneDepth)
+            }
             isNorthAligned = true
             view.session.run(configuration, options: hasRun ? [] : [.resetTracking, .removeExistingAnchors])
             hasRun = true
@@ -122,12 +130,16 @@
             accumulator = MeshAccumulator(
                 center: hit.position, radius: TrunkScan.radius, below: TrunkScan.below, above: TrunkScan.above)
             lastIngest = [:]
+            depth = DepthAccumulator(
+                center: hit.position, radius: TrunkScan.radius, below: TrunkScan.below, above: TrunkScan.above)
+            lastDepthIngest = 0
             scan = Scan(center: hit.position, progress: ScanProgress(triangleCount: 0))
             for anchor in view.session.currentFrame?.anchors ?? [] {
                 if let mesh = anchor as? ARMeshAnchor {
                     ingest(mesh, force: true)
                 }
             }
+            if let frame = view.session.currentFrame { ingestDepth(frame) }
             refreshTask?.cancel()
             refreshTask = Task { [weak self] in
                 while !Task.isCancelled {
@@ -142,6 +154,7 @@
             refreshTask?.cancel()
             refreshTask = nil
             accumulator = nil
+            depth = nil
             scan = nil
             overlay.model = nil
         }
@@ -152,21 +165,25 @@
             guard let accumulator, let scan else { throw CaptureError.notScanning }
             let camera = cameraPosition ?? scan.center
             let aligned = isNorthAligned
+            let depth = self.depth
             return try await Task.detached(priority: .userInitiated) {
                 try TrunkScan.analyse(
-                    world: accumulator.mesh(), floorHeights: accumulator.floorHeights(), center: scan.center,
-                    camera: camera, northAligned: aligned)
+                    world: accumulator.mesh(), points: depth?.points() ?? [], floorHeights: accumulator.floorHeights(),
+                    center: scan.center, camera: camera, northAligned: aligned)
             }.value
         }
 
         /// Recomputes the overlay and the progress from the accumulated mesh, off the main actor.
         private func refresh() async {
             guard let accumulator, let center = scan?.center else { return }
+            let depth = self.depth
             let (mesh, progress) = await Task.detached(priority: .utility) {
                 let mesh = accumulator.mesh()
                 return (
                     mesh,
-                    TrunkScan.progress(world: mesh, floorHeights: accumulator.floorHeights(), center: center)
+                    TrunkScan.progress(
+                        world: mesh, points: depth?.points() ?? [], floorHeights: accumulator.floorHeights(),
+                        center: center)
                 )
             }.value
             guard self.scan?.center == center else { return }  // cancelled or restarted meanwhile
@@ -336,6 +353,63 @@
 
         public nonisolated func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
             MainActor.assumeIsolated { receive(anchors) }
+        }
+
+        public nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            MainActor.assumeIsolated { ingestDepth(frame) }
+        }
+
+        /// Adds a frame's LiDAR depth to the scan, a few times a second, while tracking is good.
+        private func ingestDepth(_ frame: ARFrame) {
+            guard var depth, let sceneDepth = frame.sceneDepth else { return }
+            guard frame.timestamp - lastDepthIngest >= Self.depthInterval else { return }
+            guard case .normal = frame.camera.trackingState else { return }
+            lastDepthIngest = frame.timestamp
+            let (values, width, height) = Self.floats(sceneDepth.depthMap)
+            guard width > 0 else { return }
+            let confidence = sceneDepth.confidenceMap.map { Self.bytes($0).0 }
+            let image = frame.camera.imageResolution
+            let intrinsics = DepthFrame.intrinsics(
+                frame.camera.intrinsics, from: SIMD2(Float(image.width), Float(image.height)),
+                to: SIMD2(Float(width), Float(height)))
+            depth.add(
+                DepthFrame.unproject(
+                    depth: values, confidence: confidence, width: width, height: height, intrinsics: intrinsics,
+                    cameraTransform: frame.camera.transform))
+            self.depth = depth
+        }
+
+        /// A 32-bit float pixel buffer's values, row-major, with its size.
+        static func floats(_ buffer: CVPixelBuffer) -> ([Float], Int, Int) {
+            guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_DepthFloat32 else { return ([], 0, 0) }
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+            guard let base = CVPixelBufferGetBaseAddress(buffer) else { return ([], 0, 0) }
+            let width = CVPixelBufferGetWidth(buffer)
+            let height = CVPixelBufferGetHeight(buffer)
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            var values = [Float](repeating: 0, count: width * height)
+            for row in 0..<height {
+                let source = base.advanced(by: row * stride).assumingMemoryBound(to: Float.self)
+                for column in 0..<width { values[row * width + column] = source[column] }
+            }
+            return (values, width, height)
+        }
+
+        /// An 8-bit pixel buffer's values, row-major, with its size.
+        static func bytes(_ buffer: CVPixelBuffer) -> ([UInt8], Int, Int) {
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+            guard let base = CVPixelBufferGetBaseAddress(buffer) else { return ([], 0, 0) }
+            let width = CVPixelBufferGetWidth(buffer)
+            let height = CVPixelBufferGetHeight(buffer)
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            var values = [UInt8](repeating: 0, count: width * height)
+            for row in 0..<height {
+                let source = base.advanced(by: row * stride).assumingMemoryBound(to: UInt8.self)
+                for column in 0..<width { values[row * width + column] = source[column] }
+            }
+            return (values, width, height)
         }
 
         private func receive(_ anchors: [ARAnchor]) {

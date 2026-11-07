@@ -25,6 +25,8 @@ public struct TrunkAnalysis: Sendable {
         public var center: SIMD2<Double>
         /// Centres of the circles used for the lean, as (height above ground, x, z).
         public var stemCenters: [SIMD3<Double>]
+        /// How many raw depth points the DBH circle was fitted to; 0 when it came from the mesh's slices.
+        public var depthPointCount = 0
     }
 
     /// Offsets from 1.37 m above the ground that are sliced and pooled for the DBH fit, in metres.
@@ -37,15 +39,26 @@ public struct TrunkAnalysis: Sendable {
     /// The fit needs at least this much of the circumference.
     public var minimumArcDegrees = 75.0
     public var plausibleDiameters: ClosedRange<Double> = 0.03...4
+    /// Half the height of the band of raw depth points pooled for the DBH fit, in metres: the same reach as the
+    /// mesh's slice offsets.
+    public var depthBandHalfWidth: Float = 0.05
+    /// Raw depth points are preferred to the mesh's slices once the band holds this many.
+    public var minimumDepthPoints = 40
 
     public init() {}
 
     /// - Parameters:
+    ///   - points: raw depth points in the mesh's frame, if any were kept: with enough of them 1.37 m up they are
+    ///     fitted instead of the mesh, which is smoothed.
     ///   - northAligned: true when the mesh frame's −z axis points to true north (ARKit's `gravityAndHeading`),
     ///     so the lean's direction can be reported.
-    public func measure(_ mesh: Mesh, groundHeight: Double, northAligned: Bool = false) throws -> Result {
+    public func measure(
+        _ mesh: Mesh, points depthPoints: [SIMD3<Float>] = [], groundHeight: Double, northAligned: Bool = false
+    ) throws -> Result {
         let dbhHeight = groundHeight + DBH.standardHeight
-        let points = sliceOffsets.flatMap { mesh.slice(atHeight: Float(dbhHeight + $0)) }
+        let band = depthPoints.slice(atHeight: Float(dbhHeight), halfWidth: depthBandHalfWidth)
+        let fromDepth = band.count >= minimumDepthPoints
+        let points = fromDepth ? band : sliceOffsets.flatMap { mesh.slice(atHeight: Float(dbhHeight + $0)) }
         guard points.count >= 12 else { throw TrunkAnalysisError.notEnoughPoints(points.count) }
         let circle: FittedCircle
         do {
@@ -60,7 +73,9 @@ public struct TrunkAnalysis: Sendable {
         let uncertainty = (pow(2 * circle.radiusUncertainty, 2) + pow(systematicDiameterUncertainty, 2)).squareRoot()
 
         let stemCenters: [SIMD3<Double>] = leanHeights.compactMap { height in
-            let slice = mesh.slice(atHeight: Float(groundHeight + height))
+            let y = Float(groundHeight + height)
+            let band = depthPoints.slice(atHeight: y, halfWidth: 0.03)
+            let slice = band.count >= minimumDepthPoints ? band : mesh.slice(atHeight: y)
             guard slice.count >= 8, let fit = try? CircleFit.robustFit(slice),
                 abs(fit.radius - circle.radius) < 0.5 * circle.radius
             else { return nil }
@@ -72,7 +87,8 @@ public struct TrunkAnalysis: Sendable {
             lean: Self.lean(through: stemCenters, northAligned: northAligned),
             circle: circle,
             center: circle.center,
-            stemCenters: stemCenters
+            stemCenters: stemCenters,
+            depthPointCount: fromDepth ? band.count : 0
         )
     }
 
