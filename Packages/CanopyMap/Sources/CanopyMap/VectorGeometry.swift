@@ -78,6 +78,33 @@ enum VectorGeometry {
         return Face(vertices: vertices, triangles: triangles)
     }
 
+    /// The extrusion a footprint or an older server's building part carries, in metres; nil when it has none.
+    static func extrusion(_ line: LineFeature, layer: ReferenceLayer, wallSurfaces: Bool = false) -> Float? {
+        guard line.closed, line.vertices.count >= 3 else { return nil }
+        if line.kind == .buildingPart, wallSurfaces { return nil }
+        let height: Float
+        if line.kind == .buildingPart {
+            height =
+                (line.tags["height"].flatMap(Float.init) ?? line.height)
+                - (line.tags["min_height"].flatMap(Float.init) ?? 0)
+        } else if layer == .footprints {
+            height = line.height
+        } else {
+            return nil
+        }
+        return height.isFinite && height > 0 ? height : nil
+    }
+
+    /// The roof of an extruded ring: the ring lifted by its extrusion, filled. Nil for anything not extruded (box
+    /// walls and LoD2 surfaces carry their own tops).
+    static func lid(_ line: LineFeature, layer: ReferenceLayer, wallSurfaces: Bool = false) -> Face? {
+        guard let height = extrusion(line, layer: layer, wallSurfaces: wallSurfaces) else { return nil }
+        var ring = line.vertices
+        if ring.first == ring.last { ring.removeLast() }
+        let up = SIMD3<Float>(0, 0, height)
+        return face(ring.map { $0 + up })
+    }
+
     /// `height_m` is an extrusion above each vertex, never an absolute elevation. Explicit wall and roof planes
     /// already carry their full z and must never be extruded a second time. `wallSurfaces` says the BUILDINGS layer
     /// sent `WALL_SURFACE`s: then a building part is only its base outline, and its walls are those surfaces. An older

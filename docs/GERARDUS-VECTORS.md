@@ -12,11 +12,30 @@ The phone needs access to the configured server (including Tailscale when that i
 
 ## On the main map
 
-The same vectors can be drawn flat over Apple's map (or the Gerardus-only map): **Map → Layers → Load vectors in
-view**, or the **Load vectors here** button that appears when the site at the map centre is not loaded yet. Each load
+The same vectors can be drawn flat over Apple's map: **Map → Layers → Load vectors in view**, or the **Load vectors here** button that appears when the site at the map centre is not loaded yet. Each load
 adds a site, so panning and loading builds up an area. **Show vectors** turns them off. Outlines, box walls and
 measured facades, streets, kerbs and street surfaces are drawn from above, and Gerardus's trees as their crowns (a
 ring of `crown_radius_m`, 2 m when the server gives none). Ground is left out. See ARCHITECTURE.md, *Map*.
+
+## The wireframe map
+
+**Map → Layers → Gerardus wireframe** replaces Apple's map with the loaded sites drawn in 3D the way the Mac
+visualiser draws them (ground grid, walls and roofs, streets and kerbs, trees as trunk and crown rings), with the
+census's trees as the same figure in their status colour, from their DBH and height when measured. One finger
+drags the map; two fingers turn it (a twist), tilt it (up or down) and zoom it (a pinch), all at once as on Apple's
+map; tapping a tree opens its sheet. The ground grid is tinted by height, dull green low to pale high over the range
+of the loaded sites, so slopes read without lighting. Buildings get a roof: a box-walled or extruded footprint's
+outline lifted to its height and filled (LoD2 roof planes are drawn as sent). It shows only what has been loaded:
+use **Load vectors in view** (or the **Load vectors here** button) to add the site at the map centre.
+
+## Server cells
+
+**Map → Layers → Server cells (L13)** lists the S2 level-13 cells under the map (about 1.2 km across, 64 level-16
+sites each), nearest the centre first, with how many of each cell's sites the server has prepared (`ListSites`).
+**Prepare the rest** asks the server for the missing sites one after another; **Rebuild all** asks for every site
+again with `refresh`, so each source is fetched afresh. A site takes the server a minute or two, so a cell takes an
+hour or more; the work carries on in the background with progress and a Cancel on the screen, and a site that is
+still building is asked for again every 15 s for up to ten minutes before it counts as failed.
 
 ## In AR
 

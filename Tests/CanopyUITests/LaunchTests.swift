@@ -72,13 +72,13 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(tree.waitForExistence(timeout: 30))
 
         app.buttons["Layers"].firstMatch.tap()
-        let gerardus = app.buttons["Gerardus only"].firstMatch
+        let gerardus = app.buttons["Gerardus wireframe"].firstMatch
         XCTAssertTrue(gerardus.waitForExistence(timeout: 10))
         gerardus.tap()
-        // The Gerardus map draws trees itself, so there are no marker views to snapshot.
-        XCTAssertTrue(app.descendants(matching: .any)["gerardus-map"].firstMatch.waitForExistence(timeout: 10))
+        // The wireframe map draws trees itself, so there are no marker views to snapshot.
+        XCTAssertTrue(app.descendants(matching: .any)["wireframe-map"].firstMatch.waitForExistence(timeout: 10))
         let shot = XCTAttachment(screenshot: app.screenshot())
-        shot.name = "Gerardus only"
+        shot.name = "Gerardus wireframe"
         shot.lifetime = .keepAlways
         add(shot)
         app.buttons["Layers"].firstMatch.tap()

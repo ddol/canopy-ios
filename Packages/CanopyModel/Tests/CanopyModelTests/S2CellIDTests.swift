@@ -83,4 +83,16 @@ import Testing
         let d = abs(a - b).truncatingRemainder(dividingBy: 360)
         return min(d, 360 - d)
     }
+
+    @Test func anL13CellHas64L16ChildrenThatAllLieInsideIt() throws {
+        let cell = S2CellID(GeoPoint(latitude: 37.7694, longitude: -122.4770), level: 13)
+        let children = cell.children(atLevel: 16)
+        #expect(children.count == 64)
+        #expect(Set(children).count == 64)
+        #expect(children.allSatisfy { $0.level == 16 && cell.contains($0) && $0.parent(level: 13) == cell })
+        #expect(children.sorted() == children)
+        #expect(children.contains(S2CellID(cell.center, level: 16)))
+        #expect(cell.children(atLevel: 13).isEmpty)
+        #expect(cell.children(atLevel: 14).count == 4)
+    }
 }

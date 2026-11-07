@@ -52,6 +52,8 @@ final class AppModel {
     var loadedVectors: [String: LoadedVectors] = [:]
     /// The tiles the loaded vector sites cover.
     var vectorTiles: Set<S2CellID> = []
+    /// A level-13 cell being prepared on the server site by site, if any (Map → Layers → Server cells).
+    var cellPreparation: CellPreparation?
     /// Credits for the loaded vectors.
     var vectorAttribution: [String] = []
     /// Everything loaded, as the map draws it: kept, not computed, so the map's canopy images are made once.

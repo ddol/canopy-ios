@@ -124,20 +124,26 @@ private struct VectorSceneView: UIViewRepresentable {
         let heights = reference.ground?.z.filter(\.isFinite).sorted() ?? []
         let featureHeights = reference.features.flatMap { $0.line.vertices.map(\.z) }.sorted()
         let elevation = heights.isEmpty ? (featureHeights.first ?? 0) : heights[heights.count / 2]
+        let place: @Sendable (SIMD3<Float>) -> SIMD3<Float> = { VectorGeometry.scenePoint($0, elevation: elevation) }
         var groups: [VectorGroup: VectorMesh] = [:]
         let hasBoxes = reference.features.contains { $0.layer == .boxes || $0.layer == .buildings }
         // A server that sends wall surfaces has its parts' walls drawn by them; an older one has its parts extruded.
         let wallSurfaces = reference.features.contains { $0.layer == .buildings && $0.line.kind == .wallSurface }
         for feature in reference.features {
             let line = feature.line
-            // Box walls already encode the shifted outline and measured heights.
-            if hasBoxes, feature.layer == .footprints { continue }
+            // Box walls already encode the shifted outline and measured heights; the footprint still gives the roof.
+            if hasBoxes, feature.layer == .footprints {
+                var mesh = groups[.buildings] ?? VectorMesh(place: place)
+                mesh.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                groups[.buildings] = mesh
+                continue
+            }
             // Sensor/correction arrows are registration diagnostics rather than building geometry.
             if line.kind == .sensor || line.kind == .correction { continue }
             if feature.layer == .trees {
                 guard let tree = GerardusTree(line) else { continue }
-                var mesh = groups[.trees] ?? VectorMesh()
-                mesh.add(tree, elevation: elevation)
+                var mesh = groups[.trees] ?? VectorMesh(place: place)
+                mesh.add(tree)
                 groups[.trees] = mesh
                 continue
             }
@@ -148,11 +154,12 @@ private struct VectorSceneView: UIViewRepresentable {
                 case .observed: .observed
                 default: .streets
                 }
-            var mesh = groups[group] ?? VectorMesh()
-            mesh.add(line, layer: feature.layer, wallSurfaces: wallSurfaces, elevation: elevation)
+            var mesh = groups[group] ?? VectorMesh(place: place)
+            mesh.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+            mesh.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
             groups[group] = mesh
         }
-        if let ground = reference.ground { groups[.ground] = VectorMesh(ground: ground, elevation: elevation) }
+        if let ground = reference.ground { groups[.ground] = VectorMesh(ground: ground, place: place) }
         for group in VectorGroup.allCases {
             let node = groups[group]?.node(color: group.color) ?? SCNNode()
             node.name = group.rawValue
@@ -171,108 +178,8 @@ private struct VectorSceneView: UIViewRepresentable {
     }
 }
 
-/// Batch geometry by layer, so a site with hundreds of walls needs only a few draw calls.
-private struct VectorMesh {
-    var vertices: [SCNVector3] = []
-    var triangles: [UInt32] = []
-    var edges: [UInt32] = []
-
-    init() {}
-
-    mutating func add(_ line: LineFeature, layer: ReferenceLayer, wallSurfaces: Bool, elevation: Float) {
-        for face in VectorGeometry.faces(line, layer: layer, wallSurfaces: wallSurfaces) {
-            let start = UInt32(vertices.count)
-            vertices += face.vertices.map { SCNVector3(VectorGeometry.scenePoint($0, elevation: elevation)) }
-            triangles += face.triangles.map { start + $0 }
-            for i in face.vertices.indices {
-                edges += [start + UInt32(i), start + UInt32((i + 1) % face.vertices.count)]
-            }
-        }
-        if !line.closed {
-            let start = UInt32(vertices.count)
-            let points = line.vertices
-            vertices += points.map { SCNVector3(VectorGeometry.scenePoint($0, elevation: elevation)) }
-            for i in 1..<max(1, points.count) { edges += [start + UInt32(i - 1), start + UInt32(i)] }
-        }
-    }
-
-    /// A tree as the Mac visualiser draws it: the trunk up to the crown's base, and a ring of the crown's radius at
-    /// its base and its top.
-    mutating func add(_ tree: GerardusTree, elevation: Float) {
-        let form = tree.form
-        let base = tree.base
-        let crownBase = base + SIMD3(0, 0, Float(form.crownBase))
-        let top = base + SIMD3(0, 0, Float(form.height))
-        let start = UInt32(vertices.count)
-        vertices += [base, crownBase].map { SCNVector3(VectorGeometry.scenePoint($0, elevation: elevation)) }
-        edges += [start, start + 1]
-        let radius = Float(form.crownWidth / 2)
-        for centre in [crownBase, top] {
-            let ringStart = UInt32(vertices.count)
-            let count = 24
-            for i in 0..<count {
-                let angle = Float(i) / Float(count) * 2 * .pi
-                let p = centre + SIMD3(cos(angle) * radius, sin(angle) * radius, 0)
-                vertices.append(SCNVector3(VectorGeometry.scenePoint(p, elevation: elevation)))
-            }
-            for i in 0..<count {
-                edges += [ringStart + UInt32(i), ringStart + UInt32((i + 1) % count)]
-            }
-        }
-    }
-
-    init(ground: Heightfield, elevation: Float) {
-        self.init()
-        // A few thousand grid cells, preserving the site's actual slope. Missing returns stay holes.
-        let step = max(1, Int(ceil(4 / ground.cellSize)))
-        for j in stride(from: 0, to: max(0, ground.ny - step), by: step) {
-            for i in stride(from: 0, to: max(0, ground.nx - step), by: step) {
-                let cells = [(i, j), (i + step, j), (i + step, j + step), (i, j + step)]
-                let z = cells.map { ground.z[$0.1 * ground.nx + $0.0] }
-                guard z.allSatisfy(\.isFinite) else { continue }
-                let start = UInt32(vertices.count)
-                for ((x, y), height) in zip(cells, z) {
-                    let p = SIMD3(
-                        Float(ground.origin.x + Double(x) * ground.cellSize),
-                        Float(ground.origin.y + Double(y) * ground.cellSize), height)
-                    vertices.append(SCNVector3(VectorGeometry.scenePoint(p, elevation: elevation)))
-                }
-                triangles += [0, 1, 2, 0, 2, 3].map { start + $0 }
-                edges += [0, 1, 1, 2].map { start + $0 }
-            }
-        }
-    }
-
-    func node(color: UIColor) -> SCNNode {
-        let node = SCNNode()
-        guard !vertices.isEmpty else { return node }
-        let source = SCNGeometrySource(vertices: vertices)
-        func geometry(_ indices: [UInt32], type: SCNGeometryPrimitiveType, tint: UIColor) -> SCNGeometry {
-            let data = indices.withUnsafeBytes { Data($0) }
-            let element = SCNGeometryElement(
-                data: data, primitiveType: type,
-                primitiveCount: indices.count / (type == .triangles ? 3 : 2), bytesPerIndex: 4)
-            let geometry = SCNGeometry(sources: [source], elements: [element])
-            let material = SCNMaterial()
-            material.diffuse.contents = tint
-            material.lightingModel = .constant
-            material.isDoubleSided = true
-            geometry.materials = [material]
-            return geometry
-        }
-        if !triangles.isEmpty {
-            node.addChildNode(SCNNode(geometry: geometry(triangles, type: .triangles, tint: color)))
-        }
-        if !edges.isEmpty {
-            let edge = SCNNode(geometry: geometry(edges, type: .line, tint: color.withMultipliedBrightness(0.55)))
-            node.addChildNode(edge)
-        }
-        return node
-    }
-}
-
 extension UIColor {
-    fileprivate func withMultipliedBrightness(_ factor: CGFloat) -> UIColor {
+    func withMultipliedBrightness(_ factor: CGFloat) -> UIColor {
         var r: CGFloat = 0
         var g: CGFloat = 0
         var b: CGFloat = 0

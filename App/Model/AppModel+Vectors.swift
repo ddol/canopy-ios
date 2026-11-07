@@ -26,8 +26,14 @@ extension AppModel {
         return (aerialAttribution + vectorAttribution).filter { seen.insert($0).inserted }
     }
 
+    /// How long a site load keeps retrying while the server builds the site's model, and how long between tries.
+    static let vectorBuildPatience: Duration = .seconds(240)
+    nonisolated static let vectorRetryInterval: Duration = .seconds(15)
+
     /// Loads the public vectors of the site at `centre` (preparing the site first when needed) and adds them to the
-    /// map, beside any loaded before.
+    /// map, beside any loaded before. A server that has not seen the site builds its model first, which takes a
+    /// minute or two and times out a single request, so the load keeps asking at intervals until the site arrives or
+    /// `vectorBuildPatience` runs out.
     func loadVectors(around centre: GeoPoint) async {
         guard !aerial.isWorking else { return }
         guard let client = alignClient else {
@@ -36,40 +42,72 @@ extension AppModel {
         }
         let tile = centre.tile
         aerial = .working("Loading vectors…")
+        let start = ContinuousClock.now
+        var attempt = 0
         do {
-            if try await client.site(tile.token) == nil {
-                aerial = .working("Preparing the site on the server…")
+            while true {
+                attempt += 1
                 do {
-                    _ = try await client.preparedSite(tile.token, label: "canopy-ggp")
-                } catch GRPCTransportError.timedOut {
-                    throw AerialTrees.Failure.stillPreparing
+                    if try await client.site(tile.token) == nil {
+                        aerial = .working("Preparing the site on the server…")
+                        do {
+                            _ = try await client.preparedSite(tile.token, label: "canopy-ggp")
+                        } catch GRPCTransportError.timedOut {
+                            throw AerialTrees.Failure.stillPreparing
+                        }
+                    }
+                    let vectors = try await VectorReference.load(token: tile.token, client: client)
+                    let georeference = try await SiteGeoreference.fetch(for: vectors.site, client: client)
+                    add(vectors, georeference: georeference, tile: tile)
+                    return
+                } catch let error where Self.isStillBuilding(error) {
+                    let waited = ContinuousClock.now - start
+                    guard waited < Self.vectorBuildPatience else { throw error }
+                    let seconds = Int(waited.components.seconds)
+                    aerial = .working(
+                        "The server is building this site's model (\(seconds) s so far). Asking again shortly…")
+                    try await Task.sleep(for: Self.vectorRetryInterval)
                 }
             }
-            let vectors = try await VectorReference.load(token: tile.token, client: client)
-            let georeference = try await SiteGeoreference.fetch(for: vectors.site, client: client)
-            let reference = Self.reference(vectors, georeference: georeference)
-            loadedVectors[tile.token] = LoadedVectors(vectors: vectors, georeference: georeference)
-            vectorAreas[tile.token] = reference
-            vectorTiles.formUnion(vectors.site.coveringL16Tokens.compactMap(S2CellID.init(token:)))
-            vectorAttribution = Array(Set(vectorAttribution + vectors.attribution)).sorted()
-            let format = QuantityFormat()
-            let buildings = reference.lines.filter { $0.kind == .building || $0.kind == .wall }.count
-            let streets = reference.lines.filter { [.road, .path, .kerb, .surface].contains($0.kind) }.count
-            let trees = reference.lines.filter { $0.kind == .tree }.count
-            aerial = .done(
-                "\(format.count(buildings)) building outlines and walls, \(format.count(streets)) street lines and "
-                    + "\(format.count(trees)) trees around tile \(tile.familyDisplay).")
         } catch let error as AerialTrees.Failure {
+            aerial = .failed(error.localizedDescription)
+        } catch let error as VectorReference.Failure {
             aerial = .failed(error.localizedDescription)
         } catch {
             aerial = .failed("Could not load vectors: \(error.localizedDescription)")
         }
     }
 
+    /// Whether a load failed only because the server is still building the site's model.
+    nonisolated static func isStillBuilding(_ error: any Error) -> Bool {
+        switch error {
+        case AerialTrees.Failure.stillPreparing, VectorReference.Failure.stillBuilding: true
+        case GRPCTransportError.timedOut: true
+        default: false
+        }
+    }
+
+    /// Keeps a loaded site and reports what arrived.
+    private func add(_ vectors: VectorReference, georeference: SiteGeoreference, tile: S2CellID) {
+        let reference = Self.reference(vectors, georeference: georeference, token: tile.token)
+        loadedVectors[tile.token] = LoadedVectors(vectors: vectors, georeference: georeference)
+        vectorAreas[tile.token] = reference
+        vectorTiles.formUnion(vectors.site.coveringL16Tokens.compactMap(S2CellID.init(token:)))
+        vectorAttribution = Array(Set(vectorAttribution + vectors.attribution)).sorted()
+        let format = QuantityFormat()
+        let buildings = reference.lines.filter { $0.kind == .building || $0.kind == .wall }.count
+        let streets = reference.lines.filter { [.road, .path, .kerb, .surface].contains($0.kind) }.count
+        let trees = reference.lines.filter { $0.kind == .tree }.count
+        aerial = .done(
+            "\(format.count(buildings)) building outlines and walls, \(format.count(streets)) street lines and "
+                + "\(format.count(trees)) trees around tile \(tile.familyDisplay).")
+    }
+
     /// A site's vectors on the map, seen from above: Gerardus's trees as their crowns, buildings as outlines and
     /// walls, streets as lines. Ground and sensor arrows are left out.
-    nonisolated static func reference(_ vectors: VectorReference, georeference: SiteGeoreference) -> MapLayers.Reference
-    {
+    nonisolated static func reference(
+        _ vectors: VectorReference, georeference: SiteGeoreference, token: String = ""
+    ) -> MapLayers.Reference {
         let lines = vectors.features.compactMap { feature -> MapLayers.Reference.Line? in
             if feature.layer == .trees {
                 guard let tree = GerardusTree(feature.line) else { return nil }
@@ -82,7 +120,9 @@ extension AppModel {
             return MapLayers.Reference.Line(
                 kind: kind, points: points, closed: feature.line.closed || kind == .building || kind == .surface)
         }
-        return MapLayers.Reference(canopies: [], lines: lines)
+        return MapLayers.Reference(
+            canopies: [], lines: lines,
+            sites: [MapLayers.Reference.Site(token: token, vectors: vectors, georeference: georeference)])
     }
 
     /// A tree's crown from above: a ring of its radius round the trunk.

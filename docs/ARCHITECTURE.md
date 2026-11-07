@@ -328,11 +328,18 @@ player shows (`Visibility.statuses`, the chips under the summary bar), tags, rou
   (250 to 400, nearest the centre first). MapKit lays out every one of those views whenever the map's content is
   applied, so the map view is equatable on what it draws (layers, focus, selection) and the rest of the screen
   changing (a progress message, a banner) leaves it alone.
-- `GerardusRenderer` (Layers → **Gerardus only**) draws with no base map. It is a SwiftUI `Canvas` on a flat
-  projection showing only Canopy's own data: the canopy height grid from the aerial point cloud (1 m, light to dark
-  green with height), DataSF building outlines, OpenStreetMap roads and paths when an admin loaded them, then the
-  boundary, tiles, routes, every tree and the tags. Drag to pan, pinch to zoom, tap to select. The grid and outlines
-  are kept in memory after **Load real trees in view**.
+- `WireframeRenderer` (Layers → **Gerardus wireframe**) draws with no base map, the way the Mac visualiser draws
+  a site: a SceneKit scene of every loaded site (`MapLayers.Reference.sites`: the ground grid, buildings as walls
+  and roofs, streets and kerbs, Gerardus's trees as trunk and crown rings) with the census's trees as the same
+  figure in their status colour, from their DBH and height when measured. `SiteToScene` composes each site's
+  georeference with the scene's local frame as one affine map. One finger drags; two fingers turn (rotation
+  gesture), tilt (vertical pan) and zoom (pinch) together; a tap selects a tree (an unseen box round each figure).
+  The ground is tinted by height over the loaded sites' range (per-vertex colours), and extruded or box-walled
+  footprints get a lid (`VectorGeometry.lid`). The camera reports its viewport like the other renderer, so loading
+  in view and following tiles work the same.
+- **Server cells** (`AppModel+Cells`, `ServerCellsScreen`): the level-13 cells under the map with the share of
+  their 64 level-16 sites the server has prepared, and `prepareCell` to prepare the rest or rebuild them all, one
+  site at a time with the same patience for a building server as a vector load.
 
 **Vectors on the main map.** Layers → **Load vectors in view** (or the **Load vectors here** button, which shows
 when the vectors are on, the map is within about 600 m from centre to corner, and the site at the centre is not loaded
@@ -348,7 +355,7 @@ site first if needed. It converts them from the site frame to the map with `Site
 - street use as surfaces.
 
 Gerardus's trees (the `TREES` layer, `GerardusTree`) are drawn as their crown rings. Ground and sensor arrows are left out. Both renderers draw them; on Apple's map **Show vectors** turns them
-off. The canopy grid stays on the Gerardus-only map, since SwiftUI's MapKit has no image overlays. The 3D viewer
+off. The canopy height grid from the aerial points is kept with the loaded area but drawn by neither renderer now: SwiftUI's MapKit has no image overlays, and the wireframe map has no flat raster yet. The 3D viewer
 (Layers → 3D vectors) is unchanged. Everything loaded lives in memory, merged once into `AppModel.mapReference`.
 
 A screen moves the map with a `MapFocus` request (a region with its own id), which both renderers follow.

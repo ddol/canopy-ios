@@ -1,4 +1,5 @@
 import CanopyModel
+import CanopyReference
 import Foundation
 
 /// Everything the map draws, as plain values. Renderers turn this into map content; it knows nothing about
@@ -35,6 +36,23 @@ public struct MapLayers: Equatable, Sendable {
         /// The status to draw (`Tree.displayStatus`).
         public var status: CountStatus
         public var hazardCount: Int
+        /// Measured trunk diameter and height, in metres, for the wireframe map's figures.
+        public var dbh: Double?
+        public var height: Double?
+        public var lean: Lean?
+
+        public init(
+            id: UUID, location: GeoPoint, status: CountStatus, hazardCount: Int, dbh: Double? = nil,
+            height: Double? = nil, lean: Lean? = nil
+        ) {
+            self.id = id
+            self.location = location
+            self.status = status
+            self.hazardCount = hazardCount
+            self.dbh = dbh
+            self.height = height
+            self.lean = lean
+        }
 
         public var symbol: TreeSymbol { TreeSymbol(status) }
     }
@@ -59,7 +77,7 @@ public struct MapLayers: Equatable, Sendable {
     }
 
     /// Gerardus's own data for the areas loaded: canopy heights from the aerial point cloud, and vectors (outlines,
-    /// walls, streets). `GerardusRenderer` draws it all in place of a base map; `MapKitRenderer` draws the vectors over
+    /// walls, streets, trees) and the sites themselves. `WireframeRenderer` draws the sites in 3D in place of a base map; `MapKitRenderer` draws the vectors over
     /// Apple's. A class, so comparing layers does not compare every height.
     public final class Reference: Equatable, Sendable {
         public enum LineKind: Sendable {
@@ -106,19 +124,37 @@ public struct MapLayers: Equatable, Sendable {
             }
         }
 
+        /// A loaded site's vectors as the server sent them, with the georeference that places them, for the
+        /// wireframe map.
+        public struct Site: Sendable {
+            public var token: String
+            public var vectors: VectorReference
+            public var georeference: SiteGeoreference
+
+            public init(token: String, vectors: VectorReference, georeference: SiteGeoreference) {
+                self.token = token
+                self.vectors = vectors
+                self.georeference = georeference
+            }
+        }
+
         public let canopies: [Raster]
         public let lines: [Line]
+        public let sites: [Site]
 
-        public init(canopies: [Raster], lines: [Line]) {
+        public init(canopies: [Raster], lines: [Line], sites: [Site] = []) {
             self.canopies = canopies
             self.lines = lines
+            self.sites = sites
         }
 
         /// Several loaded areas as one, or nil when there are none.
         public static func merged(_ references: [Reference]) -> Reference? {
             guard !references.isEmpty else { return nil }
             if references.count == 1 { return references[0] }
-            return Reference(canopies: references.flatMap(\.canopies), lines: references.flatMap(\.lines))
+            return Reference(
+                canopies: references.flatMap(\.canopies), lines: references.flatMap(\.lines),
+                sites: references.flatMap(\.sites))
         }
 
         public static func == (lhs: Reference, rhs: Reference) -> Bool { lhs === rhs }
@@ -189,7 +225,8 @@ public struct MapLayers: Equatable, Sendable {
             .map { tree in
                 TreeMarker(
                     id: tree.id, location: tree.position.geo, status: tree.displayStatus,
-                    hazardCount: hazards[tree.id] ?? 0)
+                    hazardCount: hazards[tree.id] ?? 0, dbh: tree.dbh?.diameter.value,
+                    height: tree.height?.height.value, lean: tree.lean)
             }
         let tags =
             visibility.tags

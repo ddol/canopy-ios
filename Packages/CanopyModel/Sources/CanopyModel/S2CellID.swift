@@ -99,6 +99,17 @@ public struct S2CellID: Hashable, Comparable, Sendable {
         return S2CellID(rawValue: (rawValue & (~newLSB &+ 1)) | newLSB)
     }
 
+    /// Every descendant at `level`, in Hilbert order: 4 per level down, so an L13 cell has 64 L16 children.
+    /// Empty when `level` is not below this cell's.
+    public func children(atLevel level: Int) -> [S2CellID] {
+        guard level > self.level, level <= S2CellID.maxLevel else { return [] }
+        let lsb = rawValue & (~rawValue &+ 1)
+        let childLSB = UInt64(1) << UInt64(2 * (S2CellID.maxLevel - level))
+        let first = rawValue - lsb + childLSB
+        let count = 1 << (2 * (level - self.level))
+        return (0..<count).map { S2CellID(rawValue: first &+ UInt64($0) &* 2 &* childLSB) }
+    }
+
     /// The Gerardus tile (L16) containing this cell.
     public var tile: S2CellID { parent(level: S2CellID.tileLevel) }
 

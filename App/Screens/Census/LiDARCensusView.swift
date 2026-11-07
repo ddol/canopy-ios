@@ -67,6 +67,9 @@ struct LiDARCensusView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { overlayMenu }
+            }
     }
 
     /// The AR view with the reticle, the target card, the notice and the bottom panel.
@@ -77,11 +80,16 @@ struct LiDARCensusView: View {
             Reticle()
             VStack(spacing: Spacing.s) {
                 targetCard
+                overlayStatusRow
                 if let notice {
-                    Text(notice)
-                        .font(.footnote)
-                        .padding(Spacing.xs)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.small))
+                    HStack(spacing: Spacing.xs) {
+                        if loadingVectors { ProgressView().controlSize(.small) }
+                        Text(notice)
+                    }
+                    .font(.footnote)
+                    .padding(Spacing.xs)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.small))
+                    .accessibilityIdentifier("census-notice")
                 }
                 Spacer()
                 if let scan = capture.scan, fit == nil, selection == nil {
@@ -159,7 +167,6 @@ struct LiDARCensusView: View {
                     .font(.subheadline)
             }
             Spacer()
-            overlayMenu
             Menu {
                 ForEach(nearby, id: \.0.id) { tree, distance in
                     Button {
@@ -211,6 +218,37 @@ struct LiDARCensusView: View {
                 .labelStyle(.iconOnly)
         }
         .accessibilityIdentifier("overlay-menu")
+    }
+
+    /// A line under the target card: how many sites are drawn and how the overlay is placed, with a way to ask
+    /// again when a load failed.
+    @ViewBuilder
+    private var overlayStatusRow: some View {
+        if model.loadedVectors.isEmpty, !loadingVectors, model.alignClient != nil, location.geoPoint != nil {
+            Button {
+                if let here = location.geoPoint { loadVectors(around: here) }
+            } label: {
+                Label(
+                    model.aerial.isFailed ? "Load the site here again" : "Load the site here",
+                    systemImage: "square.3.layers.3d.down.right"
+                )
+                .font(.footnote)
+            }
+            .buttonStyle(.canopySecondary)
+            .accessibilityIdentifier("load-site-here")
+        } else if !model.loadedVectors.isEmpty {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "square.3.layers.3d")
+                Text(overlayStatus)
+            }
+            .font(CanopyFont.mono(.caption))
+            .foregroundStyle(Color.canopyInkMuted)
+            .padding(.horizontal, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
+            .background(.thinMaterial, in: Capsule())
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("overlay-status")
+        }
     }
 
     private var overlayStatus: String {
@@ -497,7 +535,10 @@ struct LiDARCensusView: View {
             await model.loadVectors(around: point)
             loadingVectors = false
             switch model.aerial {
-            case .done(let message), .failed(let message): notice = message
+            case .done(let message): notice = message
+            case .failed(let message):
+                notice = message
+                autoLoadTile = nil
             default: break
             }
             rebuildOverlay()

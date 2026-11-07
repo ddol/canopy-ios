@@ -189,7 +189,13 @@ public enum SiteWireframes {
             return features.compactMap { feature -> WireframeItem? in
                 let line = feature.line
                 switch feature.layer {
-                case .footprints: if hasWalls { return nil }
+                case .footprints:
+                    // Walls stand where the outline would be extruded; the footprint still gives the roofline.
+                    if hasWalls {
+                        guard near(line), line.closed, line.height.isFinite, line.height > 0 else { return nil }
+                        let top = line.vertices.map { frame.arkit($0) + SIMD3(0, line.height, 0) }
+                        return WireframeItem(id: line.featureID, segments: Wireframe.polyline(top, closed: true))
+                    }
                 case .boxes, .buildings: break
                 case .observed: if line.kind != .wallPlane && line.kind != .facade { return nil }
                 default: return nil
