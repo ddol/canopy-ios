@@ -1,5 +1,6 @@
 #if os(iOS)
     import ARKit
+    import CanopyModel
     import Foundation
     import Observation
     import RealityKit
@@ -49,6 +50,11 @@
         @ObservationIgnored private var refreshTask: Task<Void, Never>?
         @ObservationIgnored private let overlayAnchor = AnchorEntity(world: .zero)
         @ObservationIgnored private let overlay = ModelEntity()
+        @ObservationIgnored private let treeAnchor = AnchorEntity(world: .zero)
+        @ObservationIgnored private let treeTrunk = ModelEntity()
+        @ObservationIgnored private let treeCrown = ModelEntity()
+        /// Where the wireframe tree stands (trunk base, on the ground), while one is shown.
+        public private(set) var treeBase: SIMD3<Float>?
 
         /// Minimum time between two ingests of the same mesh anchor, in seconds.
         static let ingestInterval: TimeInterval = 0.3
@@ -62,6 +68,9 @@
             view.session.delegate = self
             overlayAnchor.addChild(overlay)
             view.scene.addAnchor(overlayAnchor)
+            treeAnchor.addChild(treeTrunk)
+            treeAnchor.addChild(treeCrown)
+            view.scene.addAnchor(treeAnchor)
         }
 
         /// Starts the session, or resumes it with the mesh and any scan it already has.
@@ -177,6 +186,41 @@
             material.blending = .transparent(opacity: 0.45)
             material.faceCulling = .none
             overlay.model = ModelComponent(mesh: resource, materials: [material])
+        }
+
+        // MARK: Wireframe tree
+
+        /// Stands a wireframe tree with its trunk base at `base` (a world point on the ground), replacing any
+        /// shown before. The trunk is drawn brown and the crown green, as the Mac visualiser draws them, on top
+        /// of whatever the mesh occludes.
+        public func showTree(_ form: TreeForm, lean: Lean? = nil, at base: SIMD3<Float>) {
+            let figure = WireframeTree.figure(form, lean: lean)
+            treeTrunk.model = Self.wireModel(figure.trunk, color: UIColor(red: 0.70, green: 0.48, blue: 0.28, alpha: 1))
+            treeCrown.model = Self.wireModel(figure.crown, color: UIColor(red: 0.55, green: 0.95, blue: 0.30, alpha: 1))
+            treeAnchor.setPosition(base, relativeTo: nil)
+            treeBase = base
+        }
+
+        /// Takes the wireframe tree down.
+        public func hideTree() {
+            treeTrunk.model = nil
+            treeCrown.model = nil
+            treeBase = nil
+        }
+
+        private static func wireModel(_ segments: [WireframeTree.Segment], color: UIColor) -> ModelComponent? {
+            let mesh = WireframeTree.mesh(segments)
+            guard !mesh.isEmpty else { return nil }
+            var descriptor = MeshDescriptor(name: "wireframe")
+            descriptor.positions = MeshBuffer(mesh.positions)
+            descriptor.primitives = .triangles(mesh.indices)
+            guard let resource = try? MeshResource.generate(from: [descriptor]) else { return nil }
+            var material = UnlitMaterial(color: color)
+            material.blending = .transparent(opacity: 0.9)
+            material.faceCulling = .none
+            // The real tree's mesh would hide the far side of the wireframe; draw it through.
+            material.readsDepth = false
+            return ModelComponent(mesh: resource, materials: [material])
         }
 
         // MARK: Session delegate

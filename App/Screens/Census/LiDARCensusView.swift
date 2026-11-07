@@ -13,6 +13,8 @@ struct LiDARCensusView: View {
     @State private var targetID: UUID?
     @State private var isMeasuring = false
     @State private var measurement: Measurement?
+    /// The measured trunk with the wireframe tree being fitted over it, between finishing a scan and the sheet.
+    @State private var fit: TreeFit?
     @State private var notice: String?
     /// The session registered against 3DEP: positions come from it instead of GPS while it lasts.
     @State private var registered: RegisteredScan?
@@ -34,10 +36,16 @@ struct LiDARCensusView: View {
                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.small))
                 }
                 Spacer()
-                if let scan = capture.scan {
+                if let scan = capture.scan, fit == nil {
                     ScanProgressCard(progress: scan.progress)
                 }
-                controls
+                if fit != nil {
+                    TreeFitPanel(
+                        form: formBinding, onMoveHere: moveTreeHere, onBack: stopFitting,
+                        onMeasurement: showMeasurement)
+                } else {
+                    controls
+                }
             }
             .padding(Spacing.m)
         }
@@ -65,6 +73,8 @@ struct LiDARCensusView: View {
         .sheet(item: $measurement, onDismiss: resumeCapture) { measurement in
             MeasurementSheet(measurement: measurement) {
                 capture.cancelScan()
+                capture.hideTree()
+                fit = nil
             }
             .presentationDetents([.medium, .large])
         }
@@ -285,12 +295,60 @@ struct LiDARCensusView: View {
                 notice = "Waiting for a GPS fix."
                 return
             }
-            notice = nil
-            capture.pause()
-            measurement = Measurement(capture: result, position: position, target: target)
+            let form = TreeForm(dbh: result.analysis.dbh)
+            fit = TreeFit(capture: result, position: position, form: form, base: result.trunkBase)
+            capture.showTree(form, lean: result.analysis.lean, at: result.trunkBase)
+            notice = "Step back and move the sliders until the wireframe matches the tree."
         } catch {
             notice = Self.describe(error)
         }
+    }
+
+    // MARK: Fitting the wireframe tree
+
+    /// A slider's binding into the form: every change redraws the tree.
+    private var formBinding: Binding<TreeForm> {
+        Binding(
+            get: { fit?.form ?? TreeForm(trunkDiameter: 0.3, height: 8, crownHeight: 5, crownWidth: 5) },
+            set: { form in
+                guard var fit else { return }
+                fit.form = form.clamped
+                self.fit = fit
+                capture.showTree(fit.form, lean: fit.capture.analysis.lean, at: fit.base)
+            })
+    }
+
+    /// Stands the tree on the ground under the centre of the view instead.
+    private func moveTreeHere() {
+        guard var fit else { return }
+        guard let hit = capture.raycastCenter(maxDistance: 20) else {
+            notice = "Point the centre of the screen at the foot of the tree."
+            return
+        }
+        let ground = capture.groundHeight(under: hit.position) ?? hit.position.y
+        fit.base = SIMD3(hit.position.x, ground, hit.position.z)
+        if let registered {
+            fit.position = registered.position(ofARKit: fit.base)
+        } else if let device = location.geoPoint {
+            fit.position = position(of: fit.base, camera: hit.cameraPosition, device: device)
+        }
+        self.fit = fit
+        capture.showTree(fit.form, lean: fit.capture.analysis.lean, at: fit.base)
+        notice = nil
+    }
+
+    /// Back to scanning: the scan keeps running, the wireframe comes down.
+    private func stopFitting() {
+        capture.hideTree()
+        fit = nil
+        notice = nil
+    }
+
+    private func showMeasurement() {
+        guard let fit else { return }
+        notice = nil
+        capture.pause()
+        measurement = Measurement(capture: fit.capture, position: fit.position, target: target, form: fit.form)
     }
 
     static func describe(_ error: Error) -> String {
@@ -368,6 +426,78 @@ struct Measurement: Identifiable {
     let capture: TrunkCapture
     let position: Position
     let target: Tree?
+    /// The tree's shape as the player fitted it by eye in AR, if they did.
+    var form: TreeForm?
+}
+
+/// A measured trunk with the wireframe tree the player is fitting over it.
+struct TreeFit {
+    var capture: TrunkCapture
+    var position: Position
+    var form: TreeForm
+    /// World point the tree stands on.
+    var base: SIMD3<Float>
+}
+
+/// Four sliders that shape the wireframe tree, and the buttons to move it, go back to scanning, or go on to the
+/// measurement.
+struct TreeFitPanel: View {
+    @Binding var form: TreeForm
+    var onMoveHere: () -> Void
+    var onBack: () -> Void
+    var onMeasurement: () -> Void
+    private let format = QuantityFormat()
+
+    var body: some View {
+        VStack(spacing: Spacing.xs) {
+            dimension(
+                "Trunk diameter", value: $form.trunkDiameter, in: TreeForm.trunkDiameters, step: 0.01, digits: 2,
+                id: "fit-trunk-diameter")
+            dimension("Height", value: $form.height, in: TreeForm.heights, step: 0.25, digits: 1, id: "fit-height")
+            dimension(
+                "Foliage height", value: $form.crownHeight, in: 0...TreeForm.heights.upperBound, step: 0.25, digits: 1,
+                id: "fit-foliage-height")
+            dimension(
+                "Foliage width", value: $form.crownWidth, in: TreeForm.crownWidths, step: 0.25, digits: 1,
+                id: "fit-foliage-width")
+
+            HStack(spacing: Spacing.s) {
+                Button("Back", systemImage: "chevron.backward", action: onBack)
+                    .buttonStyle(.canopySecondary)
+                Button("Move here", systemImage: "scope", action: onMoveHere)
+                    .buttonStyle(.canopySecondary)
+                Button(action: onMeasurement) {
+                    Label("Measurement", systemImage: "checkmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.canopySurvey)
+            }
+            .labelStyle(.titleAndIcon)
+            .font(.footnote)
+        }
+        .padding(Spacing.s)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.large))
+        .accessibilityIdentifier("tree-fit")
+    }
+
+    private func dimension(
+        _ label: String, value: Binding<Double>, in range: ClosedRange<Double>, step: Double, digits: Int, id: String
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(label).font(.footnote)
+                Spacer()
+                Text(format.length(value.wrappedValue, fractionDigits: digits))
+                    .font(CanopyFont.mono(.footnote))
+                    .foregroundStyle(Color.canopyInkMuted)
+            }
+            Slider(value: value, in: range, step: step) {
+                Text(label)
+            }
+            .tint(Color.canopySurvey)
+            .accessibilityIdentifier(id)
+        }
+    }
 }
 
 /// A crosshair at the centre of the AR view.
