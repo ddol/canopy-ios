@@ -1,3 +1,4 @@
+import CanopyCapture
 import CanopyDesign
 import CanopyReference
 import SceneKit
@@ -52,10 +53,12 @@ public struct VectorMapView: View {
         let roofs = reference.features.filter { $0.line.kind == .roofPlane }.count
         let surfaces = reference.features.filter { $0.line.kind == .wallSurface }.count
         let footprints = reference.features.filter { $0.layer == .footprints }.count
+        let trees = reference.features.filter { $0.layer == .trees }.count
         let buildings = walls > 0 ? "\(walls) box walls" : "\(footprints) building outlines"
         return "\(buildings) · \(measured) measured wall planes · "
             + (roofs == 0 ? "No LoD2 roofs" : "\(roofs) roof planes")
             + (surfaces == 0 ? "" : " · \(surfaces) wall surfaces")
+            + (trees == 0 ? "" : " · \(trees) trees")
     }
 }
 
@@ -64,6 +67,7 @@ private enum VectorGroup: String, CaseIterable {
     case lod2 = "Roofs and wall surfaces"
     case observed = "Measured facades"
     case streets = "Streets and kerbs"
+    case trees = "Trees"
     case ground = "Ground"
 
     var color: UIColor {
@@ -72,6 +76,7 @@ private enum VectorGroup: String, CaseIterable {
         case .lod2: UIColor(red: 0.78, green: 0.58, blue: 0.47, alpha: 1)
         case .observed: UIColor(red: 0.23, green: 0.56, blue: 0.45, alpha: 1)
         case .streets: UIColor(red: 0.48, green: 0.48, blue: 0.37, alpha: 1)
+        case .trees: UIColor(red: 0.42, green: 0.74, blue: 0.24, alpha: 1)
         case .ground: UIColor(red: 0.90, green: 0.91, blue: 0.85, alpha: 1)
         }
     }
@@ -129,6 +134,13 @@ private struct VectorSceneView: UIViewRepresentable {
             if hasBoxes, feature.layer == .footprints { continue }
             // Sensor/correction arrows are registration diagnostics rather than building geometry.
             if line.kind == .sensor || line.kind == .correction { continue }
+            if feature.layer == .trees {
+                guard let tree = GerardusTree(line) else { continue }
+                var mesh = groups[.trees] ?? VectorMesh()
+                mesh.add(tree, elevation: elevation)
+                groups[.trees] = mesh
+                continue
+            }
             let group: VectorGroup =
                 switch feature.layer {
                 case .footprints, .boxes: .buildings
@@ -181,6 +193,31 @@ private struct VectorMesh {
             let points = line.vertices
             vertices += points.map { SCNVector3(VectorGeometry.scenePoint($0, elevation: elevation)) }
             for i in 1..<max(1, points.count) { edges += [start + UInt32(i - 1), start + UInt32(i)] }
+        }
+    }
+
+    /// A tree as the Mac visualiser draws it: the trunk up to the crown's base, and a ring of the crown's radius at
+    /// its base and its top.
+    mutating func add(_ tree: GerardusTree, elevation: Float) {
+        let form = tree.form
+        let base = tree.base
+        let crownBase = base + SIMD3(0, 0, Float(form.crownBase))
+        let top = base + SIMD3(0, 0, Float(form.height))
+        let start = UInt32(vertices.count)
+        vertices += [base, crownBase].map { SCNVector3(VectorGeometry.scenePoint($0, elevation: elevation)) }
+        edges += [start, start + 1]
+        let radius = Float(form.crownWidth / 2)
+        for centre in [crownBase, top] {
+            let ringStart = UInt32(vertices.count)
+            let count = 24
+            for i in 0..<count {
+                let angle = Float(i) / Float(count) * 2 * .pi
+                let p = centre + SIMD3(cos(angle) * radius, sin(angle) * radius, 0)
+                vertices.append(SCNVector3(VectorGeometry.scenePoint(p, elevation: elevation)))
+            }
+            for i in 0..<count {
+                edges += [ringStart + UInt32(i), ringStart + UInt32((i + 1) % count)]
+            }
         }
     }
 

@@ -15,8 +15,31 @@ The phone needs access to the configured server (including Tailscale when that i
 The same vectors can be drawn flat over Apple's map (or the Gerardus-only map): **Map → Layers → Load vectors in
 view**, or the **Load vectors here** button that appears when the site at the map centre is not loaded yet. Each load
 adds a site, so panning and loading builds up an area. **Show vectors** turns them off. Outlines, box walls and
-measured facades, streets, kerbs and street surfaces are drawn from above. Ground and trees are left out, since the
-census has its own trees. See ARCHITECTURE.md, *Map*.
+measured facades, streets, kerbs and street surfaces are drawn from above, and Gerardus's trees as their crowns (a
+ring of `crown_radius_m`, 2 m when the server gives none). Ground is left out. See ARCHITECTURE.md, *Map*.
+
+## In AR
+
+On a LiDAR phone the Census view draws the loaded sites round the player as wireframes, the way the Mac visualiser
+draws them: trees as a brown trunk to the crown's base with green rings of the crown's radius at its base and top
+(plus rings of `dbh_m` on the trunk), buildings as the outlines of their box walls, wall surfaces, roof planes and
+measured facades, streets and kerbs as lines. The census's own trees are drawn the same way in a darker green, from
+their DBH and height when measured. The layers are toggled from the **Wireframes** menu in the target card.
+
+The site under the player is asked for on arrival (prepared first when the server has not seen it, which can take a
+minute or two), and again for each new tile walked into, so an area builds up as the player moves; **Load vectors
+here** asks again. Neighbouring sites overlap, and a feature is drawn once.
+
+Where the site lands in the AR world comes from the 3DEP registration when there is one (**Register with 3DEP**),
+exact to its sigma. Before that it comes from the GPS fix: the session origin's position from the best fix so far
+and the camera's offset then, the site's georeference for the horizontal, and the ground under the origin (the
+LiDAR mesh's floor against the site's ground grid) for the vertical. That is GPS metres out, which is what
+eyeballing a wireframe against the real tree is for; **Re-place overlay from GPS** takes the current fix again.
+
+Tapping a tree selects it: its panel shows what is known (DBH, height, the Street Tree List or an observed crown),
+with sliders for trunk diameter, height, foliage height and width that reshape its wireframe on the spot. A census
+tree picked this way becomes the target for Confirm, Not a tree and Scan trunk. Adjustments live in the view for the
+session; nothing is written to Gerardus. The trunk scan's own fitted tree starts from the selected tree's shape.
 
 ## Available building layers
 
@@ -32,7 +55,8 @@ additions in `596fc63`. `GetServerInfo.available_layers` determines which layers
 | `OBSERVED` (6) | Measured `WALL_PLANE` polygons, including bays/recesses, facade traces and poles from the registered site model. Sensor/correction arrows are omitted. These are derived proposals, not player-confirmed census objects. |
 | `CITY_STREETS`, `KERBS`, `STREET_USE` (9, 11, 12) | Public street lines, kerbs/islands and operator-marked surfaces. |
 | `BUILDINGS` (13) | LoD2 buildings, **if advertised and populated**: `ROOF_PLANE` faces (including `role=lid`, the level top of a part without faces) and `WALL_SURFACE` walls, each a closed vertical polygon from the ground up to the roofline, drawn from its own vertices. Nothing is extruded: when any wall surface arrives, a `BUILDING_PART` is drawn only as its base outline. An older server sends no wall surfaces, and then its parts are extruded to their `height` tag as before. |
-| `LANE_MARKINGS`, `STREET_FURNITURE`, `TREES` (14–16) | Forward-compatible vector lines/polygons when the server advertises and supplies them. |
+| `TREES` (16) | `TREE` segments from the trunk's base to the crown's base, with `dbh_m`, `height_m`, `crown_base_m`, `crown_radius_m`, `species` and `common_name` tags when known (`GerardusTree`). The 3D viewer and AR draw the Mac visualiser's figure: trunk line, crown rings at `crown_base_m` (else the segment's top) and `height_m` (else a crown as tall as it is wide), radius `crown_radius_m` (else 2 m). The map draws the crown ring. |
+| `LANE_MARKINGS`, `STREET_FURNITURE` (14–15) | Forward-compatible vector lines/polygons when the server advertises and supplies them; AR draws them with the streets. |
 
 The summary reports the actual box-wall, measured-plane, roof-plane and wall-surface counts. No roof geometry is
 invented. Box walls and wall surfaces both stop at the roofline and can stand nearly on top of each other; toggle

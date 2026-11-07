@@ -72,6 +72,8 @@ public struct MapLayers: Equatable, Sendable {
             case kerb
             /// A street surface, closed: a driveway, parking space or marked area.
             case surface
+            /// A tree's crown seen from above (Gerardus's TREES layer), closed.
+            case tree
             case other
         }
 

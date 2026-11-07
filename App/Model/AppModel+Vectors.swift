@@ -1,10 +1,19 @@
+import CanopyCapture
 import CanopyDesign
 import CanopyMap
 import CanopyModel
 import CanopyReference
 import Foundation
 
-/// Gerardus's vectors (building outlines and walls, streets, kerbs, street surfaces) on the main map, a site at a time.
+/// A loaded site's vectors as the server sent them, with the georeference that places them on the map. The AR
+/// overlay draws from these; the map draws from the `MapLayers.Reference` made of them.
+struct LoadedVectors {
+    let vectors: VectorReference
+    let georeference: SiteGeoreference
+}
+
+/// Gerardus's vectors (building outlines and walls, streets, kerbs, street surfaces, trees) on the main map and in
+/// AR, a site at a time.
 extension AppModel {
     /// Whether the vectors around `point` are loaded.
     func hasVectors(at point: GeoPoint) -> Bool {
@@ -39,15 +48,17 @@ extension AppModel {
             let vectors = try await VectorReference.load(token: tile.token, client: client)
             let georeference = try await SiteGeoreference.fetch(for: vectors.site, client: client)
             let reference = Self.reference(vectors, georeference: georeference)
+            loadedVectors[tile.token] = LoadedVectors(vectors: vectors, georeference: georeference)
             vectorAreas[tile.token] = reference
             vectorTiles.formUnion(vectors.site.coveringL16Tokens.compactMap(S2CellID.init(token:)))
             vectorAttribution = Array(Set(vectorAttribution + vectors.attribution)).sorted()
             let format = QuantityFormat()
             let buildings = reference.lines.filter { $0.kind == .building || $0.kind == .wall }.count
             let streets = reference.lines.filter { [.road, .path, .kerb, .surface].contains($0.kind) }.count
+            let trees = reference.lines.filter { $0.kind == .tree }.count
             aerial = .done(
-                "\(format.count(buildings)) building outlines and walls, \(format.count(streets)) street lines around "
-                    + "tile \(tile.familyDisplay).")
+                "\(format.count(buildings)) building outlines and walls, \(format.count(streets)) street lines and "
+                    + "\(format.count(trees)) trees around tile \(tile.familyDisplay).")
         } catch let error as AerialTrees.Failure {
             aerial = .failed(error.localizedDescription)
         } catch {
@@ -55,11 +66,16 @@ extension AppModel {
         }
     }
 
-    /// A site's vectors on the map, seen from above. Ground, trees (the census has its own) and sensor arrows are left
-    /// out.
+    /// A site's vectors on the map, seen from above: Gerardus's trees as their crowns, buildings as outlines and
+    /// walls, streets as lines. Ground and sensor arrows are left out.
     nonisolated static func reference(_ vectors: VectorReference, georeference: SiteGeoreference) -> MapLayers.Reference
     {
         let lines = vectors.features.compactMap { feature -> MapLayers.Reference.Line? in
+            if feature.layer == .trees {
+                guard let tree = GerardusTree(feature.line) else { return nil }
+                return MapLayers.Reference.Line(
+                    kind: .tree, points: crown(of: tree, georeference: georeference), closed: true)
+            }
             guard let kind = lineKind(layer: feature.layer, kind: feature.line.kind) else { return nil }
             let points = feature.line.points.map { georeference.geo(x: $0.x, y: $0.y) }
             guard Set(points.map { [$0.latitude, $0.longitude] }).count >= 2 else { return nil }
@@ -69,9 +85,22 @@ extension AppModel {
         return MapLayers.Reference(canopies: [], lines: lines)
     }
 
+    /// A tree's crown from above: a ring of its radius round the trunk.
+    nonisolated static func crown(of tree: GerardusTree, georeference: SiteGeoreference) -> [GeoPoint] {
+        let centre = georeference.geo(x: Double(tree.base.x), y: Double(tree.base.y))
+        let frame = LocalFrame(origin: centre)
+        let radius = tree.form.crownWidth / 2
+        return (0..<24).map { i in
+            let angle = Double(i) / 24 * 2 * .pi
+            return frame.geoPoint(of: ENU(east: cos(angle) * radius, north: sin(angle) * radius, up: 0)).point
+        }
+    }
+
     nonisolated static func lineKind(layer: ReferenceLayer, kind: FeatureKind) -> MapLayers.Reference.LineKind? {
         switch layer {
-        case .groundMesh, .trees, .aerialPoints, .registeredScans:
+        case .trees:
+            return kind == .tree ? .tree : nil
+        case .groundMesh, .aerialPoints, .registeredScans:
             return nil
         case .boxes:
             return .wall

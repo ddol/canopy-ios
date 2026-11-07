@@ -133,6 +133,10 @@ extension MapKitMap {
                 .stroke(Color.canopyInkMuted, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
         case .kerb:
             MapPolyline(coordinates: coordinates).stroke(Color.canopyInkMuted, lineWidth: 1)
+        case .tree:
+            MapPolygon(coordinates: coordinates)
+                .foregroundStyle(Color.canopyBrand.opacity(0.12))
+                .stroke(Color.canopyBrand.opacity(0.8), lineWidth: 1)
         case .other:
             MapPolyline(coordinates: coordinates).stroke(Color.canopyLineStrong, lineWidth: 1)
         }

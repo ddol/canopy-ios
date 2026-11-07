@@ -50,10 +50,10 @@
         @ObservationIgnored private var refreshTask: Task<Void, Never>?
         @ObservationIgnored private let overlayAnchor = AnchorEntity(world: .zero)
         @ObservationIgnored private let overlay = ModelEntity()
-        @ObservationIgnored private let treeAnchor = AnchorEntity(world: .zero)
-        @ObservationIgnored private let treeTrunk = ModelEntity()
-        @ObservationIgnored private let treeCrown = ModelEntity()
-        /// Where the wireframe tree stands (trunk base, on the ground), while one is shown.
+        @ObservationIgnored private var wireLayers: [String: Entity] = [:]
+        @ObservationIgnored private var pickable: [String: (entity: ModelEntity, material: UnlitMaterial)] = [:]
+        @ObservationIgnored private var highlighted: String?
+        /// Where the wireframe tree being fitted stands (trunk base, on the ground), while one is shown.
         public private(set) var treeBase: SIMD3<Float>?
 
         /// Minimum time between two ingests of the same mesh anchor, in seconds.
@@ -68,9 +68,7 @@
             view.session.delegate = self
             overlayAnchor.addChild(overlay)
             view.scene.addAnchor(overlayAnchor)
-            treeAnchor.addChild(treeTrunk)
-            treeAnchor.addChild(treeCrown)
-            view.scene.addAnchor(treeAnchor)
+            view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap)))
         }
 
         /// Starts the session, or resumes it with the mesh and any scan it already has.
@@ -188,40 +186,147 @@
             overlay.model = ModelComponent(mesh: resource, materials: [material])
         }
 
-        // MARK: Wireframe tree
+        // MARK: Wireframes
 
-        /// Stands a wireframe tree with its trunk base at `base` (a world point on the ground), replacing any
-        /// shown before. The trunk is drawn brown and the crown green, as the Mac visualiser draws them, on top
-        /// of whatever the mesh occludes.
-        public func showTree(_ form: TreeForm, lean: Lean? = nil, at base: SIMD3<Float>) {
-            let figure = WireframeTree.figure(form, lean: lean)
-            treeTrunk.model = Self.wireModel(figure.trunk, color: UIColor(red: 0.70, green: 0.48, blue: 0.28, alpha: 1))
-            treeCrown.model = Self.wireModel(figure.crown, color: UIColor(red: 0.55, green: 0.95, blue: 0.30, alpha: 1))
-            treeAnchor.setPosition(base, relativeTo: nil)
-            treeBase = base
+        /// Draws a layer of wireframes in the world, replacing the layer of that name. Items with a pick box can be
+        /// found with `pickWireframe(at:)`; the rest are batched into one model.
+        public func showWireframes(_ layer: WireframeLayer) {
+            hideWireframes(named: layer.name)
+            let root = Entity()
+            root.name = layer.name
+            let color = UIColor(
+                red: CGFloat(layer.color.x), green: CGFloat(layer.color.y), blue: CGFloat(layer.color.z),
+                alpha: CGFloat(layer.color.w))
+            let material = Self.wireMaterial(color, throughWalls: layer.throughWalls)
+            var batched: [Wireframe.Segment] = []
+            for item in layer.items {
+                guard let box = item.pickBox else {
+                    batched += item.segments
+                    continue
+                }
+                guard let model = Self.wireModel(item.segments, width: layer.lineWidth, material: material) else {
+                    continue
+                }
+                let entity = ModelEntity()
+                entity.name = item.id
+                entity.model = model
+                entity.collision = CollisionComponent(
+                    shapes: [.generateBox(size: box.size).offsetBy(translation: box.centre)],
+                    filter: CollisionFilter(group: Self.pickGroup, mask: .all))
+                root.addChild(entity)
+                pickable[item.id] = (entity, material)
+            }
+            if let model = Self.wireModel(batched, width: layer.lineWidth, material: material) {
+                let entity = ModelEntity()
+                entity.model = model
+                root.addChild(entity)
+            }
+            overlayAnchor.addChild(root)
+            wireLayers[layer.name] = root
+            if let highlighted, pickable[highlighted] != nil { highlightWireframe(id: highlighted) }
         }
 
-        /// Takes the wireframe tree down.
-        public func hideTree() {
-            treeTrunk.model = nil
-            treeCrown.model = nil
-            treeBase = nil
+        /// Takes a layer down.
+        public func hideWireframes(named name: String) {
+            guard let root = wireLayers.removeValue(forKey: name) else { return }
+            for child in root.children {
+                guard !child.name.isEmpty, pickable[child.name]?.entity == child else { continue }
+                pickable[child.name] = nil
+            }
+            root.removeFromParent()
         }
 
-        private static func wireModel(_ segments: [WireframeTree.Segment], color: UIColor) -> ModelComponent? {
-            let mesh = WireframeTree.mesh(segments)
+        /// The pickable wireframe item under a point in the view, nearest first.
+        public func pickWireframe(at point: CGPoint) -> String? {
+            guard let ray = view.ray(through: point) else { return nil }
+            let hits = view.scene.raycast(
+                origin: ray.origin, direction: ray.direction, length: 300, query: .all, mask: Self.pickGroup,
+                relativeTo: nil)
+            return hits.sorted { $0.distance < $1.distance }.lazy.compactMap { hit -> String? in
+                let name = hit.entity.name
+                return self.pickable[name]?.entity == hit.entity ? name : nil
+            }.first
+        }
+
+        /// Draws one pickable item in the selection colour (orange), and the one before as it was.
+        public func highlightWireframe(id: String?) {
+            if let previous = highlighted, previous != id, let (entity, material) = pickable[previous] {
+                entity.model?.materials = [material]
+            }
+            highlighted = id
+            guard let id, let (entity, _) = pickable[id] else { return }
+            entity.model?.materials = [
+                Self.wireMaterial(UIColor(red: 0.94, green: 0.54, blue: 0.14, alpha: 1), throughWalls: true)
+            ]
+        }
+
+        /// A tap in the view. Each tap is a new value, so observers see taps on the same spot.
+        public struct Tap: Equatable, Sendable {
+            public var point: CGPoint
+            public var sequence: Int
+        }
+
+        /// The last tap in the view, for the screen to pick wireframes with.
+        public private(set) var lastTap: Tap?
+
+        @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+            lastTap = Tap(point: gesture.location(in: view), sequence: (lastTap?.sequence ?? 0) + 1)
+        }
+
+        static let pickGroup = CollisionGroup(rawValue: 1 << 8)
+
+        private static func wireMaterial(_ color: UIColor, throughWalls: Bool) -> UnlitMaterial {
+            var material = UnlitMaterial(color: color)
+            material.faceCulling = .none
+            if throughWalls {
+                material.blending = .transparent(opacity: 0.9)
+                material.readsDepth = false
+            }
+            return material
+        }
+
+        private static func wireModel(
+            _ segments: [Wireframe.Segment], width: Float, material: UnlitMaterial
+        ) -> ModelComponent? {
+            let mesh = Wireframe.mesh(segments, width: width)
             guard !mesh.isEmpty else { return nil }
             var descriptor = MeshDescriptor(name: "wireframe")
             descriptor.positions = MeshBuffer(mesh.positions)
             descriptor.primitives = .triangles(mesh.indices)
             guard let resource = try? MeshResource.generate(from: [descriptor]) else { return nil }
-            var material = UnlitMaterial(color: color)
-            material.blending = .transparent(opacity: 0.9)
-            material.faceCulling = .none
-            // The real tree's mesh would hide the far side of the wireframe; draw it through.
-            material.readsDepth = false
             return ModelComponent(mesh: resource, materials: [material])
         }
+
+        // MARK: Fitted tree
+
+        /// Stands the wireframe tree being fitted with its trunk base at `base` (a world point on the ground),
+        /// replacing any shown before. Trunk brown and crown green, as the Mac visualiser draws them, through whatever
+        /// is in front.
+        public func showTree(_ form: TreeForm, lean: Lean? = nil, at base: SIMD3<Float>) {
+            let figure = WireframeTree.figure(form, lean: lean, at: base)
+            showWireframes(
+                WireframeLayer(
+                    name: Self.fitTrunkLayer, items: [WireframeItem(id: "fit-trunk", segments: figure.trunk)],
+                    color: Self.trunkColor, throughWalls: true))
+            showWireframes(
+                WireframeLayer(
+                    name: Self.fitCrownLayer, items: [WireframeItem(id: "fit-crown", segments: figure.crown)],
+                    color: Self.crownColor, throughWalls: true))
+            treeBase = base
+        }
+
+        /// Takes the fitted tree down.
+        public func hideTree() {
+            hideWireframes(named: Self.fitTrunkLayer)
+            hideWireframes(named: Self.fitCrownLayer)
+            treeBase = nil
+        }
+
+        static let fitTrunkLayer = "fit-trunk"
+        static let fitCrownLayer = "fit-crown"
+        /// The Mac visualiser's tree colours.
+        public static let trunkColor = SIMD4<Float>(0.70, 0.48, 0.28, 1)
+        public static let crownColor = SIMD4<Float>(0.55, 0.95, 0.30, 1)
 
         // MARK: Session delegate
 

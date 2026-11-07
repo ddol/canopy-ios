@@ -213,6 +213,9 @@ struct GerardusMap: View {
                 context.stroke(
                     shape, with: .color(Color.canopyInkMuted.opacity(0.7)),
                     style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+            case .tree:
+                context.fill(shape, with: .color(Color.canopyBrand.opacity(0.12)))
+                context.stroke(shape, with: .color(Color.canopyBrand.opacity(0.8)), lineWidth: 1)
             case .other:
                 context.stroke(shape, with: .color(Color.canopyLineStrong), lineWidth: 1)
             }

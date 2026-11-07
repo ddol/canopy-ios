@@ -37,7 +37,7 @@ where the store, capture, sync and players meet.
 | `CanopyModel` | iOS, macOS | Value types (`Tree`, `Tag`, `Route`, `FieldObservation`, `Changeset`, `Evidence`, `Player`, `CountStatus`), `S2CellID`, positions and local frames, `CensusState` derivation, `ChangesetBuilder`, `CensusSummary`, GeoJSON reading |
 | `CanopyDesign` | iOS | Colour, type, spacing and radius tokens; `StatusBadge`, `SummaryBar`, button styles; `QuantityFormat` |
 | `CanopyStore` | iOS, macOS | `LocalStore` (SQLite: append-only log, changesets, evidence, derived tables) and `BlobStore` (SHA-256 named files) |
-| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, Quick Look previews |
+| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR, wireframe layers and picking), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, `TreeForm` / `WireframeTree`, `ARSiteFrame` / `SiteWireframes` (Gerardus sites in AR; uses CanopyReference), Quick Look previews |
 | `CanopyMap` | iOS | `MapLayers`, the `MapRenderer` protocol, `MapKitRenderer`, status presentation (word, icon, tone) |
 | `CanopySync` | iOS, macOS | `GerardusClient` protocol, `FakeGerardusClient`, `SyncCoordinator`; `GerardusEndpoint` and `GerardusStatusClient` for a real server's status page |
 | `CanopyPlayers` | iOS | `PlayerService` (Game Center sign-in, alias, trusted flag) |
@@ -114,6 +114,20 @@ much of the trunk's circumference 1.37 m above the ground is covered (aim for 27
 The evidence is the kept mesh (positions and indices only) re-cropped around the fitted trunk centre: the trunk
 plus 0.6 m around it, at most 2 m. A trunk's position on the map comes from the GPS fix plus the AR offset from
 the camera to the trunk (`GeoReference`), with the GPS accuracy as its uncertainty.
+
+After **Finish scan** a wireframe tree (`TreeForm`, `WireframeTree`: the Mac visualiser's trunk line and crown
+rings, with the trunk's diameter) stands on the measured trunk base, and four sliders (trunk diameter, height,
+foliage height, foliage width) fit it to the real tree by eye before the measurement sheet; the fitted figures are
+shown there, not yet saved.
+
+**Site overlay.** The same view draws the loaded Gerardus sites round the player as wireframe layers
+(`SiteWireframes`: trees, buildings, streets) and the census's trees, through `CaptureSession.showWireframes`.
+`ARSiteFrame` places a site's ENU frame in the AR world: through the 3DEP registration's pose when there is one,
+else through the GPS fix (session origin from the fix and the camera offset, the site georeference, and the mesh
+floor against the site's ground grid for height). The site under the player is loaded on arrival and per tile walked
+into (`AppModel.loadVectors`, kept raw in `loadedVectors`). Tapping a tree (`pickWireframe`, a collision box round
+each tree) selects it and opens the sliders on it; a census tree so picked becomes the target. See
+GERARDUS-VECTORS.md, *In AR*.
 
 The AR session pauses while the measurement sheet is up (Quick Look's AR preview needs the camera) and resumes
 without resetting, so the mesh and the scan carry on; **Keep scanning** goes back to walking round and measuring
@@ -325,7 +339,7 @@ site first if needed. It converts them from the site frame to the map with `Site
 - kerbs;
 - street use as surfaces.
 
-Ground, trees and sensor arrows are left out. Both renderers draw them; on Apple's map **Show vectors** turns them
+Gerardus's trees (the `TREES` layer, `GerardusTree`) are drawn as their crown rings. Ground and sensor arrows are left out. Both renderers draw them; on Apple's map **Show vectors** turns them
 off. The canopy grid stays on the Gerardus-only map, since SwiftUI's MapKit has no image overlays. The 3D viewer
 (Layers → 3D vectors) is unchanged. Everything loaded lives in memory, merged once into `AppModel.mapReference`.
 

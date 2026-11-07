@@ -48,6 +48,8 @@ final class AppModel {
     var vectorAreas: [String: MapLayers.Reference] = [:] {
         didSet { updateMapReference() }
     }
+    /// The loaded sites' vectors as sent, per site, for the AR overlay. In memory only.
+    var loadedVectors: [String: LoadedVectors] = [:]
     /// The tiles the loaded vector sites cover.
     var vectorTiles: Set<S2CellID> = []
     /// Credits for the loaded vectors.

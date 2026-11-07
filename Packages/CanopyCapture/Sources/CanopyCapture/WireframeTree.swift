@@ -52,25 +52,16 @@ public struct TreeForm: Equatable, Sendable {
     }
 }
 
-/// Builds the wireframe of a `TreeForm` as triangle meshes RealityKit can draw: the frame has its origin at the
-/// trunk's base on the ground, y up, and every line is a thin square tube so it has width on screen (RealityKit
-/// draws no lines of its own).
+/// The wireframe of a `TreeForm`: the frame has its origin at the trunk's base on the ground, y up.
 public enum WireframeTree {
-    /// A straight line of the wireframe, in metres from the trunk's base.
-    public struct Segment: Equatable, Sendable {
-        public var from: SIMD3<Float>
-        public var to: SIMD3<Float>
-
-        public init(from: SIMD3<Float>, to: SIMD3<Float>) {
-            self.from = from
-            self.to = to
-        }
-    }
+    public typealias Segment = Wireframe.Segment
 
     /// The trunk's lines and the crown's, kept apart so they can be coloured apart.
     public struct Figure: Equatable, Sendable {
         public var trunk: [Segment]
         public var crown: [Segment]
+
+        public var all: [Segment] { trunk + crown }
     }
 
     /// Points around each ring.
@@ -80,16 +71,21 @@ public enum WireframeTree {
     /// Width of each line's tube, in metres.
     public static let lineWidth: Float = 0.012
 
-    /// The lines of a tree: rings of the trunk's diameter at the ground, at breast height (where the DBH was
-    /// measured) and at the crown's base, joined by uprights; and rings of the crown's width at its base and
-    /// its top, joined by uprights. A lean tilts the trunk and carries the crown with it, as the Mac visualiser
-    /// centres the crown over the trunk's top.
-    public static func figure(_ form: TreeForm, lean: Lean? = nil) -> Figure {
+    /// The lines of a tree standing at `base`: rings of the trunk's diameter at the ground, at breast height (where
+    /// the DBH was measured) and at the crown's base, joined by uprights; and rings of the crown's width at its base
+    /// and its top, joined by uprights. A lean tilts the trunk and carries the crown with it, as the Mac visualiser
+    /// centres the crown over the trunk's top. `detail` below 1 draws fewer ring segments and uprights, for a site
+    /// full of trees.
+    public static func figure(
+        _ form: TreeForm, lean: Lean? = nil, at base: SIMD3<Float> = .zero, detail: Float = 1
+    ) -> Figure {
         let form = form.clamped
         let tilt = Self.tilt(lean)
+        let ringCount = max(8, Int((Float(ringSegments) * detail).rounded()))
+        let uprightCount = max(4, Int((Float(uprights) * detail).rounded()))
         func axis(_ height: Double) -> SIMD3<Float> {
             let h = Float(height)
-            return SIMD3(tilt.x * h, h, tilt.z * h)
+            return base + SIMD3(tilt.x * h, h, tilt.z * h)
         }
 
         var trunk: [Segment] = []
@@ -99,17 +95,17 @@ public enum WireframeTree {
             trunkHeights.insert(DBH.standardHeight, at: 1)
         }
         for height in trunkHeights {
-            trunk += ring(centre: axis(height), radius: trunkRadius)
+            trunk += Wireframe.ring(centre: axis(height), radius: trunkRadius, count: ringCount)
         }
-        trunk += uprights(from: axis(0), to: axis(form.crownBase), radius: trunkRadius)
+        trunk += uprights(from: axis(0), to: axis(form.crownBase), radius: trunkRadius, count: uprightCount)
 
         var crown: [Segment] = []
         let crownRadius = Float(form.crownWidth / 2)
-        let base = axis(form.crownBase)
+        let crownBase = axis(form.crownBase)
         let top = axis(form.height)
-        crown += ring(centre: base, radius: crownRadius)
-        crown += ring(centre: top, radius: crownRadius)
-        crown += uprights(from: base, to: top, radius: crownRadius)
+        crown += Wireframe.ring(centre: crownBase, radius: crownRadius, count: ringCount)
+        crown += Wireframe.ring(centre: top, radius: crownRadius, count: ringCount)
+        crown += uprights(from: crownBase, to: top, radius: crownRadius, count: uprightCount)
         return Figure(trunk: trunk, crown: crown)
     }
 
@@ -122,55 +118,16 @@ public enum WireframeTree {
         return SIMD3(sin(radians) * slope, 0, -cos(radians) * slope)
     }
 
-    static func ring(centre: SIMD3<Float>, radius: Float) -> [Segment] {
-        let points = (0..<ringSegments).map { i -> SIMD3<Float> in
-            let angle = Float(i) / Float(ringSegments) * 2 * .pi
-            return centre + SIMD3(cos(angle) * radius, 0, sin(angle) * radius)
-        }
-        return (0..<ringSegments).map { Segment(from: points[$0], to: points[($0 + 1) % ringSegments]) }
-    }
-
-    static func uprights(from bottom: SIMD3<Float>, to top: SIMD3<Float>, radius: Float) -> [Segment] {
-        (0..<uprights).map { i in
-            let angle = Float(i) / Float(uprights) * 2 * .pi
+    static func uprights(from bottom: SIMD3<Float>, to top: SIMD3<Float>, radius: Float, count: Int) -> [Segment] {
+        (0..<count).map { i in
+            let angle = Float(i) / Float(count) * 2 * .pi
             let offset = SIMD3(cos(angle) * radius, 0, sin(angle) * radius)
             return Segment(from: bottom + offset, to: top + offset)
         }
     }
 
-    /// Each segment as a square tube of `width` with four side faces, all in one mesh. Faces are wound
-    /// outwards; draw them without culling so they read from inside the crown too.
+    /// The tube mesh of some segments, at the tree's line width.
     public static func mesh(_ segments: [Segment], width: Float = lineWidth) -> Mesh {
-        var positions: [SIMD3<Float>] = []
-        var indices: [UInt32] = []
-        positions.reserveCapacity(segments.count * 8)
-        indices.reserveCapacity(segments.count * 24)
-        let half = width / 2
-        for segment in segments {
-            let direction = segment.to - segment.from
-            let length = simd_length(direction)
-            guard length > 1e-6 else { continue }
-            let along = direction / length
-            // A side vector not parallel to the segment, then two perpendiculars.
-            let reference: SIMD3<Float> = abs(along.y) < 0.9 ? SIMD3(0, 1, 0) : SIMD3(1, 0, 0)
-            let u = simd_normalize(simd_cross(along, reference)) * half
-            let v = simd_normalize(simd_cross(along, u)) * half
-            let corners = [u + v, u - v, -u - v, -u + v]
-            let base = UInt32(positions.count)
-            for corner in corners {
-                positions.append(segment.from + corner)
-            }
-            for corner in corners {
-                positions.append(segment.to + corner)
-            }
-            for i in 0..<4 {
-                let a = base + UInt32(i)
-                let b = base + UInt32((i + 1) % 4)
-                let c = a + 4
-                let d = b + 4
-                indices += [a, b, d, a, d, c]
-            }
-        }
-        return Mesh(positions: positions, indices: indices)
+        Wireframe.mesh(segments, width: width)
     }
 }
