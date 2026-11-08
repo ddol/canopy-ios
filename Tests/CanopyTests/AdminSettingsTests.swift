@@ -39,6 +39,14 @@ import Testing
         #expect(AdminSettings(allowlist: ["T:_admin"], everyoneIsAdmin: false, defaults: store).useOSM)
     }
 
+    @Test func theWholeCityIsShownUntilTurnedOff() {
+        let store = defaults()
+        let settings = AdminSettings(allowlist: [], everyoneIsAdmin: false, defaults: store)
+        #expect(settings.wholeCity)
+        settings.wholeCity = false
+        #expect(!AdminSettings(allowlist: [], everyoneIsAdmin: false, defaults: store).wholeCity)
+    }
+
     @Test func theAerialReferenceIsPlacedOnTheMap() throws {
         let origin = GeoPoint(latitude: 37.7705, longitude: -122.4760)
         let frame = LocalFrame(origin: origin)

@@ -128,6 +128,13 @@ struct SettingsScreen: View {
                     Label("Use OpenStreetMap", systemImage: "map")
                 }
                 .accessibilityIdentifier("admin-use-osm")
+                Toggle(
+                    isOn: Binding(
+                        get: { model.adminSettings.wholeCity }, set: { model.adminSettings.wholeCity = $0 })
+                ) {
+                    Label("Whole city on the map", systemImage: "building.2")
+                }
+                .accessibilityIdentifier("admin-whole-city")
                 LabeledContent("Your player id") {
                     Text(verbatim: model.player.id.rawValue)
                         .font(CanopyFont.mono(.footnote))
@@ -138,10 +145,12 @@ struct SettingsScreen: View {
             } footer: {
                 Text(
                     """
-                    For checking Canopy's data. These show to the Game Center players in CANOPY_ADMIN_PLAYER_IDS, and to \
-                    everyone in a debug build. OpenStreetMap masks buildings out of tree detection and adds roads and \
-                    paths to the Gerardus map. Trees found with it are marked as for checking only: the shared tree \
-                    layer takes nothing from OpenStreetMap.
+                    For checking Canopy's data. These show to the Game Center players in CANOPY_ADMIN_PLAYER_IDS, to \
+                    the Gerardus server's admins, and to everyone in a debug build. OpenStreetMap masks buildings out \
+                    of tree detection and adds roads and paths to the Gerardus map. Trees found with it are marked as \
+                    for checking only: the shared tree layer takes nothing from OpenStreetMap. Whole city shades every \
+                    tile in San Francisco by its trees and pulls every tile the server holds trees in, wherever the map \
+                    has been.
                     """)
             }
         }

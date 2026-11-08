@@ -48,4 +48,27 @@ import Testing
         #expect(city.count == GerardusMapClient.summaryBatch)
         #expect(city.contains(park.tile))
     }
+
+    @Test func theWholeCityIsEveryTileFromLandsEndToTheBayInAFewCalls() {
+        let city = AppModel.wholeCity
+        let landsEnd = GeoPoint(latitude: 37.7875, longitude: -122.5055).tile
+        let ferryBuilding = GeoPoint(latitude: 37.7955, longitude: -122.3937).tile
+        let excelsior = GeoPoint(latitude: 37.7240, longitude: -122.4260).tile
+        let presidio = GeoPoint(latitude: 37.7989, longitude: -122.4662).tile
+        for tile in [landsEnd, ferryBuilding, excelsior, presidio, a, d] {
+            #expect(city.contains(tile))
+        }
+        #expect(city.count > 8000)
+        #expect(city.count <= 5 * GerardusMapClient.summaryBatch)
+        #expect(Set(city).count == city.count)
+    }
+
+    @Test func onlyTilesWithTreesStandingAreFollowed() {
+        var removed = GerardusMapClient.TileCounts(tile: b)
+        removed.removed = 4
+        var proposed = GerardusMapClient.TileCounts(tile: c)
+        proposed.proposed = 1
+        let summaries = [a: counts(a, latest: 1), b: removed, c: proposed, d: GerardusMapClient.TileCounts(tile: d)]
+        #expect(AppModel.tilesWithTrees(summaries) == [a, c])
+    }
 }

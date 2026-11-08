@@ -4,10 +4,12 @@ import Observation
 
 /// Flags for checking Canopy's data, shown in Settings only to admins: the Game Center players listed in the
 /// `CANOPY_ADMIN_PLAYER_IDS` build setting (set it in Configs/Local.xcconfig, so the list stays out of the public
-/// repository), and anyone in a debug build. Every flag is off until an admin turns it on.
+/// repository), anyone the Gerardus server calls an admin (`AppModel.isAdmin`), and anyone in a debug build. Every flag
+/// is off until an admin turns it on, except the whole city, which is on until turned off.
 @Observable
 final class AdminSettings {
     static let osmKey = "canopy.admin.useOSM"
+    static let wholeCityKey = "canopy.admin.wholeCity"
 
     /// Game Center team-scoped player ids allowed to see the flags.
     let allowlist: Set<String>
@@ -21,11 +23,19 @@ final class AdminSettings {
         didSet { defaults.set(useOSM, forKey: Self.osmKey) }
     }
 
+    /// Show the whole city on the map: every tile in it shaded from the server's counts, and every tile the server
+    /// holds trees in pulled to this phone, not just the ones round where the map has been. For admins until it is
+    /// ready for everyone.
+    var wholeCity: Bool {
+        didSet { defaults.set(wholeCity, forKey: Self.wholeCityKey) }
+    }
+
     init(allowlist: Set<String>, everyoneIsAdmin: Bool, defaults: UserDefaults = .standard) {
         self.allowlist = allowlist
         self.everyoneIsAdmin = everyoneIsAdmin
         self.defaults = defaults
         self.useOSM = defaults.bool(forKey: Self.osmKey)
+        self.wholeCity = defaults.object(forKey: Self.wholeCityKey) as? Bool ?? true
     }
 
     /// The settings for this build: the allowlist from Info.plist (`CanopyAdminPlayerIDs`).

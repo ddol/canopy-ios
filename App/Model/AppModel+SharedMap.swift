@@ -10,13 +10,51 @@ extension AppModel {
     /// the tiles already pulled are kept up to date either way.
     static let pullRadiusLimit = 400.0
 
-    /// The tiles a sync follows: every tile pulled before, plus the tiles in view when the map is close enough.
+    /// The tiles a sync follows: every tile pulled before, plus the tiles in view when the map is close enough, plus
+    /// every tile in the city the server holds trees in when the map shows the whole city.
     func followedTiles() async throws -> Set<S2CellID> {
         var tiles = Set(try await store.sharedTiles().keys)
         if let viewport = mapViewport, viewport.cornerDistance <= Self.pullRadiusLimit {
             tiles.formUnion(Self.tiles(in: viewport))
         }
+        if showsWholeCity { tiles.formUnion(cityTiles) }
         return tiles
+    }
+
+    /// Every level-16 tile in the city (`MapViewport.sanFrancisco`, its corners included): the children of the
+    /// level-13 cells over it, some fourteen thousand, which the server answers about in four calls.
+    nonisolated static let wholeCity: [S2CellID] = Set(
+        MapDetail.cells(in: .sanFrancisco, level: 13, step: 400).flatMap { $0.children(atLevel: S2CellID.tileLevel) }
+    ).sorted()
+
+    /// How long the whole city's summaries are kept before they are asked for again.
+    static let citySummaryAge: TimeInterval = 300
+
+    /// When the map shows the whole city, asks the server what every tile in it holds, at most every five minutes:
+    /// the map shades every tile from the answer, and a sync then follows every tile with trees, so trees loaded
+    /// anywhere in the city (Lands End, say) are on this phone without going there. A server too old to answer
+    /// leaves things as they were.
+    func summariseCity(_ client: GerardusMapClient) async throws {
+        guard showsWholeCity else { return }
+        if let asked = cityAskedAt, Date().timeIntervalSince(asked) < Self.citySummaryAge { return }
+        let tiles = Self.wholeCity
+        guard let answer = try await Self.summaries(of: tiles, client) else { return }
+        let now = Date()
+        cityAskedAt = now
+        var known = serverTiles
+        for tile in tiles {
+            summariesAskedAt[tile] = now
+            known[tile] = answer[tile].map {
+                TileSummary(id: tile, detected: $0.detected, reviewed: $0.reviewed, tags: $0.tags)
+            }
+        }
+        serverTiles = known
+        cityTiles = Self.tilesWithTrees(answer)
+    }
+
+    /// The tiles a summary says hold trees that are not removed.
+    nonisolated static func tilesWithTrees(_ summaries: [S2CellID: GerardusMapClient.TileCounts]) -> Set<S2CellID> {
+        Set(summaries.values.filter { $0.detected + $0.reviewed > 0 }.map(\.tile))
     }
 
     /// The L16 tiles a region touches, found by sampling it every 40 m (a tile is about 125 m across).

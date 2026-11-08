@@ -9,7 +9,8 @@ struct MapScreen: View {
     enum BaseMap: String {
         /// Apple's map, with Canopy's layers on top.
         case apple
-        /// No base map: Gerardus's site and the census's trees as wireframes in 3D (`WireframeRenderer`).
+        /// No base map: Gerardus's sites (ground, reconstructed buildings, streets, trees) and the census's trees in 3D
+        /// (`WireframeRenderer`). The app's one 3D view of the map; the AR view is the other 3D view.
         case gerardus
     }
 
@@ -252,7 +253,10 @@ struct MapScreen: View {
             Section("Base map") {
                 Picker("Base map", selection: $baseMap) {
                     Label("Apple Maps", systemImage: "map").tag(BaseMap.apple)
-                    Label("Gerardus wireframe", systemImage: "square.3.layers.3d.down.right").tag(BaseMap.gerardus)
+                    Label("Gerardus 3D", systemImage: "view.3d").tag(BaseMap.gerardus)
+                }
+                if baseMap == .gerardus {
+                    Toggle("Ground", systemImage: "mountain.2", isOn: $visibility.ground)
                 }
             }
             if Features.limbTagging {
@@ -260,6 +264,12 @@ struct MapScreen: View {
             }
             Toggle("Routes", systemImage: "point.topleft.down.to.point.bottomright.curvepath", isOn: $visibility.routes)
             Toggle("S2 cells (L13 and L16)", systemImage: "square.grid.3x3", isOn: $visibility.tiles)
+            if model.showsWholeCity {
+                Button("Whole city", systemImage: "building.2") {
+                    focus = MapFocus(.sanFrancisco)
+                }
+                .accessibilityIdentifier("map-whole-city")
+            }
             NavigationLink {
                 SurveyedCellsScreen(viewport: viewport ?? Self.startViewport)
             } label: {
@@ -282,19 +292,6 @@ struct MapScreen: View {
                     ServerCellsScreen(viewport: viewport ?? Self.startViewport)
                 } label: {
                     Label("Server cells (L13)", systemImage: "square.grid.2x2")
-                }
-            }
-            Section("3D vectors") {
-                NavigationLink {
-                    VectorMapScreen(token: VectorMapScreen.kirkham9th, title: "Kirkham & 9th")
-                } label: {
-                    Label("Kirkham & 9th in 3D", systemImage: "cube")
-                }
-                NavigationLink {
-                    VectorMapScreen(
-                        token: (viewport ?? Self.startViewport).center.tile.token, title: "3D vectors in view")
-                } label: {
-                    Label("3D vectors in view", systemImage: "view.3d")
                 }
             }
             Section("Legend") {

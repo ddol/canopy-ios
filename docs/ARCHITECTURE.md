@@ -337,22 +337,34 @@ own (`CensusTiles`, the census by tile, made once per census change); for a tile
 the server's: when the map settles on a wide view, `AppModel.summariseSoon` asks `GetTileSummaries` about the tiles round
 it (at most 4096, nearest first, each again only after two minutes) and keeps the answers in `serverTiles`.
 
+**The whole city.** For admins (`AppModel.isAdmin`: listed in the build, an admin on the server, or a debug build) the
+map shows all of San Francisco unless **Whole city on the map** is turned off (`AdminSettings.wholeCity`). Each sync
+first asks `GetTileSummaries` about every L16 tile in the city (`AppModel.wholeCity`: the children of the L13 cells over
+`MapViewport.sanFrancisco`, about fourteen thousand, four calls, at most every five minutes), shades them from the
+answers, and follows every tile the server holds standing trees in (`cityTiles`), so `pullSharedMap` brings them to
+the phone wherever the map has been. Other players get the same once it is limited to an area they choose.
+
 
 - `MapKitRenderer` draws on Apple's map with MapKit for SwiftUI. Each tree is a view, so detected trees in the tiles
   drawn in full are capped (250 to 400, nearest the centre first). Patches are polygons. MapKit lays out every one of those views whenever the map's content is
   applied, so the map view is equatable on what it draws (layers, focus, selection) and the rest of the screen
   changing (a progress message, a banner) leaves it alone.
-- `WireframeRenderer` (Layers → **Gerardus wireframe**) draws with no base map, the way the Mac visualiser draws
-  a site: a SceneKit scene of the loaded sites drawn in full (`MapLayers.detailedSites`: the ground grid, buildings as
-  walls and roofs, streets and kerbs, Gerardus's trees as trunk and crown rings), one node per site added and taken
+- `WireframeRenderer` (Layers → **Gerardus 3D**, the app's one 3D map) draws with no base map, the way the Mac
+  visualiser draws a site: a SceneKit scene of the loaded sites drawn in full (`MapLayers.detailedSites`: the ground
+  grid, the buildings Gerardus reconstructed as wall surfaces and roof planes, never DataSF's boxes over them
+  (`SiteBuildings`, shared with AR), streets and kerbs, Gerardus's trees as trunk and crown rings), one node per site added and taken
   away as the detail changes, with the census's trees as the same figure in their status colour, from their DBH and
   height when measured, batched into one mesh per colour. Every loaded site's ground still places points, so heights do
   not change with the detail. `SiteToScene` composes each site's
-  georeference with the scene's local frame as one affine map. One finger drags; two fingers turn (rotation
-  gesture), tilt (vertical pan) and zoom (pinch) together; a tap selects the tree whose trunk, projected to the
-  screen, is within a finger's width, or zooms to the patch under it.
-  The ground is tinted by height over the loaded sites' range (per-vertex colours), and extruded or box-walled
-  footprints get a lid (`VectorGeometry.lid`). The camera reports its viewport like the other renderer, so loading
+  georeference with the scene's local frame as one affine map. The camera (`CameraRig`) moves as Apple's map does,
+  through one gesture that follows one or two fingers (`MapTouchGesture`): the ground point under a dragging finger,
+  or between two, stays under it (each step solves for the camera target that puts it there); two fingers moving up
+  or down together, keeping their spacing, tilt instead (`TwoFingerIntent`); a drag glides on when let go;
+  double-tap zooms in about the tap and a two-finger tap zooms out. A tap selects the tree whose trunk, projected to
+  the screen, is within a finger's width, or zooms to the patch under it. **Ground** and **Show vectors** hide the
+  sites' ground and their buildings, streets and trees.
+  The ground is tinted by height over the loaded sites' range (per-vertex colours), and an older server's extruded
+  building parts get a lid (`VectorGeometry.lid`). The camera reports its viewport like the other renderer, so loading
   in view and following tiles work the same.
 - **Server cells** (`AppModel+Cells`, `ServerCellsScreen`): the level-13 cells under the map with the share of
   their 64 level-16 sites the server has prepared, and `prepareCell` to prepare the rest or rebuild them all, one
@@ -372,8 +384,7 @@ site first if needed. It converts them from the site frame to the map with `Site
 - street use as surfaces.
 
 Gerardus's trees (the `TREES` layer, `GerardusTree`) are drawn as their crown rings. Ground and sensor arrows are left out. Both renderers draw them; on Apple's map **Show vectors** turns them
-off. The canopy height grid from the aerial points is kept with the loaded area but drawn by neither renderer now: SwiftUI's MapKit has no image overlays, and the wireframe map has no flat raster yet. The 3D viewer
-(Layers → 3D vectors) is unchanged. Everything loaded lives in memory, merged once into `AppModel.mapReference`.
+off. The canopy height grid from the aerial points is kept with the loaded area but drawn by neither renderer now: SwiftUI's MapKit has no image overlays, and the wireframe map has no flat raster yet. Everything loaded lives in memory, merged once into `AppModel.mapReference`.
 
 A screen moves the map with a `MapFocus` request (a region with its own id), which both renderers follow.
 
