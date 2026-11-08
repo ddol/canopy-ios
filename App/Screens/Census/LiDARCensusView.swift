@@ -105,7 +105,7 @@ struct LiDARCensusView: View {
     private var bottomPanel: some View {
         if fit != nil {
             TreeFitPanel(
-                profile: fitProfileBinding, selectedSection: fitSectionBinding, onSnap: snapSelectedSection,
+                fitting: fitFittingBinding, selectedSection: fitSectionBinding, onSnap: snapSelectedSection,
                 onMoveHere: moveTreeHere, onBack: stopFitting, onMeasurement: showMeasurement)
         } else if let selection {
             SelectedTreePanel(
@@ -116,11 +116,12 @@ struct LiDARCensusView: View {
         }
     }
 
-    /// What the whole overlay is drawn from: the loaded sites, the placement, the layers and the adjusted shapes.
+    /// What the whole overlay is drawn from: the loaded sites, the placement and the layers. The adjusted shapes are
+    /// watched apart, since a slider moves them many times a second and only the trees need drawing again.
     private var overlayInputs: OverlayInputs {
         OverlayInputs(
             sites: model.loadedVectors.count, registration: registered?.registrationID, origin: sessionOrigin,
-            layers: overlayLayers, forms: model.treeForms)
+            layers: overlayLayers)
     }
 
     /// What the census trees and cells are drawn from.
@@ -139,7 +140,8 @@ struct LiDARCensusView: View {
                 if let tap = capture.lastTap { handleTap(at: tap.point) }
             }
             .onChange(of: overlayInputs) { rebuildOverlay() }
-            .onChange(of: censusInputs) { rebuildOverlay(site: false) }
+            .onChange(of: censusInputs) { rebuildOverlay([.census, .cells]) }
+            .onChange(of: model.treeForms) { old, new in rebuildOverlay(OverlayParts(reshaping: old, new)) }
             .onChange(of: model.aerial) {
                 guard loadingVectors, case .working(let message) = model.aerial else { return }
                 notice = message
@@ -489,7 +491,9 @@ struct LiDARCensusView: View {
             {
                 profile[breast.id] = snapped
             }
-            let fit = TreeFit(capture: result, position: position, profile: profile, base: result.trunkBase)
+            let fit = TreeFit(
+                capture: result, position: position, fitting: TreeFitting(shape: form, profile: profile),
+                base: result.trunkBase)
             self.fit = fit
             showFit(fit)
             notice =
@@ -521,17 +525,19 @@ struct LiDARCensusView: View {
         capture.showTree(fit.profile, lean: fit.capture.analysis.lean, at: fit.base, highlight: fit.selectedSection)
     }
 
-    /// The panel's binding into the fitted profile: every change redraws the tree.
-    private var fitProfileBinding: Binding<TreeProfile> {
+    /// The panel's binding into the fitted shape and rings: every change redraws the tree.
+    private var fitFittingBinding: Binding<TreeFitting> {
         Binding(
             get: {
-                fit?.profile
-                    ?? TreeProfile(form: TreeForm(trunkDiameter: 0.3, height: 8, crownHeight: 5, crownWidth: 5))
+                fit?.fitting
+                    ?? TreeFitting(shape: TreeForm(trunkDiameter: 0.3, height: 8, crownHeight: 5, crownWidth: 5))
             },
-            set: { profile in
+            set: { fitting in
                 guard var fit else { return }
-                fit.profile = profile
-                if let selected = fit.selectedSection, profile.section(selected) == nil { fit.selectedSection = nil }
+                fit.fitting = fitting
+                if let selected = fit.selectedSection, fitting.profile.section(selected) == nil {
+                    fit.selectedSection = nil
+                }
                 self.fit = fit
                 showFit(fit)
             })
@@ -689,13 +695,14 @@ struct LiDARCensusView: View {
         return heights.isEmpty ? 0 : Double(heights[heights.count / 2])
     }
 
-    /// Draws the site layers and the census trees again from what is loaded and where the session is placed.
-    /// `site: false` redraws only the census trees.
-    private func rebuildOverlay(site: Bool = true) {
+    /// Draws parts of the overlay again from what is loaded and where the session is placed: by default all of it.
+    private func rebuildOverlay(_ parts: OverlayParts = .all) {
+        guard !parts.isEmpty else { return }
         let sites = placedSites()
         let camera = capture.cameraPosition ?? .zero
-        if site {
+        if !parts.isDisjoint(with: [.siteTrees, .siteOther]) {
             for layer in SiteWireframes.Layer.allCases where layer.isSiteLayer {
+                guard parts.contains(layer == .trees ? .siteTrees : .siteOther) else { continue }
                 let name = "site-" + layer.rawValue
                 guard overlayLayers.contains(layer), !sites.isEmpty else {
                     capture.hideWireframes(named: name)
@@ -719,8 +726,8 @@ struct LiDARCensusView: View {
                         lineWidth: layer == .trees ? 0.015 : 0.02))
             }
         }
-        rebuildCensusTrees(sites: sites)
-        rebuildCells(sites: sites)
+        if parts.contains(.census) { rebuildCensusTrees(sites: sites) }
+        if parts.contains(.cells) { rebuildCells(sites: sites) }
     }
 
     /// Where a map point is on the ground in the AR world: on a loaded site's ground grid when one has it, else on
@@ -986,12 +993,18 @@ struct Measurement: Identifiable {
 struct TreeFit {
     var capture: TrunkCapture
     var position: Position
-    /// The rings of the tree, from the ground up.
-    var profile: TreeProfile
+    /// The shape the sliders were last set to, and the rings of the tree from the ground up.
+    var fitting: TreeFitting
     /// World point the tree stands on.
     var base: SIMD3<Float>
     /// The ring being edited, drawn in the highlight colour.
     var selectedSection: TreeSection.ID?
+
+    /// The rings of the tree, from the ground up.
+    var profile: TreeProfile {
+        get { fitting.profile }
+        set { fitting.profile = newValue }
+    }
 
     /// The four-slider shape the rings sum to.
     var form: TreeForm { profile.form }
@@ -1026,5 +1039,33 @@ private struct OverlayInputs: Equatable {
     var registration: String?
     var origin: GeoPoint?
     var layers: Set<SiteWireframes.Layer>
-    var forms: [String: TreeForm]
+}
+
+/// Parts of the AR overlay to draw again.
+struct OverlayParts: OptionSet {
+    let rawValue: Int
+
+    init(rawValue: Int) {
+        self.rawValue = rawValue
+    }
+
+    /// Gerardus's trees.
+    static let siteTrees = OverlayParts(rawValue: 1 << 0)
+    /// Gerardus's buildings and streets.
+    static let siteOther = OverlayParts(rawValue: 1 << 1)
+    /// The census's trees.
+    static let census = OverlayParts(rawValue: 1 << 2)
+    /// The S2 cells on the ground.
+    static let cells = OverlayParts(rawValue: 1 << 3)
+    static let all: OverlayParts = [.siteTrees, .siteOther, .census, .cells]
+
+    /// The tree layers holding the shapes that differ between two sets of adjusted shapes: census trees are keyed
+    /// `census:<uuid>`, Gerardus's by their feature id.
+    init(reshaping old: [String: TreeForm], _ new: [String: TreeForm]) {
+        var parts: OverlayParts = []
+        for key in Set(old.keys).union(new.keys) where old[key] != new[key] {
+            parts.insert(key.hasPrefix(ARTreeSelection.censusPrefix) ? .census : .siteTrees)
+        }
+        self = parts
+    }
 }

@@ -29,7 +29,8 @@ public final class StandInMap: @unchecked Sendable {
             for f in fields where f.number == 1 {
                 if let bytes = known[f.string] { w.bytes(1, bytes) }
             }
-        case "UploadBlob", "ListOpenChangesets":
+        case "UploadBlob", "ListOpenChangesets", "GetTileSummaries":
+            // Nothing pending and an empty shared map: no summaries either.
             break
         case "GetPlayer":
             w.message(1) { p in

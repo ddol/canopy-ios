@@ -46,7 +46,7 @@ struct TreeFormSliders: View {
 /// The tree being fitted over a scanned trunk: its shape by four sliders, or ring by ring (each snapped to the scan
 /// and checked against the tree), and the buttons to move it, go back to scanning, or go on to the measurement.
 struct TreeFitPanel: View {
-    @Binding var profile: TreeProfile
+    @Binding var fitting: TreeFitting
     @Binding var selectedSection: TreeSection.ID?
     var onSnap: () -> Void
     var onMoveHere: () -> Void
@@ -71,10 +71,9 @@ struct TreeFitPanel: View {
             switch mode {
             case .shape:
                 // The rings fitted or confirmed against the tree stay; the rest follow the sliders.
-                TreeFormSliders(
-                    form: Binding(get: { profile.form }, set: { profile = profile.following($0.clamped) }))
+                TreeFormSliders(form: Binding(get: { fitting.shape }, set: { fitting.reshape($0) }))
             case .rings:
-                TreeSectionEditor(profile: $profile, selected: $selectedSection, onSnap: onSnap)
+                TreeSectionEditor(profile: $fitting.profile, selected: $selectedSection, onSnap: onSnap)
             }
             HStack(spacing: Spacing.s) {
                 Button("Back", systemImage: "chevron.backward", action: onBack)
@@ -96,8 +95,8 @@ struct TreeFitPanel: View {
         .onChange(of: mode) {
             if mode == .rings, selectedSection == nil {
                 selectedSection =
-                    profile.trunk.first { abs($0.height - DBH.standardHeight) < 0.01 }?.id
-                    ?? profile.sections.first?.id
+                    fitting.profile.trunk.first { abs($0.height - DBH.standardHeight) < 0.01 }?.id
+                    ?? fitting.profile.sections.first?.id
             }
             if mode == .shape { selectedSection = nil }
         }

@@ -77,8 +77,33 @@ enum WireframeTrees {
         return form.clamped
     }
 
+    /// How a batch of trees is drawn: by status, faint for a detection in a surveyed cell.
+    struct Look: Hashable {
+        var status: CountStatus
+        var faint: Bool
+
+        var color: UIColor { WireframeTrees.color(status, selected: false, inSurveyedCell: faint) }
+    }
+
+    static var selectedColor: UIColor { CanopyColor.survey.uiColor }
+
+    /// A patch's fill: from the background (no trees) to the brand green (dense woodland).
+    static func patchColor(_ density: Double) -> SIMD4<Float> {
+        func rgba(_ color: UIColor) -> SIMD4<Float> {
+            var r: CGFloat = 0
+            var g: CGFloat = 0
+            var b: CGFloat = 0
+            var a: CGFloat = 0
+            color.getRed(&r, green: &g, blue: &b, alpha: &a)
+            return SIMD4(Float(r), Float(g), Float(b), 1)
+        }
+        let t = Float(0.15 + 0.7 * min(max(density, 0), 1))
+        let low = rgba(CanopyColor.surface100.uiColor)
+        return low + (rgba(CanopyColor.brand.uiColor) - low) * t
+    }
+
     static func color(_ status: CountStatus, selected: Bool, inSurveyedCell: Bool = false) -> UIColor {
-        if selected { return CanopyColor.survey.uiColor }
+        if selected { return selectedColor }
         switch status {
         case .detected:
             // A detection in a surveyed cell was looked over and left: faint.
@@ -143,8 +168,9 @@ struct WireframeMap: UIViewRepresentable {
         }
     }
 
-    /// Owns the scene: the camera rig, the site nodes (rebuilt when the loaded reference changes) and the census
-    /// tree nodes (rebuilt when the trees change, recoloured when the selection does).
+    /// Owns the scene: the camera rig; the loaded sites drawn in full, one node each, added and taken away as the
+    /// tiles drawn in full change; the census's trees, batched into one mesh per colour; and the patches standing for
+    /// the tiles not drawn in full.
     @MainActor
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let scene = SCNScene()
@@ -153,6 +179,7 @@ struct WireframeMap: UIViewRepresentable {
         /// Gerardus's trees, apart from the rest of the sites so an adjusted shape redraws only them.
         let siteTreeRoot = SCNNode()
         let treeRoot = SCNNode()
+        let summaryRoot = SCNNode()
         let contextRoot = SCNNode()
         /// The scene's origin on the map.
         let anchor: LocalFrame
@@ -174,9 +201,22 @@ struct WireframeMap: UIViewRepresentable {
 
         private var reference: MapLayers.Reference?
         private var elevation: Float = 0
+        /// Every loaded site's ground, drawn or not, so heights are the same whichever tiles are drawn in full.
         private var grounds: [(SiteToScene, Heightfield)] = []
+        private var groundRange: ClosedRange<Float> = 0...1
+        /// Which site draws each feature: neighbouring sites overlap, and a feature is drawn once, by the first site
+        /// in the reference that has it.
+        private var owners: [String: String] = [:]
+        /// The sites drawn, by key, with their trees apart so an adjusted shape redraws only those.
+        private var siteNodes: [String: SCNNode] = [:]
+        private var siteTreeNodes: [String: SCNNode] = [:]
+        private var detail = MapDetail.everything
         private var trees: [MapLayers.TreeMarker] = []
-        private var treeNodes: [UUID: SCNNode] = [:]
+        /// Where each drawn census tree stands, base and top in scene metres, for picking one by a tap.
+        private(set) var pickable: [(id: UUID, base: SIMD3<Float>, top: SIMD3<Float>)] = []
+        private var summaries: [TileSummary] = []
+        /// The patches in the order their faces were added, two triangles each, for finding the one tapped.
+        private var summaryFaces: [TileSummary] = []
         private var treeForms: [String: TreeForm] = [:]
         private var treeProfiles: [String: TreeProfile] = [:]
         private var selected: UUID?
@@ -193,6 +233,7 @@ struct WireframeMap: UIViewRepresentable {
             scene.rootNode.addChildNode(siteRoot)
             scene.rootNode.addChildNode(siteTreeRoot)
             scene.rootNode.addChildNode(treeRoot)
+            scene.rootNode.addChildNode(summaryRoot)
             scene.rootNode.addChildNode(contextRoot)
             placeCamera()
         }
@@ -203,36 +244,42 @@ struct WireframeMap: UIViewRepresentable {
             let formsChanged = layers.treeForms != treeForms || layers.treeProfiles != treeProfiles
             treeForms = layers.treeForms
             treeProfiles = layers.treeProfiles
+            let selectionChanged = selection != selected
+            selected = selection
             if layers.reference !== reference {
                 reference = layers.reference
-                rebuildSites()
-                rebuildSiteTrees()
+                prepareSites()
+                detail = layers.detail
+                showSites(layers.detailedSites)
                 rebuildTrees(layers.trees)
+                rebuildSummaries(layers.summaries)
                 rebuildContext(layers)
-            } else {
-                if formsChanged { rebuildSiteTrees() }
-                if layers.trees != trees || formsChanged { rebuildTrees(layers.trees) }
-                if context == nil || context!.routes != layers.routes || context!.boundary != layers.boundary
-                    || context!.tiles != layers.tiles
-                {
-                    rebuildContext(layers)
-                }
+                return
             }
-            if selection != selected {
-                let was = selected
-                selected = selection
-                for id in [was, selection].compactMap({ $0 }) {
-                    guard let marker = trees.first(where: { $0.id == id }) else { continue }
-                    treeNodes[id]?.childNodes.first?.geometry?.firstMaterial?.diffuse.contents =
-                        WireframeTrees.color(
-                            marker.status, selected: id == selection, inSurveyedCell: marker.inSurveyedCell)
-                }
+            if layers.detail != detail {
+                detail = layers.detail
+                showSites(layers.detailedSites)
+            }
+            if formsChanged { redrawSiteTrees() }
+            if layers.trees != trees || formsChanged || selectionChanged { rebuildTrees(layers.trees) }
+            if layers.summaries != summaries { rebuildSummaries(layers.summaries) }
+            if context == nil || context!.routes != layers.routes || context!.boundary != layers.boundary
+                || context!.tiles != layers.tiles
+            {
+                rebuildContext(layers)
             }
         }
 
-        private func rebuildSites() {
-            for node in siteRoot.childNodes { node.removeFromParentNode() }
+        /// Takes down every site and works out, for the loaded reference, what drawing any of them needs: the height
+        /// the scene is drawn about, every ground for placing points, the height range the ground is tinted over, and
+        /// which site draws each feature.
+        private func prepareSites() {
+            for node in siteNodes.values { node.removeFromParentNode() }
+            for node in siteTreeNodes.values { node.removeFromParentNode() }
+            siteNodes = [:]
+            siteTreeNodes = [:]
             grounds = []
+            owners = [:]
             guard let reference, !reference.sites.isEmpty else { return }
             // Heights are drawn relative to the first site's ground, so the scene stays near y = 0.
             let first = reference.sites[0].vectors
@@ -242,64 +289,116 @@ struct WireframeMap: UIViewRepresentable {
             // One height scale across the loaded sites, so a slope reads the same from one site to the next.
             let allHeights = reference.sites.flatMap { $0.vectors.ground?.z.filter(\.isFinite) ?? [] }
             let low = allHeights.min() ?? elevation
-            let high = allHeights.max() ?? elevation + 1
-            var seen: Set<String> = []
-            for site in reference.sites {
-                let transform = SiteToScene(georeference: site.georeference, scene: anchor, elevation: elevation)
-                let place: @Sendable (SIMD3<Float>) -> SIMD3<Float> = { transform.place($0) }
+            groundRange = low...max(allHeights.max() ?? elevation + 1, low)
+            for (index, site) in reference.sites.enumerated() {
+                let key = Self.key(site, index: index)
                 if let ground = site.vectors.ground {
-                    grounds.append((transform, ground))
-                    siteRoot.addChildNode(
-                        VectorMesh(
-                            ground: ground, place: place,
-                            tint: (low: Self.groundLow, high: Self.groundHigh, range: low...high)
-                        )
-                        .node(color: .white, fill: true, edgeColor: CanopyColor.lineStrong.uiColor))
+                    grounds.append(
+                        (SiteToScene(georeference: site.georeference, scene: anchor, elevation: elevation), ground))
                 }
-                let features = site.vectors.features
-                let hasBoxes = features.contains { $0.layer == .boxes || $0.layer == .buildings }
-                let wallSurfaces = features.contains { $0.layer == .buildings && $0.line.kind == .wallSurface }
-                var buildings = VectorMesh(place: place)
-                var streets = VectorMesh(place: place)
-                for feature in features where seen.insert(feature.line.featureID).inserted {
-                    let line = feature.line
-                    if line.kind == .sensor || line.kind == .correction { continue }
-                    // Box walls stand where the footprint would be extruded; the footprint still gives the roof.
-                    if hasBoxes, feature.layer == .footprints {
-                        buildings.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
-                        continue
-                    }
-                    switch feature.layer {
-                    case .trees:
-                        break  // `rebuildSiteTrees`
-                    case .footprints, .boxes, .buildings, .observed:
-                        buildings.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
-                        buildings.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
-                    default:
-                        streets.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
-                    }
+                for feature in site.vectors.features where owners[feature.line.featureID] == nil {
+                    owners[feature.line.featureID] = key
                 }
-                siteRoot.addChildNode(
-                    buildings.node(color: UIColor(red: 0.75, green: 0.69, blue: 0.55, alpha: 0.55)))
-                siteRoot.addChildNode(streets.node(color: UIColor(red: 0.55, green: 0.55, blue: 0.45, alpha: 1)))
             }
         }
 
-        /// Gerardus's trees, each in the shape the player gave it in AR when they did.
-        private func rebuildSiteTrees() {
-            for node in siteTreeRoot.childNodes { node.removeFromParentNode() }
+        /// A site's key: its token, or its place in the reference when it has none.
+        private static func key(_ site: MapLayers.Reference.Site, index: Int) -> String {
+            site.token.isEmpty ? "#\(index)" : site.token
+        }
+
+        /// Draws exactly these sites: adds the ones not drawn yet, takes away the rest.
+        private func showSites(_ sites: [MapLayers.Reference.Site]) {
             guard let reference else { return }
-            var seen: Set<String> = []
-            for site in reference.sites {
-                let transform = SiteToScene(georeference: site.georeference, scene: anchor, elevation: elevation)
-                var trees = VectorMesh(place: { transform.place($0) })
-                for feature in site.vectors.features
-                where feature.layer == .trees && seen.insert(feature.line.featureID).inserted {
-                    guard var tree = GerardusTree(feature.line) else { continue }
-                    if let form = treeForms[tree.id] { tree.form = form }
-                    trees.add(tree)
+            let indices = Dictionary(
+                reference.sites.enumerated().map { (Self.key($1, index: $0), $0) }, uniquingKeysWith: { a, _ in a })
+            let wanted = Dictionary(
+                sites.compactMap { site in
+                    reference.sites.firstIndex { $0.token == site.token }.map { (Self.key(site, index: $0), site) }
+                }, uniquingKeysWith: { a, _ in a })
+            for key in Array(siteNodes.keys) where wanted[key] == nil {
+                siteNodes.removeValue(forKey: key)?.removeFromParentNode()
+                siteTreeNodes.removeValue(forKey: key)?.removeFromParentNode()
+            }
+            for (key, site) in wanted where siteNodes[key] == nil {
+                guard indices[key] != nil else { continue }
+                let node = siteNode(site, key: key)
+                siteRoot.addChildNode(node)
+                siteNodes[key] = node
+                let trees = siteTreesNode(site, key: key)
+                siteTreeRoot.addChildNode(trees)
+                siteTreeNodes[key] = trees
+            }
+        }
+
+        private func transform(_ site: MapLayers.Reference.Site) -> SiteToScene {
+            SiteToScene(georeference: site.georeference, scene: anchor, elevation: elevation)
+        }
+
+        /// A site's ground, buildings and streets, of the features it draws.
+        private func siteNode(_ site: MapLayers.Reference.Site, key: String) -> SCNNode {
+            let node = SCNNode()
+            let transform = transform(site)
+            let place: @Sendable (SIMD3<Float>) -> SIMD3<Float> = { transform.place($0) }
+            if let ground = site.vectors.ground {
+                node.addChildNode(
+                    VectorMesh(
+                        ground: ground, place: place,
+                        tint: (low: Self.groundLow, high: Self.groundHigh, range: groundRange)
+                    )
+                    .node(color: .white, fill: true, edgeColor: CanopyColor.lineStrong.uiColor))
+            }
+            let features = site.vectors.features
+            let hasBoxes = features.contains { $0.layer == .boxes || $0.layer == .buildings }
+            let wallSurfaces = features.contains { $0.layer == .buildings && $0.line.kind == .wallSurface }
+            var buildings = VectorMesh(place: place)
+            var streets = VectorMesh(place: place)
+            for feature in features where owners[feature.line.featureID] == key {
+                let line = feature.line
+                if line.kind == .sensor || line.kind == .correction { continue }
+                // Box walls stand where the footprint would be extruded; the footprint still gives the roof.
+                if hasBoxes, feature.layer == .footprints {
+                    buildings.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                    continue
                 }
-                siteTreeRoot.addChildNode(trees.node(color: UIColor(red: 0.42, green: 0.74, blue: 0.24, alpha: 1)))
+                switch feature.layer {
+                case .trees:
+                    break  // `siteTreesNode`
+                case .footprints, .boxes, .buildings, .observed:
+                    buildings.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                    buildings.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                default:
+                    streets.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                }
+            }
+            node.addChildNode(buildings.node(color: UIColor(red: 0.75, green: 0.69, blue: 0.55, alpha: 0.55)))
+            node.addChildNode(streets.node(color: UIColor(red: 0.55, green: 0.55, blue: 0.45, alpha: 1)))
+            return node
+        }
+
+        /// A site's Gerardus trees, each in the shape the player gave it in AR when they did.
+        private func siteTreesNode(_ site: MapLayers.Reference.Site, key: String) -> SCNNode {
+            let transform = transform(site)
+            var trees = VectorMesh(place: { transform.place($0) })
+            for feature in site.vectors.features where feature.layer == .trees && owners[feature.line.featureID] == key
+            {
+                guard var tree = GerardusTree(feature.line) else { continue }
+                if let form = treeForms[tree.id] { tree.form = form }
+                trees.add(tree)
+            }
+            return trees.node(color: UIColor(red: 0.42, green: 0.74, blue: 0.24, alpha: 1))
+        }
+
+        /// Draws the drawn sites' trees again, after a shape changed.
+        private func redrawSiteTrees() {
+            guard let reference else { return }
+            for (index, site) in reference.sites.enumerated() {
+                let key = Self.key(site, index: index)
+                guard let old = siteTreeNodes[key] else { continue }
+                old.removeFromParentNode()
+                let node = siteTreesNode(site, key: key)
+                siteTreeRoot.addChildNode(node)
+                siteTreeNodes[key] = node
             }
         }
 
@@ -322,10 +421,14 @@ struct WireframeMap: UIViewRepresentable {
             return SIMD3(Float(enu.east), y, Float(-enu.north))
         }
 
+        /// The census's trees, batched into one mesh per colour so hundreds of them are a handful of draw calls, the
+        /// selected one apart in the highlight colour.
         private func rebuildTrees(_ markers: [MapLayers.TreeMarker]) {
             trees = markers
             for node in treeRoot.childNodes { node.removeFromParentNode() }
-            treeNodes = [:]
+            pickable = []
+            var batches: [WireframeTrees.Look: VectorMesh] = [:]
+            var highlighted = VectorMesh(place: { $0 })
             for marker in markers where marker.status != .removed {
                 let base = scenePoint(marker.location)
                 let key = MapLayers.censusWireframeID(marker.id)
@@ -334,27 +437,54 @@ struct WireframeMap: UIViewRepresentable {
                 let figure =
                     profile.map { WireframeTree.figure($0, lean: marker.lean, at: base, detail: 0.5) }
                     ?? WireframeTree.figure(form, lean: marker.lean, at: base, detail: 0.5)
-                var mesh = VectorMesh(place: { $0 })
-                mesh.add(sceneSegments: figure.all)
-                let node = mesh.node(
-                    color: WireframeTrees.color(
-                        marker.status, selected: marker.id == selected, inSurveyedCell: marker.inSurveyedCell))
-                node.name = marker.id.uuidString
-                // An unseen box round the tree, so a tap on it finds it; lines alone are too thin to hit.
-                let width = CGFloat(max(form.crownWidth, 1))
-                let box = SCNBox(width: width, height: CGFloat(form.height), length: width, chamferRadius: 0)
-                let hidden = SCNMaterial()
-                hidden.colorBufferWriteMask = []
-                hidden.writesToDepthBuffer = false
-                box.materials = [hidden]
-                let hit = SCNNode(geometry: box)
-                hit.name = marker.id.uuidString
-                hit.position = SCNVector3(base + SIMD3(0, Float(form.height / 2), 0))
-                node.addChildNode(hit)
-                treeRoot.addChildNode(node)
-                treeNodes[marker.id] = node
+                pickable.append((marker.id, base, base + SIMD3(0, Float(form.height), 0)))
+                if marker.id == selected {
+                    highlighted.add(sceneSegments: figure.all)
+                } else {
+                    let look = WireframeTrees.Look(status: marker.status, faint: marker.inSurveyedCell)
+                    batches[look, default: VectorMesh(place: { $0 })].add(sceneSegments: figure.all)
+                }
+            }
+            for (look, mesh) in batches {
+                treeRoot.addChildNode(mesh.node(color: look.color, fill: false))
+            }
+            if !highlighted.isEmpty {
+                treeRoot.addChildNode(highlighted.node(color: WireframeTrees.selectedColor, fill: false))
             }
         }
+
+        /// The patches for the tiles not drawn in full: each filled in a tint from the background to the brand green
+        /// by how many trees it holds, the surveyed ones outlined in green.
+        private func rebuildSummaries(_ patches: [TileSummary]) {
+            summaries = patches
+            summaryFaces = []
+            for node in summaryRoot.childNodes { node.removeFromParentNode() }
+            guard !patches.isEmpty else { return }
+            var fill = VectorMesh(place: { $0 })
+            var surveyed = VectorMesh(place: { $0 })
+            let lift = SIMD3<Float>(0, 0.15, 0)
+            for patch in patches where patch.corners.count == 4 {
+                let corners = patch.corners.map { scenePoint($0) + lift }
+                let start = UInt32(fill.vertices.count)
+                fill.vertices += corners.map { SCNVector3($0) }
+                fill.colors += Array(repeating: WireframeTrees.patchColor(patch.density), count: 4)
+                fill.triangles += [0, 1, 2, 0, 2, 3].map { start + $0 }
+                fill.edges += [0, 1, 1, 2, 2, 3, 3, 0].map { start + $0 }
+                summaryFaces.append(patch)
+                if patch.surveyed {
+                    surveyed.add(scenePolyline: corners.map { $0 + lift }, closed: true)
+                }
+            }
+            let node = fill.node(
+                color: .white, fill: true, edgeColor: CanopyColor.lineStrong.uiColor.withAlphaComponent(0.5))
+            node.childNodes.first?.name = Self.patchFill
+            summaryRoot.addChildNode(node)
+            if !surveyed.isEmpty {
+                summaryRoot.addChildNode(surveyed.node(color: CanopyColor.brand.uiColor, fill: false))
+            }
+        }
+
+        static let patchFill = "patch-fill"
 
         private func rebuildContext(_ layers: MapLayers) {
             context = (layers.routes, layers.boundary, layers.tiles)
@@ -485,17 +615,54 @@ struct WireframeMap: UIViewRepresentable {
         @objc func tap(_ gesture: UITapGestureRecognizer) {
             guard let view else { return }
             let point = gesture.location(in: view)
+            if let id = tree(at: point) {
+                onSelect(id)
+            } else if let patch = summary(at: point) {
+                // A patch: go to where its tile is drawn in full.
+                onSelect(nil)
+                look(at: MapViewport(around: patch.id))
+                report()
+            } else {
+                onSelect(nil)
+            }
+        }
+
+        /// The census tree nearest a point in the view, within a finger's width of its trunk line.
+        func tree(at point: CGPoint, within reach: CGFloat = 24) -> UUID? {
+            guard let view else { return nil }
+            var best: (id: UUID, distance: CGFloat)?
+            for tree in pickable {
+                let a = view.projectPoint(SCNVector3(tree.base))
+                let b = view.projectPoint(SCNVector3(tree.top))
+                // Behind the camera or past the far plane.
+                guard (0...1).contains(a.z), (0...1).contains(b.z) else { continue }
+                let d = Self.distance(
+                    from: point, toSegment: CGPoint(x: CGFloat(a.x), y: CGFloat(a.y)),
+                    CGPoint(x: CGFloat(b.x), y: CGFloat(b.y)))
+                if d <= reach, d < (best?.distance ?? .infinity) { best = (tree.id, d) }
+            }
+            return best?.id
+        }
+
+        /// The patch under a point in the view.
+        func summary(at point: CGPoint) -> TileSummary? {
+            guard let view, !summaryFaces.isEmpty else { return nil }
             let hits = view.hitTest(
-                point, options: [.searchMode: SCNHitTestSearchMode.all.rawValue, .ignoreHiddenNodes: true])
-            let id = hits.lazy.compactMap { hit -> UUID? in
-                var node: SCNNode? = hit.node
-                while let n = node {
-                    if let name = n.name, let id = UUID(uuidString: name), self.treeNodes[id] != nil { return id }
-                    node = n.parent
-                }
-                return nil
-            }.first
-            onSelect(id)
+                point,
+                options: [.searchMode: SCNHitTestSearchMode.all.rawValue, .rootNode: summaryRoot])
+            guard let hit = hits.first(where: { $0.node.name == Self.patchFill }) else { return nil }
+            let index = hit.faceIndex / 2
+            return summaryFaces.indices.contains(index) ? summaryFaces[index] : nil
+        }
+
+        static func distance(from p: CGPoint, toSegment a: CGPoint, _ b: CGPoint) -> CGFloat {
+            let dx = b.x - a.x
+            let dy = b.y - a.y
+            let length2 = dx * dx + dy * dy
+            let t = length2 > 0 ? min(max(((p.x - a.x) * dx + (p.y - a.y) * dy) / length2, 0), 1) : 0
+            let x = a.x + t * dx - p.x
+            let y = a.y + t * dy - p.y
+            return (x * x + y * y).squareRoot()
         }
     }
 }

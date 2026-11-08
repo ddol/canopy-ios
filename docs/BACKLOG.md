@@ -90,3 +90,7 @@ Hidden for now (`Features.limbTagging`). To bring it back as an extension:
 - Merging the bumps of one crown cuts false trunks under big crowns, but detections saved to the server's trees layer
   before it stay there until that area is loaded again and the server's copy is reconciled.
 - Selecting in AR covers trees only; buildings and street features are drawn but not pickable.
+- The map's level of detail (16 tiles in full, none past 36 in view) is a first guess; tune it on a phone with a full
+  park loaded. Trees people acted on are no longer drawn outside those tiles, only counted in the patches.
+- `serverTiles` is in memory and asked again after two minutes; keep it with the shared tiles, and let a patch show
+  its counts (detected, reviewed, tags) when tapped and held.

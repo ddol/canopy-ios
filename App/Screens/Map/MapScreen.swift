@@ -25,8 +25,9 @@ struct MapScreen: View {
     private let format = QuantityFormat()
 
     var body: some View {
+        let layers = layers
         NavigationStack {
-            map
+            map(layers)
                 .safeAreaInset(edge: .top) {
                     VStack(spacing: Spacing.xs) {
                         SummaryBar([
@@ -52,6 +53,7 @@ struct MapScreen: View {
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.medium))
                         }
                         aerialStatus
+                        detailNote(layers)
                         if showsLoadVectors {
                             Button("Load vectors here", systemImage: "square.stack.3d.down.right") {
                                 Task { await model.loadVectors(around: centre) }
@@ -97,15 +99,20 @@ struct MapScreen: View {
         }
     }
 
-    @ViewBuilder
-    private var map: some View {
-        let layers = MapLayers(
+    /// What the map draws, made once per update and shared by the map and the note under it.
+    private var layers: MapLayers {
+        MapLayers(
             state: model.census, boundary: model.boundary, visibility: visibility, region: viewport,
             detectedLimit: detectedLimit, reference: model.mapReference, surveyed: Set(model.surveyedCells.keys),
-            treeForms: model.treeForms, treeProfiles: model.treeProfiles)
+            treeForms: model.treeForms, treeProfiles: model.treeProfiles, censusTiles: model.censusTiles,
+            remoteTiles: model.serverTiles)
+    }
+
+    @ViewBuilder
+    private func map(_ layers: MapLayers) -> some View {
         switch baseMap {
         case .apple:
-            CanopyMapView(layers: layers, selection: $selection, viewport: viewport ?? .goldenGatePark)
+            CanopyMapView(layers: layers, selection: $selection, viewport: viewport ?? Self.startViewport)
                 .focus(focus)
                 .onViewportChange {
                     viewport = $0
@@ -114,7 +121,7 @@ struct MapScreen: View {
         case .gerardus:
             CanopyMapView(
                 renderer: WireframeRenderer(), layers: layers, selection: $selection,
-                viewport: viewport ?? .goldenGatePark
+                viewport: viewport ?? Self.startViewport
             )
             .focus(focus)
             .onViewportChange {
@@ -135,8 +142,22 @@ struct MapScreen: View {
         }
     }
 
+    /// Where the map opens: the whole park, or in debug and testing builds the region in the `canopy.mapStart` default
+    /// ("latitude,longitude,radius in metres"), which UI tests pass as a launch argument to open close enough for
+    /// trees to be drawn.
+    static var startViewport: MapViewport {
+        #if DEBUG || TESTING_TOOLS
+            let parts = (UserDefaults.standard.string(forKey: "canopy.mapStart") ?? "").split(separator: ",")
+                .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            if parts.count == 3 {
+                return MapViewport(center: GeoPoint(latitude: parts[0], longitude: parts[1]), radius: parts[2])
+            }
+        #endif
+        return .goldenGatePark
+    }
+
     /// The middle of the map in view.
-    private var centre: GeoPoint { (viewport ?? .goldenGatePark).center }
+    private var centre: GeoPoint { (viewport ?? Self.startViewport).center }
 
     /// Offer to load the vectors where the map is when they are shown, a server is set, the map is close enough to be
     /// worth it, and that site is not loaded yet.
@@ -145,8 +166,31 @@ struct MapScreen: View {
             && (viewport?.cornerDistance ?? .infinity) <= 600 && !model.hasVectors(at: centre)
     }
 
-    /// How many detected trees to draw. On Apple's map each marker is a view, and hundreds of them make it sluggish, so a
-    /// park-wide view shows a sample and a neighbourhood view shows more. The Gerardus map draws them all.
+    /// Says when only some tiles are drawn in full, and how to see the rest.
+    @ViewBuilder
+    private func detailNote(_ layers: MapLayers) -> some View {
+        let patches = layers.summaries.count
+        if model.aerial == .idle, patches > 0 {
+            let detail = layers.detail
+            Text(
+                detail.drawsAnyDetail
+                    ? "Trees drawn in the \(MapDetail.detailedTileLimit) tiles nearest the centre; \(patches) more "
+                        + "shaded by how many they hold. Tap one to go there."
+                    : "Zoomed out: \(patches) \(detail.summaryLevel == 13 ? "cells" : "tiles") shaded by how many "
+                        + "trees they hold. Zoom in or tap one to see its trees."
+            )
+            .font(.caption)
+            .foregroundStyle(Color.canopyInkMuted)
+            .padding(.horizontal, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.small))
+            .accessibilityIdentifier("map-detail-note")
+        }
+    }
+
+    /// How many detected trees to draw in the tiles drawn in full. On Apple's map each marker is a view, and hundreds of
+    /// them make it sluggish, so a wide view shows a sample and a neighbourhood view shows more. The Gerardus map batches
+    /// its trees and draws every one in those tiles.
     private var detectedLimit: Int {
         if baseMap == .gerardus { return .max }
         guard let viewport else { return 200 }
@@ -217,7 +261,7 @@ struct MapScreen: View {
             Toggle("Routes", systemImage: "point.topleft.down.to.point.bottomright.curvepath", isOn: $visibility.routes)
             Toggle("S2 cells (L13 and L16)", systemImage: "square.grid.3x3", isOn: $visibility.tiles)
             NavigationLink {
-                SurveyedCellsScreen(viewport: viewport ?? .goldenGatePark)
+                SurveyedCellsScreen(viewport: viewport ?? Self.startViewport)
             } label: {
                 Label("Surveyed cells (L16)", systemImage: "checkmark.square")
             }
@@ -235,7 +279,7 @@ struct MapScreen: View {
                 }
                 .disabled(model.aerial.isWorking)
                 NavigationLink {
-                    ServerCellsScreen(viewport: viewport ?? .goldenGatePark)
+                    ServerCellsScreen(viewport: viewport ?? Self.startViewport)
                 } label: {
                     Label("Server cells (L13)", systemImage: "square.grid.2x2")
                 }
@@ -248,7 +292,7 @@ struct MapScreen: View {
                 }
                 NavigationLink {
                     VectorMapScreen(
-                        token: (viewport ?? .goldenGatePark).center.tile.token, title: "3D vectors in view")
+                        token: (viewport ?? Self.startViewport).center.tile.token, title: "3D vectors in view")
                 } label: {
                     Label("3D vectors in view", systemImage: "view.3d")
                 }

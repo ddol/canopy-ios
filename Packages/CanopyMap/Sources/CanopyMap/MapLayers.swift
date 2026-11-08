@@ -113,11 +113,14 @@ public struct MapLayers: Equatable, Sendable {
             public var kind: LineKind
             public var points: [GeoPoint]
             public var closed: Bool
+            /// The level-16 tile the line starts in, so a map drawing only some tiles in full can leave it out.
+            public var tile: S2CellID?
 
             public init(kind: LineKind, points: [GeoPoint], closed: Bool) {
                 self.kind = kind
                 self.points = points
                 self.closed = closed
+                self.tile = points.first?.tile
             }
         }
 
@@ -187,6 +190,10 @@ public struct MapLayers: Equatable, Sendable {
     public var treeForms: [String: TreeForm]
     /// Profiles fitted ring by ring over scanned trunks in AR, by the same ids; drawn in place of a form.
     public var treeProfiles: [String: TreeProfile] = [:]
+    /// Which level-16 tiles are drawn in full. Trees, tags and vectors are drawn only in those.
+    public var detail = MapDetail.everything
+    /// The tiles near the region not drawn in full that hold trees (or are marked surveyed), one patch each.
+    public var summaries: [TileSummary] = []
 
     public init(
         trees: [TreeMarker] = [],
@@ -214,9 +221,12 @@ public struct MapLayers: Equatable, Sendable {
     /// Builds the layers from the census. Removed trees are left out; tiles are the L16 tiles holding a tree or
     /// marked surveyed, with their L13 parents.
     ///
-    /// Real aerial data gives thousands of detected trees, more than a map can draw as markers. With a `region`,
-    /// detected trees are drawn only inside it (with a margin), at most `detectedLimit` of them, nearest the centre
-    /// first; trees people have acted on are always drawn.
+    /// Real aerial data gives thousands of detected trees, more than a map can draw. With a `region`, only the
+    /// level-16 tiles nearest its centre are drawn in full (`MapDetail`): their trees, at most `detectedLimit`
+    /// detected ones nearest the centre, and their tags. The other tiles near the region that hold trees become
+    /// `summaries`. Without a region everything is drawn. `censusTiles` is the census by tile when the caller keeps
+    /// one; it is made here otherwise. `remoteTiles` are the server's counts for tiles (GetTileSummaries): a tile this
+    /// phone holds no trees in is shaded from those.
     public init(
         state: CensusState,
         routes: [Route] = [],
@@ -227,44 +237,114 @@ public struct MapLayers: Equatable, Sendable {
         reference: Reference? = nil,
         surveyed: Set<S2CellID> = [],
         treeForms: [String: TreeForm] = [:],
-        treeProfiles: [String: TreeProfile] = [:]
+        treeProfiles: [String: TreeProfile] = [:],
+        censusTiles: CensusTiles? = nil,
+        remoteTiles: [S2CellID: TileSummary] = [:]
     ) {
+        let detail = region.map(MapDetail.init(region:)) ?? .everything
+        let index = (censusTiles ?? CensusTiles(state)).trees
         let hazards = Dictionary(grouping: state.tags.values, by: \.treeID).mapValues(\.count)
-        var shown = state.trees.values
-            .filter { $0.displayStatus != .removed && visibility.statuses.contains($0.displayStatus) }
-        if let region {
-            let padded = MapViewport(
-                center: region.center, latitudeDelta: region.latitudeDelta * 1.3,
-                longitudeDelta: region.longitudeDelta * 1.3)
-            let detected = shown.filter { $0.displayStatus == .detected && padded.contains($0.position.geo) }
-            let nearest = detected.sorted {
-                region.squaredDistance(to: $0.position.geo) < region.squaredDistance(to: $1.position.geo)
+        let padded = region.map {
+            MapViewport(
+                center: $0.center, latitudeDelta: $0.latitudeDelta * 1.3, longitudeDelta: $0.longitudeDelta * 1.3)
+        }
+        /// Whether a tile not drawn in full is near enough the region for a patch.
+        func near(_ tile: S2CellID) -> Bool { padded?.contains(tile.center) ?? false }
+        /// The patch a tile not drawn in full counts towards.
+        func patchID(_ tile: S2CellID) -> S2CellID {
+            detail.summaryLevel < S2CellID.tileLevel ? tile.parent(level: detail.summaryLevel) : tile
+        }
+
+        var shown: [(tree: Tree, tile: S2CellID)] = []
+        var patches: [S2CellID: TileSummary] = [:]
+        /// Per patch: the tiles with trees in it, and how many of those are surveyed.
+        var patchTiles: [S2CellID: (all: Int, surveyed: Int)] = [:]
+        for (tile, ids) in index {
+            let trees = ids.compactMap { state.trees[$0] }.filter {
+                $0.displayStatus != .removed && visibility.statuses.contains($0.displayStatus)
             }
-            .prefix(detectedLimit)
-            shown = shown.filter { $0.displayStatus != .detected } + nearest
+            guard !trees.isEmpty else { continue }
+            if detail.isDetailed(tile) {
+                shown += trees.map { ($0, tile) }
+                continue
+            }
+            guard near(tile) else { continue }
+            let id = patchID(tile)
+            var patch = patches[id] ?? TileSummary(id: id)
+            for tree in trees {
+                if tree.displayStatus == .detected { patch.detected += 1 } else { patch.reviewed += 1 }
+            }
+            patches[id] = patch
+            let counted = patchTiles[id] ?? (0, 0)
+            patchTiles[id] = (counted.all + 1, counted.surveyed + (surveyed.contains(tile) ? 1 : 0))
+        }
+        // Tiles the server holds trees in that this phone has not pulled: shaded from the server's counts.
+        let showsDetected = visibility.statuses.contains(.detected)
+        let showsReviewed = !visibility.statuses.isDisjoint(with: [.proposed, .confirmed, .verified])
+        for (tile, remote) in remoteTiles where index[tile] == nil && !detail.isDetailed(tile) && near(tile) {
+            let detected = showsDetected ? remote.detected : 0
+            let reviewed = showsReviewed ? remote.reviewed : 0
+            guard detected + reviewed > 0 else { continue }
+            let id = patchID(tile)
+            var patch = patches[id] ?? TileSummary(id: id)
+            patch.detected += detected
+            patch.reviewed += reviewed
+            patch.tags += remote.tags
+            patches[id] = patch
+            let counted = patchTiles[id] ?? (0, 0)
+            patchTiles[id] = (counted.all + 1, counted.surveyed + (surveyed.contains(tile) ? 1 : 0))
+        }
+        for (id, counted) in patchTiles {
+            patches[id]?.surveyed = counted.all > 0 && counted.surveyed == counted.all
+        }
+        // A tile marked surveyed with nothing left to show still gets its patch, so the mark shows.
+        if detail.summaryLevel == S2CellID.tileLevel {
+            for tile in surveyed where !detail.isDetailed(tile) && near(tile) && patches[tile] == nil {
+                patches[tile] = TileSummary(id: tile, surveyed: true)
+            }
+        }
+
+        if let region {
+            let detected = shown.filter { $0.tree.displayStatus == .detected }
+                .sorted {
+                    region.squaredDistance(to: $0.tree.position.geo) < region.squaredDistance(to: $1.tree.position.geo)
+                }
+                .prefix(detectedLimit)
+            shown = shown.filter { $0.tree.displayStatus != .detected } + detected
         }
         let trees =
             shown
             // North first; the id only breaks ties, so its string is made only then.
             .sorted { a, b in
-                a.position.geo.latitude != b.position.geo.latitude
-                    ? a.position.geo.latitude > b.position.geo.latitude : a.id.uuidString > b.id.uuidString
+                a.tree.position.geo.latitude != b.tree.position.geo.latitude
+                    ? a.tree.position.geo.latitude > b.tree.position.geo.latitude
+                    : a.tree.id.uuidString > b.tree.id.uuidString
             }
-            .map { tree in
+            .map { tree, tile in
                 TreeMarker(
                     id: tree.id, location: tree.position.geo, status: tree.displayStatus,
                     hazardCount: hazards[tree.id] ?? 0, dbh: tree.dbh?.diameter.value,
                     height: tree.height?.height.value, lean: tree.lean,
-                    inSurveyedCell: tree.displayStatus == .detected && surveyed.contains(tree.position.tile))
+                    inSurveyedCell: tree.displayStatus == .detected && surveyed.contains(tile))
             }
-        let tags =
-            visibility.tags
-            ? state.tags.values.sorted { $0.id.uuidString < $1.id.uuidString }.map { tag in
-                TagMarker(id: tag.id, treeID: tag.treeID, location: tag.point.position.geo, urgency: tag.urgency)
-            } : []
+
+        var tags: [TagMarker] = []
+        for tag in state.tags.values.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            let tile = tag.point.position.tile
+            if detail.isDetailed(tile) {
+                if visibility.tags {
+                    tags.append(
+                        TagMarker(
+                            id: tag.id, treeID: tag.treeID, location: tag.point.position.geo, urgency: tag.urgency))
+                }
+            } else if patches[patchID(tile)] != nil {
+                patches[patchID(tile)]?.tags += 1
+            }
+        }
+
         var tiles: [TileOutline] = []
         if visibility.tiles {
-            let level16 = Set(state.trees.values.map(\.position.tile)).union(surveyed)
+            let level16 = Set(index.keys).union(surveyed).filter { detail.isDetailed($0) || near($0) }
             tiles = Set(level16.map { $0.parent(level: 13) }).sorted().map { TileOutline(id: $0) }
             tiles += level16.sorted().map { TileOutline(id: $0, surveyed: surveyed.contains($0)) }
         }
@@ -279,6 +359,28 @@ public struct MapLayers: Equatable, Sendable {
             treeForms: treeForms
         )
         self.treeProfiles = treeProfiles
+        self.detail = detail
+        self.summaries = patches.values.filter { $0.trees > 0 || $0.surveyed }.sorted { $0.id < $1.id }
+    }
+
+    /// The patch under a point, if one is drawn there.
+    public func summary(at point: GeoPoint) -> TileSummary? {
+        guard !summaries.isEmpty else { return nil }
+        let id = S2CellID(point, level: detail.summaryLevel)
+        return summaries.first { $0.id == id }
+    }
+
+    /// The vector lines to draw: those starting in a tile drawn in full.
+    public var detailedLines: [Reference.Line] {
+        guard let reference else { return [] }
+        guard detail.detailed != nil else { return reference.lines }
+        return reference.lines.filter { $0.tile.map(detail.isDetailed) ?? true }
+    }
+
+    /// The loaded sites to draw in full: those whose own tile is.
+    public var detailedSites: [Reference.Site] {
+        guard let reference else { return [] }
+        return reference.sites.filter { S2CellID(token: $0.token).map(detail.isDetailed) ?? true }
     }
 }
 
