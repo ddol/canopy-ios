@@ -232,9 +232,9 @@ enough to hash and compare.
 The base layer is a set of `TreeCandidate`s: position, height and crown radius from the aerial survey, a detection
 confidence, `isSynthetic` for the bundled sample, and `source` (for example `USGS 3DEP lidar point cloud, sf-b23
 (public-domain)`) for real ones. A candidate found with an admin's OpenStreetMap flag on says so in its source
-("buildings masked with OpenStreetMap, for checking only"); those must never go into the shared, CC0 tree layer. Real candidates come from a Gerardus align server, for the part of the map in view (at
-most 150 m from its centre) within one site (an L16 tile and its 8 neighbours); their ids are derived from the
-position rounded to 1e-5 degrees, so reloading gives the same ids. Loading replaces the candidates in that area,
+("buildings masked with OpenStreetMap, for checking only"); those must never go into the shared, CC0 tree layer. Real candidates come from a Gerardus align server a whole site at a time (an L16 tile and its 8
+neighbours, each detected in full); their ids are derived from the
+position rounded to 1e-5 degrees, so reloading gives the same ids. Loading replaces the candidates in those tiles,
 except those a player has observed (see docs/ARCHITECTURE.md, *Aerial data and registration*).
 
 ## Storage

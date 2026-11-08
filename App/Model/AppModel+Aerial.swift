@@ -75,20 +75,17 @@ extension AppModel {
         return UserDefaults.standard.stringArray(forKey: Self.attributionKey) ?? []
     }
 
-    /// The farthest from the map centre trees are loaded, in metres. A zoomed-out map loads only its middle, which keeps
-    /// the download to a few megabytes.
-    static let aerialRadiusLimit = 150.0
-
-    /// Replaces the candidates within `radius` metres of `centre` (at most `aerialRadiusLimit`) with the trees found
-    /// in 3DEP there.
-    func loadAerialTrees(around centre: GeoPoint, radius: Double) async {
+    /// Replaces the candidates in the site under `centre` with the trees found in 3DEP over the whole of it: the
+    /// level-16 tile there and its 8 neighbours (`Site.covering_l16_tokens`), each detected in full. A circle round
+    /// the map centre, as loads used to take, left the tiles on its edge part detected, here and on the server.
+    func loadAerialTrees(around centre: GeoPoint) async {
         guard !aerial.isWorking else { return }
         guard let client = alignClient, let host = gerardusURL?.host() else {
             aerial = .failed(NoServerSet().errorDescription!)
             return
         }
         aerial = .working("Asking \(host)…")
-        let area = AerialTrees.Area(centre: centre, radius: min(radius, Self.aerialRadiusLimit))
+        let tile = centre.tile
         // Progress arrives off the main actor; one consumer applies it in order.
         let (stages, stageSink) = AsyncStream.makeStream(of: AerialTrees.Stage.self)
         let updates = Task { [weak self] in
@@ -105,8 +102,8 @@ extension AppModel {
         do {
             let start = ContinuousClock.now
             let result = try await AerialTrees.load(
-                tile: centre.tile, area: area, osm: isAdmin && adminSettings.useOSM, label: "canopy-ggp",
-                client: client, cache: referenceCache
+                tile: tile, osm: isAdmin && adminSettings.useOSM, label: "canopy-ggp", client: client,
+                cache: referenceCache
             ) { stageSink.yield($0) }
             let stored = ContinuousClock.now
             let replacement = try await store.replaceCandidates(
@@ -120,9 +117,10 @@ extension AppModel {
             let timing = Self.describe(timed, total: ContinuousClock.now - start)
             Self.aerialLog.info("Loaded \(result.candidates.count) trees. \(timing, privacy: .public)")
             let format = QuantityFormat()
+            if !result.usedOSM { detectedTiles.formUnion(result.tiles) }
             var message =
-                "\(format.count(result.candidates.count)) trees from aerial LiDAR within "
-                + "\(format.length(area.radius, fractionDigits: 0)) of the map centre"
+                "\(format.count(result.candidates.count)) trees from aerial LiDAR in the \(result.tiles.count) tiles "
+                + "round tile \(tile.familyDisplay)"
                 + (result.fromCache ? ", from data saved on this phone" : "")
                 + Self.describe(replacement)
             if result.osmRefused {

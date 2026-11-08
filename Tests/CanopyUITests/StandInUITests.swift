@@ -25,8 +25,12 @@ final class StandInUITests: XCTestCase {
         keep(app, "2 first load")
         XCTAssertTrue(first.label.hasPrefix("Loaded"), first.label)
         XCTAssertFalse(first.label.contains("saved on this phone"), first.label)
+        // The credit is a "Data" tag that twirls open.
+        let credits = app.buttons["aerial-attribution-toggle"].firstMatch
+        XCTAssertTrue(credits.waitForExistence(timeout: 30))
+        credits.tap()
         let credit = app.staticTexts["aerial-attribution"].firstMatch
-        XCTAssertTrue(credit.waitForExistence(timeout: 30))
+        XCTAssertTrue(credit.waitForExistence(timeout: 5))
         XCTAssertTrue(credit.label.contains("3D Elevation Program"), credit.label)
         XCTAssertFalse(app.otherElements["Estimated: 200"].exists, "the sample should have been replaced")
 

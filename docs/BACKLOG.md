@@ -5,8 +5,9 @@ a pull request that picks an item up should remove it here.
 
 ## Aerial data volume
 
-Loading real trees over a slow link (Tailscale from the park, on a phone) stalled with a spinner. The app now loads
-only the map in view, at most 150 m from its centre, and every Gerardus call has a time limit (see
+Loading real trees over a slow link (Tailscale from the park, on a phone) stalled with a spinner. The app loaded
+only the map in view, at most 150 m from its centre (now it loads whole sites, so tiles are detected in full, at about
+three times the data), and every Gerardus call has a time limit (see
 [ARCHITECTURE.md](ARCHITECTURE.md), *Aerial data and registration*). That cuts the download, but it is still
 megabytes per load. Measured against a server on the same LAN, streaming the canopy classes at 1 m voxels:
 

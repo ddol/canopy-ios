@@ -3,8 +3,10 @@
 // Your Apple Developer team id, from developer.apple.com → Membership.
 DEVELOPMENT_TEAM = ABCDE12345
 
-// Game Center player ids (Me → Settings → Admin shows yours in a debug build) that see the admin flags in
-// TestFlight and App Store builds. Separate them with spaces.
+// Game Center players who see the admin flags in TestFlight and App Store builds, separated by spaces: the SHA-256
+// hashes of their player ids, so the ids stay out of the build (Me → Settings → Admin shows your id and its hash in a
+// debug build; `printf %s 'T:_…' | shasum -a 256` gives the same hash), or the ids themselves.
+// CANOPY_ADMIN_PLAYER_HASHES = 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 // CANOPY_ADMIN_PLAYER_IDS = T:_0123456789abcdef
 
 // Uncomment if io.github.ddol.canopy is registered to another team.

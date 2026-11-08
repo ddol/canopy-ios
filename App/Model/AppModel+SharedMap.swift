@@ -50,6 +50,7 @@ extension AppModel {
         }
         serverTiles = known
         cityTiles = Self.tilesWithTrees(answer)
+        detectedTiles.formUnion(answer.values.filter { $0.detectedAt != nil }.map(\.tile))
     }
 
     /// The tiles a summary says hold trees that are not removed.
@@ -186,6 +187,7 @@ extension AppModel {
                 }
             }
             serverTiles = known
+            detectedTiles.formUnion(answer.values.filter { $0.detectedAt != nil }.map(\.tile))
         }
     }
 

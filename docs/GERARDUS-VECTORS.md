@@ -24,7 +24,9 @@ ring of `crown_radius_m`, 2 m when the server gives none). Ground is left out. S
 them (ground grid, reconstructed buildings with their roofs, streets and kerbs, trees as trunk and crown rings), with
 the census's trees as the same figure in their status colour, from their DBH and height when measured. It moves as
 Apple's map does: one finger drags it, and the ground under the finger stays under it, gliding on when let go; two
-fingers pinch to zoom and twist to turn about the point between them; two fingers moving up or down together tilt it;
+fingers pinch to zoom and twist to turn about the point between them, from where they touched, so the ground under
+each stays under it (a twist under about 8° leaves the heading, so pinching does not turn the map); two fingers
+moving up or down together tilt it; the map opens drawing tiles, not every loaded object, until it is close enough;
 double-tap zooms in where tapped and a two-finger tap zooms out; tapping a tree opens its sheet. The ground grid is on
 until **Ground** (in the same menu) turns it off; it is tinted by height, dull green low to pale high over the range of
 the loaded sites, so slopes read without lighting. **Show vectors** hides the buildings, streets and Gerardus's trees.

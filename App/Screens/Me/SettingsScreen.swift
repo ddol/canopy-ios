@@ -140,13 +140,20 @@ struct SettingsScreen: View {
                         .font(CanopyFont.mono(.footnote))
                         .textSelection(.enabled)
                 }
+                LabeledContent("Its hash") {
+                    Text(verbatim: AdminSettings.hash(model.player.id.rawValue))
+                        .font(CanopyFont.mono(.caption2))
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("admin-player-hash")
+                }
             } header: {
                 Text("Admin")
             } footer: {
                 Text(
                     """
-                    For checking Canopy's data. These show to the Game Center players in CANOPY_ADMIN_PLAYER_IDS, to \
-                    the Gerardus server's admins, and to everyone in a debug build. OpenStreetMap masks buildings out \
+                    For checking Canopy's data. These show to the Game Center players in CANOPY_ADMIN_PLAYER_IDS or \
+                    whose hash is in CANOPY_ADMIN_PLAYER_HASHES, to the Gerardus server's admins, and to everyone in a \
+                    debug build. OpenStreetMap masks buildings out \
                     of tree detection and adds roads and paths to the Gerardus map. Trees found with it are marked as \
                     for checking only: the shared tree layer takes nothing from OpenStreetMap. Whole city shades every \
                     tile in San Francisco by its trees and pulls every tile the server holds trees in, wherever the map \

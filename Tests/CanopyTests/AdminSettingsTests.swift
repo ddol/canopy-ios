@@ -31,6 +31,21 @@ import Testing
         #expect(AdminSettings.allowlist(from: "").isEmpty)
     }
 
+    @Test func aPlayerWhoseIdHashesToOneListedIsAnAdmin() {
+        let hash = AdminSettings.hash("T:_admin")
+        #expect(hash.count == 64)
+        // Upper-case hex, as shasum's is not, still matches.
+        let settings = AdminSettings(
+            allowlist: [],
+            hashes: AdminSettings.allowlist(from: hash.uppercased() + " " + String(repeating: "0", count: 64)),
+            everyoneIsAdmin: false, defaults: defaults())
+        #expect(settings.isAdmin(admin))
+        #expect(!settings.isAdmin(other))
+        #expect(!settings.isAdmin(Player(id: PlayerID(rawValue: "T:_admin"), alias: "You", source: .local)))
+        // The hash of the id's UTF-8 bytes, as `printf %s 'T:_admin' | shasum -a 256` gives it.
+        #expect(AdminSettings.hash("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
     @Test func flagsAreOffUntilTurnedOnAndRemembered() {
         let store = defaults()
         let settings = AdminSettings(allowlist: ["T:_admin"], everyoneIsAdmin: false, defaults: store)
