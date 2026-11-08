@@ -18,16 +18,19 @@ public struct MapLayers: Equatable, Sendable {
         public var tiles = false
         /// Gerardus's vectors (building outlines and walls, streets, kerbs) over the base map.
         public var vectors = true
+        /// The loaded sites' ground, on the 3D map.
+        public var ground = true
 
         public init(
             statuses: Set<CountStatus> = Set(treeStatuses), tags: Bool = true, routes: Bool = true, tiles: Bool = false,
-            vectors: Bool = true
+            vectors: Bool = true, ground: Bool = true
         ) {
             self.statuses = statuses
             self.tags = tags
             self.routes = routes
             self.tiles = tiles
             self.vectors = vectors
+            self.ground = ground
         }
     }
 
@@ -432,6 +435,13 @@ public struct MapViewport: Equatable, Sendable {
         center: GeoPoint(latitude: 37.7694, longitude: -122.4770),
         latitudeDelta: 0.016,
         longitudeDelta: 0.072
+    )
+
+    /// San Francisco: Lands End and the Presidio to the Bay, the Golden Gate to the county line.
+    public static let sanFrancisco = MapViewport(
+        center: GeoPoint(latitude: 37.7680, longitude: -122.4350),
+        latitudeDelta: 0.130,
+        longitudeDelta: 0.162
     )
 
     public func contains(_ point: GeoPoint) -> Bool {

@@ -1,14 +1,15 @@
 # Viewing Gerardus buildings in 3D
 
-Set the server in **Me → Settings**, then **Map → Layers → Kirkham & 9th in 3D**. The action reads the prepared
-Kirkham–9th site, `8085875ef`, without having to navigate Apple's map or run tree detection first.
-**3D vectors in view** reads the prepared site at the current map centre. A missing prepared site is reported;
-the viewer does not silently substitute sample buildings.
+Set the server in **Me → Settings**, load a site with **Map → Layers → Load vectors in view** (or the **Load vectors
+here** button), and pick **Map → Layers → Gerardus 3D**: the map's one 3D view (the AR view in Census is the other).
+A site the server has not prepared is prepared first; nothing stands in for it.
 
-Drag to orbit, pinch to zoom, and drag with two fingers to pan. **3D layers** toggles buildings (footprints and box
-walls), roofs and wall surfaces (the LoD2 `BUILDINGS` layer), measured facades, streets/kerbs and ground. **Reset view** restores the initial camera. **Reload vectors** downloads the current
-model. **Sources and model** shows attribution, bundle identity and the model identity returned by the server.
-The phone needs access to the configured server (including Tailscale when that is how it is reached).
+**Buildings** are the ones Gerardus reconstructed from 3DEP inside DataSF's footprints, the `BUILDINGS` layer: each
+part's outline, its roof planes (drawn in a roof colour) and its wall surfaces. DataSF's boxes (`BOXES`, the footprints
+raised to a measured roof height with flat tops) are never drawn: they stood where the reconstructed walls do, so the
+two overlapped. Nor are the measured facade planes. A site sent without reconstructed buildings shows DataSF's
+footprints as outlines on the ground. AR draws the same buildings (`SiteBuildings`). The phone needs access to the
+configured server (including Tailscale when that is how it is reached).
 
 ## On the main map
 
@@ -17,19 +18,20 @@ adds a site, so panning and loading builds up an area. **Show vectors** turns th
 measured facades, streets, kerbs and street surfaces are drawn from above, and Gerardus's trees as their crowns (a
 ring of `crown_radius_m`, 2 m when the server gives none). Ground is left out. See ARCHITECTURE.md, *Map*.
 
-## The wireframe map
+## The 3D map
 
-**Map → Layers → Gerardus wireframe** replaces Apple's map with the loaded sites drawn in 3D the way the Mac
-visualiser draws them (ground grid, walls and roofs, streets and kerbs, trees as trunk and crown rings), with the
-census's trees as the same figure in their status colour, from their DBH and height when measured. One finger
-drags the map; two fingers turn it (a twist), tilt it (up or down) and zoom it (a pinch), all at once as on Apple's
-map; tapping a tree opens its sheet. The ground grid is tinted by height, dull green low to pale high over the range
-of the loaded sites, so slopes read without lighting. Buildings get a roof: a box-walled or extruded footprint's
-outline lifted to its height and filled (LoD2 roof planes are drawn as sent). It shows only what has been loaded:
-use **Load vectors in view** (or the **Load vectors here** button) to add the site at the map centre. Sites loaded in
-AR are on this map too, and a tree reshaped or fitted ring by ring in AR is drawn here in that shape. **S2 cells (L13
-and L16)** draws the level-16 tiles with trees (green when surveyed) and their level-13 cells, with posts at the
-corners.
+**Map → Layers → Gerardus 3D** replaces Apple's map with the loaded sites drawn in 3D the way the Mac visualiser draws
+them (ground grid, reconstructed buildings with their roofs, streets and kerbs, trees as trunk and crown rings), with
+the census's trees as the same figure in their status colour, from their DBH and height when measured. It moves as
+Apple's map does: one finger drags it, and the ground under the finger stays under it, gliding on when let go; two
+fingers pinch to zoom and twist to turn about the point between them; two fingers moving up or down together tilt it;
+double-tap zooms in where tapped and a two-finger tap zooms out; tapping a tree opens its sheet. The ground grid is on
+until **Ground** (in the same menu) turns it off; it is tinted by height, dull green low to pale high over the range of
+the loaded sites, so slopes read without lighting. **Show vectors** hides the buildings, streets and Gerardus's trees.
+It shows only what has been loaded: use **Load vectors in view** (or the **Load vectors here** button) to add the site
+at the map centre. Sites loaded in AR are on this map too, and a tree reshaped or fitted ring by ring in AR is drawn
+here in that shape. **S2 cells (L13 and L16)** draws the level-16 tiles with trees (green when surveyed) and their
+level-13 cells, with posts at the corners.
 
 ## Surveyed cells
 
@@ -132,12 +134,11 @@ values reject the scene so geometry from two site-model versions is not shown to
 concave polygon triangulation (including a concave roofline box wall in its own plane), the box-wall
 double-extrusion regression, wall surfaces drawn as single faces with parts left unextruded (and the older-server
 extrusion fallback), and navigation with no configured server.
-The two live tests opt in with a reachable server:
+The live test opts in with a reachable server:
 
 ```sh
 CANOPY_GERARDUS_URL=http://HOST:50061 swift test --package-path Packages/CanopyReference --filter VectorReferenceTests
-TEST_RUNNER_CANOPY_GERARDUS_URL=http://HOST:50061 scripts/test.sh -only-testing:CanopyUITests/VectorMapUITests
 ```
 
-The live UI test loads Kirkham–9th, verifies nonzero box walls, orbits, toggles the ground, resets the camera and
-keeps a screenshot in the `.xcresult`. It is skipped when no live server was provided.
+The live test loads Kirkham–9th (`VectorReference.kirkham9th`, `8085875ef`) and checks its layers. It is skipped when
+no live server was provided.

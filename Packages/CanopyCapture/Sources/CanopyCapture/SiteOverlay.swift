@@ -126,8 +126,37 @@ public struct GerardusTree: Equatable, Sendable {
     }
 }
 
+/// Which of a site's buildings are drawn, in AR and on the 3D map alike: the buildings Gerardus reconstructed from
+/// 3DEP (the BUILDINGS layer: each part's outline, its roof planes and its wall surfaces). DataSF's boxes (BOXES) are
+/// never drawn: they stand where the reconstructed walls do, with flat tops, so the two overlap. Nor are the measured
+/// facade planes. A site sent without reconstructed buildings shows DataSF's footprints as outlines where they lie,
+/// with nothing raised.
+public enum SiteBuildings {
+    public enum Drawn: Equatable, Sendable {
+        /// As the server sent it: an outline, a roof plane or a wall surface.
+        case asSent
+        /// A footprint's outline where it lies, with no walls raised from it.
+        case outline
+    }
+
+    /// Whether a site's features include reconstructed buildings.
+    public static func reconstructed(_ features: [VectorReference.Feature]) -> Bool {
+        features.contains { $0.layer == .buildings }
+    }
+
+    /// How a feature is drawn as a building, or nil when it is not drawn as one.
+    public static func drawn(_ feature: VectorReference.Feature, reconstructed: Bool) -> Drawn? {
+        switch feature.layer {
+        case .buildings: .asSent
+        case .footprints: reconstructed ? nil : .outline
+        default: nil
+        }
+    }
+}
+
 /// Gerardus's site vectors as wireframe items in the AR world: trees as the Mac visualiser's figure, buildings as
-/// the outlines of their faces, streets as their lines. Nothing is extruded that the server did not extrude.
+/// the outlines of their faces (`SiteBuildings`), streets as their lines. Nothing is extruded that the server did not
+/// extrude.
 public enum SiteWireframes {
     public enum Layer: String, CaseIterable, Sendable {
         case trees
@@ -226,33 +255,21 @@ public enum SiteWireframes {
                 return treeItem(id: tree.id, form: forms[tree.id] ?? tree.form, at: frame.arkit(tree.base))
             }
         case .buildings:
-            // Box walls and wall surfaces already stand where the outlines would be extruded.
-            let hasWalls = features.contains { $0.layer == .boxes || $0.layer == .buildings }
+            let reconstructed = SiteBuildings.reconstructed(features)
             let wallSurfaces = features.contains { $0.layer == .buildings && $0.line.kind == .wallSurface }
             return features.compactMap { feature -> WireframeItem? in
                 let line = feature.line
-                switch feature.layer {
-                case .footprints:
-                    // Walls stand where the outline would be extruded; the footprint still gives the roofline.
-                    if hasWalls {
-                        guard near(line), line.closed, line.height.isFinite, line.height > 0 else { return nil }
-                        let top = line.vertices.map { frame.arkit($0) + SIMD3(0, line.height, 0) }
-                        return WireframeItem(id: line.featureID, segments: Wireframe.polyline(top, closed: true))
-                    }
-                case .boxes, .buildings: break
-                case .observed: if line.kind != .wallPlane && line.kind != .facade { return nil }
-                default: return nil
+                guard let drawn = SiteBuildings.drawn(feature, reconstructed: reconstructed), near(line) else {
+                    return nil
                 }
-                guard near(line) else { return nil }
                 var segments = Wireframe.polyline(line.vertices.map(frame.arkit), closed: line.closed)
-                // An older server's parts and plain footprints carry a height to extrude; walls never do again.
-                let extrudes = feature.layer == .footprints || (line.kind == .buildingPart && !wallSurfaces)
+                // An older server's parts carry a height to extrude; wall surfaces and outlines never are.
                 let height =
-                    line.kind == .buildingPart
-                    ? (line.tags["height"].flatMap(Float.init) ?? line.height)
-                        - (line.tags["min_height"].flatMap(Float.init) ?? 0)
-                    : line.height
-                if extrudes, line.closed, height.isFinite, height > 0 {
+                    (line.tags["height"].flatMap(Float.init) ?? line.height)
+                    - (line.tags["min_height"].flatMap(Float.init) ?? 0)
+                if drawn == .asSent, line.kind == .buildingPart, !wallSurfaces, line.closed, height.isFinite,
+                    height > 0
+                {
                     let up = SIMD3<Float>(0, height, 0)
                     let bottom = line.vertices.map(frame.arkit)
                     segments += Wireframe.polyline(bottom.map { $0 + up }, closed: true)
