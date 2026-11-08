@@ -1,3 +1,4 @@
+import CanopyCapture
 import CanopyDesign
 import CanopyReference
 import SceneKit
@@ -52,10 +53,12 @@ public struct VectorMapView: View {
         let roofs = reference.features.filter { $0.line.kind == .roofPlane }.count
         let surfaces = reference.features.filter { $0.line.kind == .wallSurface }.count
         let footprints = reference.features.filter { $0.layer == .footprints }.count
+        let trees = reference.features.filter { $0.layer == .trees }.count
         let buildings = walls > 0 ? "\(walls) box walls" : "\(footprints) building outlines"
         return "\(buildings) · \(measured) measured wall planes · "
             + (roofs == 0 ? "No LoD2 roofs" : "\(roofs) roof planes")
             + (surfaces == 0 ? "" : " · \(surfaces) wall surfaces")
+            + (trees == 0 ? "" : " · \(trees) trees")
     }
 }
 
@@ -64,6 +67,7 @@ private enum VectorGroup: String, CaseIterable {
     case lod2 = "Roofs and wall surfaces"
     case observed = "Measured facades"
     case streets = "Streets and kerbs"
+    case trees = "Trees"
     case ground = "Ground"
 
     var color: UIColor {
@@ -72,6 +76,7 @@ private enum VectorGroup: String, CaseIterable {
         case .lod2: UIColor(red: 0.78, green: 0.58, blue: 0.47, alpha: 1)
         case .observed: UIColor(red: 0.23, green: 0.56, blue: 0.45, alpha: 1)
         case .streets: UIColor(red: 0.48, green: 0.48, blue: 0.37, alpha: 1)
+        case .trees: UIColor(red: 0.42, green: 0.74, blue: 0.24, alpha: 1)
         case .ground: UIColor(red: 0.90, green: 0.91, blue: 0.85, alpha: 1)
         }
     }
@@ -119,16 +124,29 @@ private struct VectorSceneView: UIViewRepresentable {
         let heights = reference.ground?.z.filter(\.isFinite).sorted() ?? []
         let featureHeights = reference.features.flatMap { $0.line.vertices.map(\.z) }.sorted()
         let elevation = heights.isEmpty ? (featureHeights.first ?? 0) : heights[heights.count / 2]
+        let place: @Sendable (SIMD3<Float>) -> SIMD3<Float> = { VectorGeometry.scenePoint($0, elevation: elevation) }
         var groups: [VectorGroup: VectorMesh] = [:]
         let hasBoxes = reference.features.contains { $0.layer == .boxes || $0.layer == .buildings }
         // A server that sends wall surfaces has its parts' walls drawn by them; an older one has its parts extruded.
         let wallSurfaces = reference.features.contains { $0.layer == .buildings && $0.line.kind == .wallSurface }
         for feature in reference.features {
             let line = feature.line
-            // Box walls already encode the shifted outline and measured heights.
-            if hasBoxes, feature.layer == .footprints { continue }
+            // Box walls already encode the shifted outline and measured heights; the footprint still gives the roof.
+            if hasBoxes, feature.layer == .footprints {
+                var mesh = groups[.buildings] ?? VectorMesh(place: place)
+                mesh.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                groups[.buildings] = mesh
+                continue
+            }
             // Sensor/correction arrows are registration diagnostics rather than building geometry.
             if line.kind == .sensor || line.kind == .correction { continue }
+            if feature.layer == .trees {
+                guard let tree = GerardusTree(line) else { continue }
+                var mesh = groups[.trees] ?? VectorMesh(place: place)
+                mesh.add(tree)
+                groups[.trees] = mesh
+                continue
+            }
             let group: VectorGroup =
                 switch feature.layer {
                 case .footprints, .boxes: .buildings
@@ -136,11 +154,12 @@ private struct VectorSceneView: UIViewRepresentable {
                 case .observed: .observed
                 default: .streets
                 }
-            var mesh = groups[group] ?? VectorMesh()
-            mesh.add(line, layer: feature.layer, wallSurfaces: wallSurfaces, elevation: elevation)
+            var mesh = groups[group] ?? VectorMesh(place: place)
+            mesh.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+            mesh.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
             groups[group] = mesh
         }
-        if let ground = reference.ground { groups[.ground] = VectorMesh(ground: ground, elevation: elevation) }
+        if let ground = reference.ground { groups[.ground] = VectorMesh(ground: ground, place: place) }
         for group in VectorGroup.allCases {
             let node = groups[group]?.node(color: group.color) ?? SCNNode()
             node.name = group.rawValue
@@ -159,83 +178,8 @@ private struct VectorSceneView: UIViewRepresentable {
     }
 }
 
-/// Batch geometry by layer, so a site with hundreds of walls needs only a few draw calls.
-private struct VectorMesh {
-    var vertices: [SCNVector3] = []
-    var triangles: [UInt32] = []
-    var edges: [UInt32] = []
-
-    init() {}
-
-    mutating func add(_ line: LineFeature, layer: ReferenceLayer, wallSurfaces: Bool, elevation: Float) {
-        for face in VectorGeometry.faces(line, layer: layer, wallSurfaces: wallSurfaces) {
-            let start = UInt32(vertices.count)
-            vertices += face.vertices.map { SCNVector3(VectorGeometry.scenePoint($0, elevation: elevation)) }
-            triangles += face.triangles.map { start + $0 }
-            for i in face.vertices.indices {
-                edges += [start + UInt32(i), start + UInt32((i + 1) % face.vertices.count)]
-            }
-        }
-        if !line.closed {
-            let start = UInt32(vertices.count)
-            let points = line.vertices
-            vertices += points.map { SCNVector3(VectorGeometry.scenePoint($0, elevation: elevation)) }
-            for i in 1..<max(1, points.count) { edges += [start + UInt32(i - 1), start + UInt32(i)] }
-        }
-    }
-
-    init(ground: Heightfield, elevation: Float) {
-        self.init()
-        // A few thousand grid cells, preserving the site's actual slope. Missing returns stay holes.
-        let step = max(1, Int(ceil(4 / ground.cellSize)))
-        for j in stride(from: 0, to: max(0, ground.ny - step), by: step) {
-            for i in stride(from: 0, to: max(0, ground.nx - step), by: step) {
-                let cells = [(i, j), (i + step, j), (i + step, j + step), (i, j + step)]
-                let z = cells.map { ground.z[$0.1 * ground.nx + $0.0] }
-                guard z.allSatisfy(\.isFinite) else { continue }
-                let start = UInt32(vertices.count)
-                for ((x, y), height) in zip(cells, z) {
-                    let p = SIMD3(
-                        Float(ground.origin.x + Double(x) * ground.cellSize),
-                        Float(ground.origin.y + Double(y) * ground.cellSize), height)
-                    vertices.append(SCNVector3(VectorGeometry.scenePoint(p, elevation: elevation)))
-                }
-                triangles += [0, 1, 2, 0, 2, 3].map { start + $0 }
-                edges += [0, 1, 1, 2].map { start + $0 }
-            }
-        }
-    }
-
-    func node(color: UIColor) -> SCNNode {
-        let node = SCNNode()
-        guard !vertices.isEmpty else { return node }
-        let source = SCNGeometrySource(vertices: vertices)
-        func geometry(_ indices: [UInt32], type: SCNGeometryPrimitiveType, tint: UIColor) -> SCNGeometry {
-            let data = indices.withUnsafeBytes { Data($0) }
-            let element = SCNGeometryElement(
-                data: data, primitiveType: type,
-                primitiveCount: indices.count / (type == .triangles ? 3 : 2), bytesPerIndex: 4)
-            let geometry = SCNGeometry(sources: [source], elements: [element])
-            let material = SCNMaterial()
-            material.diffuse.contents = tint
-            material.lightingModel = .constant
-            material.isDoubleSided = true
-            geometry.materials = [material]
-            return geometry
-        }
-        if !triangles.isEmpty {
-            node.addChildNode(SCNNode(geometry: geometry(triangles, type: .triangles, tint: color)))
-        }
-        if !edges.isEmpty {
-            let edge = SCNNode(geometry: geometry(edges, type: .line, tint: color.withMultipliedBrightness(0.55)))
-            node.addChildNode(edge)
-        }
-        return node
-    }
-}
-
 extension UIColor {
-    fileprivate func withMultipliedBrightness(_ factor: CGFloat) -> UIColor {
+    func withMultipliedBrightness(_ factor: CGFloat) -> UIColor {
         var r: CGFloat = 0
         var g: CGFloat = 0
         var b: CGFloat = 0

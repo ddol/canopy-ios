@@ -20,7 +20,7 @@ import Testing
         #expect(AppModel.lineKind(layer: .cityStreets, kind: .path) == .path)
         #expect(AppModel.lineKind(layer: .kerbs, kind: .kerb) == .kerb)
         #expect(AppModel.lineKind(layer: .streetUse, kind: .parkingSpace) == .surface)
-        #expect(AppModel.lineKind(layer: .trees, kind: .tree) == nil)
+        #expect(AppModel.lineKind(layer: .trees, kind: .tree) == .tree)
         #expect(AppModel.lineKind(layer: .groundMesh, kind: .unspecified) == nil)
     }
 

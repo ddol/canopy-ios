@@ -23,11 +23,20 @@ public struct ScanProgress: Equatable, Sendable {
     public var arcDegrees: Double?
     /// Current estimate of the diameter 1.37 m above the ground, in metres.
     public var diameter: Double?
+    /// Raw depth points kept round the trunk so far.
+    public var pointCount = 0
+    /// Whether the current diameter came from the raw depth points rather than the mesh.
+    public var fromDepthPoints = false
 
-    public init(triangleCount: Int, arcDegrees: Double? = nil, diameter: Double? = nil) {
+    public init(
+        triangleCount: Int, arcDegrees: Double? = nil, diameter: Double? = nil, pointCount: Int = 0,
+        fromDepthPoints: Bool = false
+    ) {
         self.triangleCount = triangleCount
         self.arcDegrees = arcDegrees
         self.diameter = diameter
+        self.pointCount = pointCount
+        self.fromDepthPoints = fromDepthPoints
     }
 
     /// Enough of the circumference for a confident fit.
@@ -50,15 +59,19 @@ public enum TrunkScan {
     ///
     /// - Parameters:
     ///   - world: the scanned mesh in world coordinates (y up).
+    ///   - points: raw depth points kept round the trunk, world coordinates, if the device gave any.
     ///   - floorHeights: world heights of floor-classified points near the trunk, if ARKit classified any.
     ///   - center: the point on the trunk where the scan started.
     ///   - camera: the camera position, for placing the trunk on the map.
     ///   - northAligned: true when world −z is true north, so the lean's direction can be given.
     public static func analyse(
-        world: Mesh, floorHeights: [Float], center: SIMD3<Float>, camera: SIMD3<Float>, northAligned: Bool
+        world: Mesh, points: [SIMD3<Float>] = [], floorHeights: [Float], center: SIMD3<Float>,
+        camera: SIMD3<Float>, northAligned: Bool
     ) throws -> TrunkCapture {
         let (region, ground) = try prepare(world: world, floorHeights: floorHeights, center: center)
-        let analysis = try TrunkAnalysis().measure(region, groundHeight: ground, northAligned: northAligned)
+        let local = points.cropped(around: center, radius: radius, below: below, above: above)
+        let analysis = try TrunkAnalysis().measure(
+            region, points: local, groundHeight: ground, northAligned: northAligned)
 
         // Keep only the trunk and a margin around it as evidence, centred on the trunk.
         let trunkCenter = center + SIMD3(Float(analysis.center.x), 0, Float(analysis.center.y))
@@ -76,20 +89,25 @@ public enum TrunkScan {
 
     /// A quick look at how much of the trunk the scan covers so far. Never throws: an incomplete scan just has no
     /// arc or diameter yet.
-    public static func progress(world: Mesh, floorHeights: [Float], center: SIMD3<Float>) -> ScanProgress {
+    public static func progress(
+        world: Mesh, points: [SIMD3<Float>] = [], floorHeights: [Float], center: SIMD3<Float>
+    ) -> ScanProgress {
         guard let (region, ground) = try? prepare(world: world, floorHeights: floorHeights, center: center) else {
-            return ScanProgress(triangleCount: world.triangleCount)
+            return ScanProgress(triangleCount: world.triangleCount, pointCount: points.count)
         }
         var analysis = TrunkAnalysis()
         analysis.minimumArcDegrees = 0
         analysis.leanHeights = []
-        guard let result = try? analysis.measure(region, groundHeight: ground) else {
-            return ScanProgress(triangleCount: world.triangleCount)
+        let local = points.cropped(around: center, radius: radius, below: below, above: above)
+        guard let result = try? analysis.measure(region, points: local, groundHeight: ground) else {
+            return ScanProgress(triangleCount: world.triangleCount, pointCount: points.count)
         }
         return ScanProgress(
             triangleCount: world.triangleCount,
             arcDegrees: result.circle.arc * 180 / .pi,
-            diameter: result.dbh.diameter.value
+            diameter: result.dbh.diameter.value,
+            pointCount: points.count,
+            fromDepthPoints: result.depthPointCount > 0
         )
     }
 

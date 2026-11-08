@@ -1,5 +1,6 @@
 #if os(iOS)
     import ARKit
+    import CanopyModel
     import Foundation
     import Observation
     import RealityKit
@@ -46,12 +47,22 @@
         @ObservationIgnored private var hasRun = false
         @ObservationIgnored private var accumulator: MeshAccumulator?
         @ObservationIgnored private var lastIngest: [UUID: TimeInterval] = [:]
+        /// Raw depth points round the trunk while a scan runs; nil on a device without scene depth.
+        @ObservationIgnored private var depth: DepthAccumulator?
+        @ObservationIgnored private var lastDepthIngest: TimeInterval = 0
         @ObservationIgnored private var refreshTask: Task<Void, Never>?
         @ObservationIgnored private let overlayAnchor = AnchorEntity(world: .zero)
         @ObservationIgnored private let overlay = ModelEntity()
+        @ObservationIgnored private var wireLayers: [String: Entity] = [:]
+        @ObservationIgnored private var pickable: [String: (entity: ModelEntity, material: UnlitMaterial)] = [:]
+        @ObservationIgnored private var highlighted: String?
+        /// Where the wireframe tree being fitted stands (trunk base, on the ground), while one is shown.
+        public private(set) var treeBase: SIMD3<Float>?
 
         /// Minimum time between two ingests of the same mesh anchor, in seconds.
         static let ingestInterval: TimeInterval = 0.3
+        /// Minimum time between two depth frames taken into a scan, in seconds.
+        static let depthInterval: TimeInterval = 0.2
 
         public override init() {
             view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
@@ -62,6 +73,7 @@
             view.session.delegate = self
             overlayAnchor.addChild(overlay)
             view.scene.addAnchor(overlayAnchor)
+            view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap)))
         }
 
         /// Starts the session, or resumes it with the mesh and any scan it already has.
@@ -74,6 +86,9 @@
             configuration.worldAlignment = .gravityAndHeading
             configuration.planeDetection = [.horizontal]
             configuration.environmentTexturing = .none
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                configuration.frameSemantics.insert(.sceneDepth)
+            }
             isNorthAligned = true
             view.session.run(configuration, options: hasRun ? [] : [.resetTracking, .removeExistingAnchors])
             hasRun = true
@@ -115,12 +130,16 @@
             accumulator = MeshAccumulator(
                 center: hit.position, radius: TrunkScan.radius, below: TrunkScan.below, above: TrunkScan.above)
             lastIngest = [:]
+            depth = DepthAccumulator(
+                center: hit.position, radius: TrunkScan.radius, below: TrunkScan.below, above: TrunkScan.above)
+            lastDepthIngest = 0
             scan = Scan(center: hit.position, progress: ScanProgress(triangleCount: 0))
             for anchor in view.session.currentFrame?.anchors ?? [] {
                 if let mesh = anchor as? ARMeshAnchor {
                     ingest(mesh, force: true)
                 }
             }
+            if let frame = view.session.currentFrame { ingestDepth(frame) }
             refreshTask?.cancel()
             refreshTask = Task { [weak self] in
                 while !Task.isCancelled {
@@ -135,6 +154,7 @@
             refreshTask?.cancel()
             refreshTask = nil
             accumulator = nil
+            depth = nil
             scan = nil
             overlay.model = nil
         }
@@ -145,21 +165,25 @@
             guard let accumulator, let scan else { throw CaptureError.notScanning }
             let camera = cameraPosition ?? scan.center
             let aligned = isNorthAligned
+            let depth = self.depth
             return try await Task.detached(priority: .userInitiated) {
                 try TrunkScan.analyse(
-                    world: accumulator.mesh(), floorHeights: accumulator.floorHeights(), center: scan.center,
-                    camera: camera, northAligned: aligned)
+                    world: accumulator.mesh(), points: depth?.points() ?? [], floorHeights: accumulator.floorHeights(),
+                    center: scan.center, camera: camera, northAligned: aligned)
             }.value
         }
 
         /// Recomputes the overlay and the progress from the accumulated mesh, off the main actor.
         private func refresh() async {
             guard let accumulator, let center = scan?.center else { return }
+            let depth = self.depth
             let (mesh, progress) = await Task.detached(priority: .utility) {
                 let mesh = accumulator.mesh()
                 return (
                     mesh,
-                    TrunkScan.progress(world: mesh, floorHeights: accumulator.floorHeights(), center: center)
+                    TrunkScan.progress(
+                        world: mesh, points: depth?.points() ?? [], floorHeights: accumulator.floorHeights(),
+                        center: center)
                 )
             }.value
             guard self.scan?.center == center else { return }  // cancelled or restarted meanwhile
@@ -179,6 +203,148 @@
             overlay.model = ModelComponent(mesh: resource, materials: [material])
         }
 
+        // MARK: Wireframes
+
+        /// Draws a layer of wireframes in the world, replacing the layer of that name. Items with a pick box can be
+        /// found with `pickWireframe(at:)`; the rest are batched into one model.
+        public func showWireframes(_ layer: WireframeLayer) {
+            hideWireframes(named: layer.name)
+            let root = Entity()
+            root.name = layer.name
+            let color = UIColor(
+                red: CGFloat(layer.color.x), green: CGFloat(layer.color.y), blue: CGFloat(layer.color.z),
+                alpha: CGFloat(layer.color.w))
+            let material = Self.wireMaterial(color, throughWalls: layer.throughWalls)
+            var batched: [Wireframe.Segment] = []
+            for item in layer.items {
+                guard let box = item.pickBox else {
+                    batched += item.segments
+                    continue
+                }
+                guard let model = Self.wireModel(item.segments, width: layer.lineWidth, material: material) else {
+                    continue
+                }
+                let entity = ModelEntity()
+                entity.name = item.id
+                entity.model = model
+                entity.collision = CollisionComponent(
+                    shapes: [.generateBox(size: box.size).offsetBy(translation: box.centre)],
+                    filter: CollisionFilter(group: Self.pickGroup, mask: .all))
+                root.addChild(entity)
+                pickable[item.id] = (entity, material)
+            }
+            if let model = Self.wireModel(batched, width: layer.lineWidth, material: material) {
+                let entity = ModelEntity()
+                entity.model = model
+                root.addChild(entity)
+            }
+            overlayAnchor.addChild(root)
+            wireLayers[layer.name] = root
+            if let highlighted, pickable[highlighted] != nil { highlightWireframe(id: highlighted) }
+        }
+
+        /// Takes a layer down.
+        public func hideWireframes(named name: String) {
+            guard let root = wireLayers.removeValue(forKey: name) else { return }
+            for child in root.children {
+                guard !child.name.isEmpty, pickable[child.name]?.entity == child else { continue }
+                pickable[child.name] = nil
+            }
+            root.removeFromParent()
+        }
+
+        /// The pickable wireframe item under a point in the view, nearest first.
+        public func pickWireframe(at point: CGPoint) -> String? {
+            guard let ray = view.ray(through: point) else { return nil }
+            let hits = view.scene.raycast(
+                origin: ray.origin, direction: ray.direction, length: 300, query: .all, mask: Self.pickGroup,
+                relativeTo: nil)
+            return hits.sorted { $0.distance < $1.distance }.lazy.compactMap { hit -> String? in
+                let name = hit.entity.name
+                return self.pickable[name]?.entity == hit.entity ? name : nil
+            }.first
+        }
+
+        /// Draws one pickable item in the selection colour (orange), and the one before as it was.
+        public func highlightWireframe(id: String?) {
+            if let previous = highlighted, previous != id, let (entity, material) = pickable[previous] {
+                entity.model?.materials = [material]
+            }
+            highlighted = id
+            guard let id, let (entity, _) = pickable[id] else { return }
+            entity.model?.materials = [
+                Self.wireMaterial(UIColor(red: 0.94, green: 0.54, blue: 0.14, alpha: 1), throughWalls: true)
+            ]
+        }
+
+        /// A tap in the view. Each tap is a new value, so observers see taps on the same spot.
+        public struct Tap: Equatable, Sendable {
+            public var point: CGPoint
+            public var sequence: Int
+        }
+
+        /// The last tap in the view, for the screen to pick wireframes with.
+        public private(set) var lastTap: Tap?
+
+        @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+            lastTap = Tap(point: gesture.location(in: view), sequence: (lastTap?.sequence ?? 0) + 1)
+        }
+
+        static let pickGroup = CollisionGroup(rawValue: 1 << 8)
+
+        private static func wireMaterial(_ color: UIColor, throughWalls: Bool) -> UnlitMaterial {
+            var material = UnlitMaterial(color: color)
+            material.faceCulling = .none
+            if throughWalls {
+                material.blending = .transparent(opacity: 0.9)
+                material.readsDepth = false
+            }
+            return material
+        }
+
+        private static func wireModel(
+            _ segments: [Wireframe.Segment], width: Float, material: UnlitMaterial
+        ) -> ModelComponent? {
+            let mesh = Wireframe.mesh(segments, width: width)
+            guard !mesh.isEmpty else { return nil }
+            var descriptor = MeshDescriptor(name: "wireframe")
+            descriptor.positions = MeshBuffer(mesh.positions)
+            descriptor.primitives = .triangles(mesh.indices)
+            guard let resource = try? MeshResource.generate(from: [descriptor]) else { return nil }
+            return ModelComponent(mesh: resource, materials: [material])
+        }
+
+        // MARK: Fitted tree
+
+        /// Stands the wireframe tree being fitted with its trunk base at `base` (a world point on the ground),
+        /// replacing any shown before. Trunk brown and crown green, as the Mac visualiser draws them, through whatever
+        /// is in front.
+        public func showTree(_ form: TreeForm, lean: Lean? = nil, at base: SIMD3<Float>) {
+            let figure = WireframeTree.figure(form, lean: lean, at: base)
+            showWireframes(
+                WireframeLayer(
+                    name: Self.fitTrunkLayer, items: [WireframeItem(id: "fit-trunk", segments: figure.trunk)],
+                    color: Self.trunkColor, throughWalls: true))
+            showWireframes(
+                WireframeLayer(
+                    name: Self.fitCrownLayer, items: [WireframeItem(id: "fit-crown", segments: figure.crown)],
+                    color: Self.crownColor, throughWalls: true))
+            treeBase = base
+        }
+
+        /// Takes the fitted tree down.
+        public func hideTree() {
+            hideWireframes(named: Self.fitTrunkLayer)
+            hideWireframes(named: Self.fitCrownLayer)
+            treeBase = nil
+        }
+
+        static let fitTrunkLayer = "fit-trunk"
+        static let fitCrownLayer = "fit-crown"
+        /// The Mac visualiser's tree colours.
+        public static let trunkColor = SIMD4<Float>(0.70, 0.48, 0.28, 1)
+        public static let crownColor = SIMD4<Float>(0.55, 0.95, 0.30, 1)
+
         // MARK: Session delegate
 
         public nonisolated func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
@@ -187,6 +353,63 @@
 
         public nonisolated func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
             MainActor.assumeIsolated { receive(anchors) }
+        }
+
+        public nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            MainActor.assumeIsolated { ingestDepth(frame) }
+        }
+
+        /// Adds a frame's LiDAR depth to the scan, a few times a second, while tracking is good.
+        private func ingestDepth(_ frame: ARFrame) {
+            guard var depth, let sceneDepth = frame.sceneDepth else { return }
+            guard frame.timestamp - lastDepthIngest >= Self.depthInterval else { return }
+            guard case .normal = frame.camera.trackingState else { return }
+            lastDepthIngest = frame.timestamp
+            let (values, width, height) = Self.floats(sceneDepth.depthMap)
+            guard width > 0 else { return }
+            let confidence = sceneDepth.confidenceMap.map { Self.bytes($0).0 }
+            let image = frame.camera.imageResolution
+            let intrinsics = DepthFrame.intrinsics(
+                frame.camera.intrinsics, from: SIMD2(Float(image.width), Float(image.height)),
+                to: SIMD2(Float(width), Float(height)))
+            depth.add(
+                DepthFrame.unproject(
+                    depth: values, confidence: confidence, width: width, height: height, intrinsics: intrinsics,
+                    cameraTransform: frame.camera.transform))
+            self.depth = depth
+        }
+
+        /// A 32-bit float pixel buffer's values, row-major, with its size.
+        static func floats(_ buffer: CVPixelBuffer) -> ([Float], Int, Int) {
+            guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_DepthFloat32 else { return ([], 0, 0) }
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+            guard let base = CVPixelBufferGetBaseAddress(buffer) else { return ([], 0, 0) }
+            let width = CVPixelBufferGetWidth(buffer)
+            let height = CVPixelBufferGetHeight(buffer)
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            var values = [Float](repeating: 0, count: width * height)
+            for row in 0..<height {
+                let source = base.advanced(by: row * stride).assumingMemoryBound(to: Float.self)
+                for column in 0..<width { values[row * width + column] = source[column] }
+            }
+            return (values, width, height)
+        }
+
+        /// An 8-bit pixel buffer's values, row-major, with its size.
+        static func bytes(_ buffer: CVPixelBuffer) -> ([UInt8], Int, Int) {
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+            guard let base = CVPixelBufferGetBaseAddress(buffer) else { return ([], 0, 0) }
+            let width = CVPixelBufferGetWidth(buffer)
+            let height = CVPixelBufferGetHeight(buffer)
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            var values = [UInt8](repeating: 0, count: width * height)
+            for row in 0..<height {
+                let source = base.advanced(by: row * stride).assumingMemoryBound(to: UInt8.self)
+                for column in 0..<width { values[row * width + column] = source[column] }
+            }
+            return (values, width, height)
         }
 
         private func receive(_ anchors: [ARAnchor]) {

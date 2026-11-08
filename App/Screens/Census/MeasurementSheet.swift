@@ -39,6 +39,28 @@ struct MeasurementSheet: View {
                     }
                 }
 
+                if let form = measurement.form {
+                    Section {
+                        LabeledContent("Height") {
+                            Text(format.length(form.height, fractionDigits: 1)).font(CanopyFont.mono())
+                        }
+                        LabeledContent("Foliage") {
+                            Text(
+                                format.length(form.crownHeight, fractionDigits: 1) + " tall, "
+                                    + format.length(form.crownWidth, fractionDigits: 1) + " wide"
+                            )
+                            .font(CanopyFont.mono())
+                        }
+                        LabeledContent("Trunk diameter by eye") {
+                            Text(format.length(form.trunkDiameter, fractionDigits: 2)).font(CanopyFont.mono())
+                        }
+                    } header: {
+                        Text("Fitted by eye")
+                    } footer: {
+                        Text("From the wireframe you matched to the tree. Not saved with the measurement yet.")
+                    }
+                }
+
                 Section("Fit") {
                     LabeledContent(
                         "Points at " + format.length(analysis.dbh.height), value: "\(analysis.circle.pointCount)")

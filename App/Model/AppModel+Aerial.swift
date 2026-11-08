@@ -16,6 +16,10 @@ enum AerialProgress: Equatable {
     var isWorking: Bool {
         if case .working = self { true } else { false }
     }
+
+    var isFailed: Bool {
+        if case .failed = self { true } else { false }
+    }
 }
 
 /// The clients for one Gerardus server, calling as one player.

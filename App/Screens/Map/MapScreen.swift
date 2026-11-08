@@ -9,7 +9,7 @@ struct MapScreen: View {
     enum BaseMap: String {
         /// Apple's map, with Canopy's layers on top.
         case apple
-        /// No base map: only Gerardus's own data (`GerardusRenderer`).
+        /// No base map: Gerardus's site and the census's trees as wireframes in 3D (`WireframeRenderer`).
         case gerardus
     }
 
@@ -112,7 +112,7 @@ struct MapScreen: View {
                 }
         case .gerardus:
             CanopyMapView(
-                renderer: GerardusRenderer(), layers: layers, selection: $selection,
+                renderer: WireframeRenderer(), layers: layers, selection: $selection,
                 viewport: viewport ?? .goldenGatePark
             )
             .focus(focus)
@@ -207,7 +207,7 @@ struct MapScreen: View {
             Section("Base map") {
                 Picker("Base map", selection: $baseMap) {
                     Label("Apple Maps", systemImage: "map").tag(BaseMap.apple)
-                    Label("Gerardus only", systemImage: "square.3.layers.3d.down.right").tag(BaseMap.gerardus)
+                    Label("Gerardus wireframe", systemImage: "square.3.layers.3d.down.right").tag(BaseMap.gerardus)
                 }
             }
             if Features.limbTagging {
@@ -228,6 +228,11 @@ struct MapScreen: View {
                     Task { await model.loadVectors(around: centre) }
                 }
                 .disabled(model.aerial.isWorking)
+                NavigationLink {
+                    ServerCellsScreen(viewport: viewport ?? .goldenGatePark)
+                } label: {
+                    Label("Server cells (L13)", systemImage: "square.grid.2x2")
+                }
             }
             Section("3D vectors") {
                 NavigationLink {
