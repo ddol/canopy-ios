@@ -83,8 +83,10 @@ everything on the simulator.
 
 `CaptureSession` runs `ARWorldTrackingConfiguration` with scene reconstruction (with classification where
 supported) and `gravityAndHeading` alignment, so world +x is east and −z is north. The mesh overlay is
-RealityKit's scene-understanding debug view. Camera frames stay inside ARKit; the app never reads
-`capturedImage`.
+RealityKit's scene-understanding debug view. Camera frames stay inside ARKit, except while trunk rings are being
+aligned (**Rings → Align steps**, below): then the luma plane of `capturedImage` is read in place, along short lines
+across each ring's edges, a few times a second. Only the lines past the edges are kept. No frame is copied, stored
+or sent.
 
 **Scan trunk** raycasts through the screen centre against the mesh (within 6 m) to find a point on the trunk,
 then keeps the scene around it while the player walks round. ARKit keeps refining its reconstruction: the side
@@ -127,6 +129,31 @@ After **Finish scan** a wireframe tree (`TreeForm`, `WireframeTree`: the Mac vis
 rings, with the trunk's diameter) stands on the measured trunk base, and four sliders (trunk diameter, height,
 foliage height, foliage width) fit it to the real tree by eye before the measurement sheet; the fitted figures are
 shown there, not yet saved.
+
+**Rings a metre apart.** The fitted tree is a stack of rings (`TreeProfile`).
+
+- **On Finish scan.** `TrunkSteps.fitted` places a trunk ring at every metre from 1 m up to the crown's base. Each
+  step the depth points reach is fitted to them, as breast height is (`TrunkCapture.snapping`). The depth points
+  come from within 3.5 m of the phone, and the scan region reaches 4 m above the tapped point, so in practice the
+  fitted steps stop around 3 m.
+- **Above the scan, Rings → Align steps** sets the remaining steps from the camera:
+  1. **Predict.** `TrunkSteps.predicted` puts each step on a straight axis at a straight taper, both fitted through
+     the rings below (`TrunkTaper`). Rings under 0.5 m, in the butt flare, are left out. The lean is capped at 30°,
+     and the taper at 3 cm of radius narrower to 0.5 cm wider per metre.
+  2. **Find the edges.** A few times a second, while tracking is good, `RingAligner` projects each ring's left and
+     right grazing points into the frame. For each point it averages five short lines across the edge over a 6 cm
+     height band, and takes the strongest brightness step near the prediction, sub-pixel.
+  3. **Turn each edge into a line.** The plane through the camera, the edge's ray and the trunk's axis cuts the
+     ring's height in a line, which the ring must touch: `n · c − r = k`, linear in its centre and radius.
+  4. **Collect viewpoints.** Lines are kept per 5° of bearing round the trunk, so standing still adds nothing.
+  5. **Solve.** Weighted least squares over every viewpoint, with the prediction as a prior. The worst line more than
+     3σ off is dropped, then the next, until none is or half are gone.
+- **One viewpoint or many.** From one viewpoint the prior holds the ring's distance and the edges set its width and
+  place across the view. Walking round fixes the centre too.
+- **After aligning.** Aligned rings are marked `camera`. In AR they are drawn blue, beside lime for scan-fitted and
+  green for confirmed rings. A ring moved by hand, confirmed or taken out stops being aligned.
+- **Tests.** The geometry is tested against rendered synthetic images of upright and leaning trunks
+  (`RingAlignmentTests`, `TrunkStepsTests`).
 
 **Site overlay.** The same view draws the loaded Gerardus sites round the player as wireframe layers
 (`SiteWireframes`: trees, buildings, streets) and the census's trees, through `CaptureSession.showWireframes`.

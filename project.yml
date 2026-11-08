@@ -79,8 +79,8 @@ targets:
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.education
         INFOPLIST_KEY_NSCameraUsageDescription: >-
-          Canopy uses the camera and LiDAR to build a colourless 3D mesh of the tree in front of you.
-          No photos are taken or stored.
+          Canopy uses the camera and LiDAR to build a colourless 3D mesh of the tree in front of you
+          and to find a trunk's edges when you fit rings to it. No photos are taken or stored.
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: >-
           Canopy uses your location to place the trees and tags you record on the park map.
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES

@@ -19,7 +19,7 @@ send, so you can check it against the code.
 
 | Permission | Why | What happens to the data |
 |---|---|---|
-| Camera | ARKit needs the camera to track the device and reconstruct a mesh with LiDAR. | Camera frames are processed in memory by ARKit and discarded. The app never reads a frame into storage. |
+| Camera | ARKit needs the camera to track the device and reconstruct a mesh with LiDAR. While you align a trunk's rings (Rings → Align steps), the app also finds the trunk's edges in the camera image. | Camera frames are processed in memory by ARKit and discarded. While rings are being aligned, the app reads the brightness along short lines across the trunk's edges, in place in ARKit's frame, and keeps only where the edges are. It never copies, stores or uploads a frame. |
 | Location (when in use) | To place trees and tags on the map and to know which S2 cell an observation belongs to. | Stored as the position of the tree or tag you record, with its uncertainty. The app does not keep a track of where you walked. |
 | Game Center | To give your records an author, so two players can agree on a change. | Your Game Center player id and alias are stored with each record you create. |
 

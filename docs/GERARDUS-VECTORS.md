@@ -74,9 +74,14 @@ session; nothing is written to Gerardus. The trunk scan's own fitted tree starts
 After a trunk scan the fitted tree is a stack of rings (cross-sections) from the ground up, not two cylinders.
 **Shape** moves them all with the four sliders; **Rings** picks one ring (orange in AR) to move up or down, widen or
 narrow, **Snap to scan** (a circle fitted to the scan's depth points, or its mesh, at that height: the breast-height
-ring starts snapped), **Looks right** to confirm it against the tree, add a ring above or take one out. Uprights join
-each ring to the next, so a trunk tapers and a crown bulges. Snapped and confirmed rings stay put when the Shape
-sliders move the rest. Saving the measurement keeps the fitted shape for that tree for the session, in AR and on the
+ring and a ring every metre up, as far as the depth points reach, start snapped), **Looks right** to confirm it
+against the tree, add a ring above or take one out.
+
+**Align steps** adds the rest of the steps up to the crown's base, predicted from the axis and taper of the fitted
+rings below. As the player walks round with the phone pointed up the trunk, each step moves to the trunk's edges in
+the camera image. Rings are drawn by how they were set: lime fitted to the scan, blue aligned to the camera, green
+confirmed, brown by eye. Uprights join each ring to the next, so a trunk tapers and a crown bulges. Snapped, aligned
+and confirmed rings stay put when the Shape sliders move the rest. Saving the measurement keeps the fitted shape for that tree for the session, in AR and on the
 wireframe map.
 
 The **Wireframes** menu's **S2 cells** layer draws the level-16 tiles round the player on the ground with short

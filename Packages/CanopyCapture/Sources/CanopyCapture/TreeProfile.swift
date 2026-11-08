@@ -18,11 +18,14 @@ public struct TreeSection: Equatable, Sendable, Codable, Identifiable {
     }
 
     /// How the ring got its size.
-    public enum Source: String, Codable, Sendable {
+    public enum Source: String, Codable, Sendable, CaseIterable {
         /// From the four-slider shape, or moved by eye.
         case eye
         /// Fitted to the scan's points at this height.
         case scan
+        /// Fitted to the trunk's edges in the camera image, above where the scan's depth points reach
+        /// (`RingAligner`).
+        case camera
         /// Checked against the real tree by the player.
         case confirmed
     }

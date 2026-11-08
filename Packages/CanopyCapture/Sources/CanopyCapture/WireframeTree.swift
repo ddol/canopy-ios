@@ -62,16 +62,22 @@ public enum WireframeTree {
         public var crown: [Segment]
         /// The ring picked out for editing, when a profile is drawn with one.
         public var highlighted: [Segment] = []
+        /// The rings fitted to the scan, aligned to the camera or confirmed, by how each was set, when a profile is
+        /// drawn marking them.
+        public var marked: [TreeSection.Source: [Segment]] = [:]
 
-        public var all: [Segment] { trunk + crown + highlighted }
+        public var all: [Segment] {
+            trunk + crown + highlighted + TreeSection.Source.allCases.flatMap { marked[$0] ?? [] }
+        }
     }
 
     /// The lines of a profile standing at `base`: a ring per section at its height (on the leaning axis, or at its
     /// own fitted centre), with uprights joining each ring of a part to the next, so a tapering trunk and a bulging
-    /// crown read as such. The ring with `highlight`'s id is returned apart, to be drawn in another colour.
+    /// crown read as such. The ring with `highlight`'s id is returned apart, to be drawn in another colour; with
+    /// `marking`, so are the rings not set by eye, by how each was set (`Figure.marked`).
     public static func figure(
         _ profile: TreeProfile, lean: Lean? = nil, at base: SIMD3<Float> = .zero, detail: Float = 1,
-        highlight: TreeSection.ID? = nil
+        highlight: TreeSection.ID? = nil, marking: Bool = false
     ) -> Figure {
         let tilt = Self.tilt(lean)
         let ringCount = max(8, Int((Float(ringSegments) * detail).rounded()))
@@ -91,6 +97,8 @@ public enum WireframeTree {
                 let ring = Wireframe.ring(centre: centre(section), radius: Float(section.radius), count: ringCount)
                 if section.id == highlight {
                     figure.highlighted += ring
+                } else if marking, section.source != .eye {
+                    figure.marked[section.source, default: []] += ring
                 } else {
                     lines += ring
                 }

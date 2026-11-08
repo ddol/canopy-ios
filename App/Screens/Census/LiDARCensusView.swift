@@ -42,6 +42,7 @@ struct LiDARCensusView: View {
                 location.start()
             }
             .onDisappear {
+                capture.stopAligning()
                 capture.pause()
                 location.stop()
             }
@@ -60,6 +61,7 @@ struct LiDARCensusView: View {
             // the mesh and the scan, when the sheet closes.
             .sheet(item: $measurement, onDismiss: resumeCapture) { measurement in
                 MeasurementSheet(measurement: measurement) {
+                    capture.stopAligning()
                     capture.cancelScan()
                     capture.hideTree()
                     fit = nil
@@ -106,6 +108,7 @@ struct LiDARCensusView: View {
         if fit != nil {
             TreeFitPanel(
                 fitting: fitFittingBinding, selectedSection: fitSectionBinding, onSnap: snapSelectedSection,
+                isAligning: capture.isAligning, alignStatus: alignStatus, onAlign: toggleAlignment,
                 onMoveHere: moveTreeHere, onBack: stopFitting, onMeasurement: showMeasurement)
         } else if let selection {
             SelectedTreePanel(
@@ -142,6 +145,7 @@ struct LiDARCensusView: View {
             .onChange(of: overlayInputs) { rebuildOverlay() }
             .onChange(of: censusInputs) { rebuildOverlay([.census, .cells]) }
             .onChange(of: model.treeForms) { old, new in rebuildOverlay(OverlayParts(reshaping: old, new)) }
+            .onChange(of: capture.ringFits) { applyRingFits() }
             .onChange(of: model.aerial) {
                 guard loadingVectors, case .working(let message) = model.aerial else { return }
                 notice = message
@@ -484,20 +488,18 @@ struct LiDARCensusView: View {
             form.trunkDiameter = result.analysis.dbh.diameter.value
             form = form.clamped
             deselect()
-            // The breast-height ring starts fitted to the scan, as the DBH was.
-            var profile = TreeProfile(form: form)
-            if let breast = profile.trunk.first(where: { abs($0.height - DBH.standardHeight) < 0.01 }),
-                let snapped = try? result.snapping(breast)
-            {
-                profile[breast.id] = snapped
-            }
+            // Breast height and the steps a metre apart start fitted to the scan as far up as its points reach, as
+            // the DBH was.
+            let profile = TrunkSteps.fitted(TreeProfile(form: form), to: result, below: form.crownBase)
             let fit = TreeFit(
                 capture: result, position: position, fitting: TreeFitting(shape: form, profile: profile),
                 base: result.trunkBase)
             self.fit = fit
             showFit(fit)
+            let steps = profile.trunk.filter { $0.source == .scan }.map(\.height).max()
             notice =
-                "Step back and move the sliders until the wireframe matches the tree. Rings: snap each to the scan and check it."
+                (steps.map { "Rings are fitted to the scan up to " + format.length($0, fractionDigits: 1) + ". " } ?? "")
+                + "Step back and set the shape with the sliders, then Rings → Align steps to fit the rest to the camera."
         } catch {
             notice = Self.describe(error)
         }
@@ -534,6 +536,7 @@ struct LiDARCensusView: View {
             },
             set: { fitting in
                 guard var fit else { return }
+                stopAligningEdited(from: fit.profile, to: fitting.profile)
                 fit.fitting = fitting
                 if let selected = fit.selectedSection, fitting.profile.section(selected) == nil {
                     fit.selectedSection = nil
@@ -576,9 +579,68 @@ struct LiDARCensusView: View {
         }
     }
 
+    // MARK: Aligning rings to the camera
+
+    /// Starts or stops aligning the trunk's rings above the scan to its edges in the camera image. Starting puts a
+    /// ring at every step a metre apart up to the crown's base, on the axis and at the taper of the rings fitted
+    /// below, then moves each to the trunk's edges as the player walks round.
+    private func toggleAlignment() {
+        guard var fit else { return }
+        if capture.isAligning {
+            capture.stopAligning()
+            notice = "Stopped. The blue rings are set from the camera: tap Looks right on each that matches the tree."
+            return
+        }
+        let lean = fit.capture.analysis.lean
+        let top = fit.profile.crown.first?.height ?? fit.fitting.shape.crownBase
+        fit.profile = TrunkSteps.predicted(fit.profile, below: top, lean: lean)
+        guard let aligner = TrunkSteps.aligner(for: fit.profile, base: fit.base, lean: lean) else {
+            notice = "Every trunk ring is fitted to the scan or confirmed already."
+            return
+        }
+        self.fit = fit
+        showFit(fit)
+        capture.startAligning(aligner)
+        notice = "Point the phone up the trunk and walk slowly round it: the rings above the scan move to its edges."
+    }
+
+    /// The camera's latest fits, applied to the rings still being aligned.
+    private func applyRingFits() {
+        guard var fit, !capture.ringFits.isEmpty else { return }
+        let aligned = TrunkSteps.applying(capture.ringFits, to: fit.profile, base: fit.base)
+        guard aligned != fit.profile else { return }
+        fit.profile = aligned
+        self.fit = fit
+        showFit(fit)
+    }
+
+    /// Stops aligning the rings the player moved by hand, confirmed or took out.
+    private func stopAligningEdited(from old: TreeProfile, to new: TreeProfile) {
+        for id in capture.aligningRings {
+            guard let ring = new.section(id) else {
+                capture.stopAligning(ring: id)
+                continue
+            }
+            if ring.source == .confirmed || (ring.source == .eye && ring != old.section(id)) {
+                capture.stopAligning(ring: id)
+            }
+        }
+    }
+
+    /// How the alignment is going, for the rings panel.
+    private var alignStatus: String? {
+        guard capture.isAligning else { return nil }
+        let found = capture.ringFits.count
+        guard found > 0 else { return "Looking for the trunk's edges: point the phone up it." }
+        let views = capture.ringFits.values.map(\.views).max() ?? 0
+        return "\(found) of \(capture.aligningRings.count) rings on its edges, from \(views) "
+            + (views == 1 ? "viewpoint" : "viewpoints")
+    }
+
     /// Stands the tree on the ground under the centre of the view instead.
     private func moveTreeHere() {
         guard var fit else { return }
+        capture.stopAligning()
         guard let hit = capture.raycastCenter(maxDistance: 20) else {
             notice = "Point the centre of the screen at the foot of the tree."
             return
@@ -597,6 +659,7 @@ struct LiDARCensusView: View {
 
     /// Back to scanning: the scan keeps running, the wireframe comes down.
     private func stopFitting() {
+        capture.stopAligning()
         capture.hideTree()
         fit = nil
         notice = nil
@@ -605,6 +668,7 @@ struct LiDARCensusView: View {
     private func showMeasurement() {
         guard let fit else { return }
         notice = nil
+        capture.stopAligning()
         capture.pause()
         measurement = Measurement(
             capture: fit.capture, position: fit.position, target: target, form: fit.form, profile: fit.profile)
