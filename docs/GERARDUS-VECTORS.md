@@ -26,7 +26,18 @@ drags the map; two fingers turn it (a twist), tilt it (up or down) and zoom it (
 map; tapping a tree opens its sheet. The ground grid is tinted by height, dull green low to pale high over the range
 of the loaded sites, so slopes read without lighting. Buildings get a roof: a box-walled or extruded footprint's
 outline lifted to its height and filled (LoD2 roof planes are drawn as sent). It shows only what has been loaded:
-use **Load vectors in view** (or the **Load vectors here** button) to add the site at the map centre.
+use **Load vectors in view** (or the **Load vectors here** button) to add the site at the map centre. Sites loaded in
+AR are on this map too, and a tree reshaped or fitted ring by ring in AR is drawn here in that shape. **S2 cells (L13
+and L16)** draws the level-16 tiles with trees (green when surveyed) and their level-13 cells, with posts at the
+corners.
+
+## Surveyed cells
+
+Confirming or rejecting each detection is slow where a big crown makes several of them. **Map → Layers → Surveyed
+cells (L16)** lists the level-16 cells under the map with what the census holds in each (confirmed, not trees,
+detections left); **Mark surveyed** says the cell has been walked and looked over, so the detections left in it count
+as looked at and are drawn faint. The same mark is in AR under **Wireframes → This cell**, where the cell the player
+stands in is named under the target card. Marks stay on the phone for now (`surveyed_cells` in the store).
 
 ## Server cells
 
@@ -59,6 +70,17 @@ Tapping a tree selects it: its panel shows what is known (DBH, height, the Stree
 with sliders for trunk diameter, height, foliage height and width that reshape its wireframe on the spot. A census
 tree picked this way becomes the target for Confirm, Not a tree and Scan trunk. Adjustments live in the view for the
 session; nothing is written to Gerardus. The trunk scan's own fitted tree starts from the selected tree's shape.
+
+After a trunk scan the fitted tree is a stack of rings (cross-sections) from the ground up, not two cylinders.
+**Shape** moves them all with the four sliders; **Rings** picks one ring (orange in AR) to move up or down, widen or
+narrow, **Snap to scan** (a circle fitted to the scan's depth points, or its mesh, at that height: the breast-height
+ring starts snapped), **Looks right** to confirm it against the tree, add a ring above or take one out. Uprights join
+each ring to the next, so a trunk tapers and a crown bulges. Snapped and confirmed rings stay put when the Shape
+sliders move the rest. Saving the measurement keeps the fitted shape for that tree for the session, in AR and on the
+wireframe map.
+
+The **Wireframes** menu's **S2 cells** layer draws the level-16 tiles round the player on the ground with short
+posts at their corners (green when surveyed) and their level-13 cells with tall blue posts.
 
 ## Available building layers
 

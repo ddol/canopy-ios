@@ -77,10 +77,13 @@ enum WireframeTrees {
         return form.clamped
     }
 
-    static func color(_ status: CountStatus, selected: Bool) -> UIColor {
+    static func color(_ status: CountStatus, selected: Bool, inSurveyedCell: Bool = false) -> UIColor {
         if selected { return CanopyColor.survey.uiColor }
         switch status {
-        case .detected: return CanopyColor.lineStrong.uiColor
+        case .detected:
+            // A detection in a surveyed cell was looked over and left: faint.
+            return inSurveyedCell
+                ? CanopyColor.lineStrong.uiColor.withAlphaComponent(0.35) : CanopyColor.lineStrong.uiColor
         case .proposed: return StatusTone.proposed.foreground.uiColor
         case .confirmed: return CanopyColor.brand.uiColor
         case .verified: return CanopyColor.canopy.uiColor
@@ -147,6 +150,8 @@ struct WireframeMap: UIViewRepresentable {
         let scene = SCNScene()
         let camera = SCNNode()
         let siteRoot = SCNNode()
+        /// Gerardus's trees, apart from the rest of the sites so an adjusted shape redraws only them.
+        let siteTreeRoot = SCNNode()
         let treeRoot = SCNNode()
         let contextRoot = SCNNode()
         /// The scene's origin on the map.
@@ -172,6 +177,8 @@ struct WireframeMap: UIViewRepresentable {
         private var grounds: [(SiteToScene, Heightfield)] = []
         private var trees: [MapLayers.TreeMarker] = []
         private var treeNodes: [UUID: SCNNode] = [:]
+        private var treeForms: [String: TreeForm] = [:]
+        private var treeProfiles: [String: TreeProfile] = [:]
         private var selected: UUID?
         private var context: (routes: [MapLayers.RouteLine], boundary: [[GeoPoint]], tiles: [MapLayers.TileOutline])?
 
@@ -184,6 +191,7 @@ struct WireframeMap: UIViewRepresentable {
             camera.camera?.fieldOfView = WireframeMap.fieldOfView
             scene.rootNode.addChildNode(camera)
             scene.rootNode.addChildNode(siteRoot)
+            scene.rootNode.addChildNode(siteTreeRoot)
             scene.rootNode.addChildNode(treeRoot)
             scene.rootNode.addChildNode(contextRoot)
             placeCamera()
@@ -192,13 +200,18 @@ struct WireframeMap: UIViewRepresentable {
         // MARK: Content
 
         func apply(_ layers: MapLayers, selection: UUID?) {
+            let formsChanged = layers.treeForms != treeForms || layers.treeProfiles != treeProfiles
+            treeForms = layers.treeForms
+            treeProfiles = layers.treeProfiles
             if layers.reference !== reference {
                 reference = layers.reference
                 rebuildSites()
+                rebuildSiteTrees()
                 rebuildTrees(layers.trees)
                 rebuildContext(layers)
             } else {
-                if layers.trees != trees { rebuildTrees(layers.trees) }
+                if formsChanged { rebuildSiteTrees() }
+                if layers.trees != trees || formsChanged { rebuildTrees(layers.trees) }
                 if context == nil || context!.routes != layers.routes || context!.boundary != layers.boundary
                     || context!.tiles != layers.tiles
                 {
@@ -211,7 +224,8 @@ struct WireframeMap: UIViewRepresentable {
                 for id in [was, selection].compactMap({ $0 }) {
                     guard let marker = trees.first(where: { $0.id == id }) else { continue }
                     treeNodes[id]?.childNodes.first?.geometry?.firstMaterial?.diffuse.contents =
-                        WireframeTrees.color(marker.status, selected: id == selection)
+                        WireframeTrees.color(
+                            marker.status, selected: id == selection, inSurveyedCell: marker.inSurveyedCell)
                 }
             }
         }
@@ -247,7 +261,6 @@ struct WireframeMap: UIViewRepresentable {
                 let wallSurfaces = features.contains { $0.layer == .buildings && $0.line.kind == .wallSurface }
                 var buildings = VectorMesh(place: place)
                 var streets = VectorMesh(place: place)
-                var trees = VectorMesh(place: place)
                 for feature in features where seen.insert(feature.line.featureID).inserted {
                     let line = feature.line
                     if line.kind == .sensor || line.kind == .correction { continue }
@@ -258,7 +271,7 @@ struct WireframeMap: UIViewRepresentable {
                     }
                     switch feature.layer {
                     case .trees:
-                        if let tree = GerardusTree(line) { trees.add(tree) }
+                        break  // `rebuildSiteTrees`
                     case .footprints, .boxes, .buildings, .observed:
                         buildings.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
                         buildings.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
@@ -269,7 +282,24 @@ struct WireframeMap: UIViewRepresentable {
                 siteRoot.addChildNode(
                     buildings.node(color: UIColor(red: 0.75, green: 0.69, blue: 0.55, alpha: 0.55)))
                 siteRoot.addChildNode(streets.node(color: UIColor(red: 0.55, green: 0.55, blue: 0.45, alpha: 1)))
-                siteRoot.addChildNode(trees.node(color: UIColor(red: 0.42, green: 0.74, blue: 0.24, alpha: 1)))
+            }
+        }
+
+        /// Gerardus's trees, each in the shape the player gave it in AR when they did.
+        private func rebuildSiteTrees() {
+            for node in siteTreeRoot.childNodes { node.removeFromParentNode() }
+            guard let reference else { return }
+            var seen: Set<String> = []
+            for site in reference.sites {
+                let transform = SiteToScene(georeference: site.georeference, scene: anchor, elevation: elevation)
+                var trees = VectorMesh(place: { transform.place($0) })
+                for feature in site.vectors.features
+                where feature.layer == .trees && seen.insert(feature.line.featureID).inserted {
+                    guard var tree = GerardusTree(feature.line) else { continue }
+                    if let form = treeForms[tree.id] { tree.form = form }
+                    trees.add(tree)
+                }
+                siteTreeRoot.addChildNode(trees.node(color: UIColor(red: 0.42, green: 0.74, blue: 0.24, alpha: 1)))
             }
         }
 
@@ -298,11 +328,17 @@ struct WireframeMap: UIViewRepresentable {
             treeNodes = [:]
             for marker in markers where marker.status != .removed {
                 let base = scenePoint(marker.location)
-                let form = WireframeTrees.form(marker)
-                let figure = WireframeTree.figure(form, lean: marker.lean, at: base, detail: 0.5)
+                let key = MapLayers.censusWireframeID(marker.id)
+                let profile = treeProfiles[key]
+                let form = profile?.form ?? treeForms[key] ?? WireframeTrees.form(marker)
+                let figure =
+                    profile.map { WireframeTree.figure($0, lean: marker.lean, at: base, detail: 0.5) }
+                    ?? WireframeTree.figure(form, lean: marker.lean, at: base, detail: 0.5)
                 var mesh = VectorMesh(place: { $0 })
                 mesh.add(sceneSegments: figure.all)
-                let node = mesh.node(color: WireframeTrees.color(marker.status, selected: marker.id == selected))
+                let node = mesh.node(
+                    color: WireframeTrees.color(
+                        marker.status, selected: marker.id == selected, inSurveyedCell: marker.inSurveyedCell))
                 node.name = marker.id.uuidString
                 // An unseen box round the tree, so a tap on it finds it; lines alone are too thin to hit.
                 let width = CGFloat(max(form.crownWidth, 1))
@@ -334,11 +370,29 @@ struct WireframeMap: UIViewRepresentable {
             }
             contextRoot.addChildNode(
                 boundary.node(color: CanopyColor.brand.uiColor.withAlphaComponent(0.6), fill: false))
+            // Cells: level-16 tiles low with short posts (surveyed ones in the brand green), level-13 cells a
+            // little higher with tall posts, so both read from the ground and from above.
             var tiles = VectorMesh(place: { $0 })
+            var surveyed = VectorMesh(place: { $0 })
+            var cells13 = VectorMesh(place: { $0 })
             for tile in layers.tiles {
-                tiles.add(scenePolyline: tile.corners.map { scenePoint($0) + SIMD3(0, 0.1, 0) }, closed: true)
+                let level13 = tile.level <= 13
+                let lift = SIMD3<Float>(0, level13 ? 0.3 : 0.1, 0)
+                let corners = tile.corners.map { scenePoint($0) + lift }
+                let post = SIMD3<Float>(0, SiteWireframes.cellPostHeight(level: tile.level), 0)
+                var segments = Wireframe.polyline(corners, closed: true)
+                segments += corners.map { Wireframe.Segment(from: $0, to: $0 + post) }
+                if level13 {
+                    cells13.add(sceneSegments: segments)
+                } else if tile.surveyed {
+                    surveyed.add(sceneSegments: segments)
+                } else {
+                    tiles.add(sceneSegments: segments)
+                }
             }
             contextRoot.addChildNode(tiles.node(color: CanopyColor.lineStrong.uiColor, fill: false))
+            contextRoot.addChildNode(surveyed.node(color: CanopyColor.brand.uiColor, fill: false))
+            contextRoot.addChildNode(cells13.node(color: CanopyColor.inkMuted.uiColor, fill: false))
         }
 
         /// Low ground and high ground, in the scene's own tints: a dull green low, a pale one high.

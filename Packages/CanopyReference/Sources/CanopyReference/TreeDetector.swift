@@ -37,6 +37,14 @@ public struct TreeDetector: Sendable {
     public var vegetationClasses: Set<UInt32> = [1, 3, 4, 5]
     /// Trees whose top is closer than this to the edge of the data are dropped: their crowns may be cut off.
     public var edgeMargin = 8.0
+    /// Two tops closer than this (m) are one crown unless the canopy between them dips by a real gap: a big
+    /// cypress or eucalyptus has several bumps in its crown, each a local maximum, and each would otherwise be a
+    /// separate "tree" with a trunk under it.
+    public var mergeDistance = 7.0
+    /// The dip between two tops that keeps them apart: at least this many metres, or `mergeDipFraction` of the
+    /// lower top's height, whichever is more.
+    public var mergeDip = 1.5
+    public var mergeDipFraction = 0.10
 
     public init() {}
 
@@ -258,10 +266,22 @@ public struct TreeDetector: Sendable {
             }
         }
 
+        // 4b. Tops that are bumps on one crown: merge each into a higher top nearby when the canopy between them
+        //     never dips below the lower one by a real gap. The merged top's cell is owned by the higher one.
+        let (kept, mergedInto) = Self.mergeTops(
+            tops, smooth: smooth, nx: nx, cellSize: cellSize, distance: mergeDistance, dip: mergeDip,
+            dipFraction: mergeDipFraction)
+        let allTops = tops
+        tops = kept
+
         // 5. Crowns: each canopy cell climbs to its highest neighbour until it stops; the top it reaches (or the
         //    nearest kept top, for a suppressed local maximum) owns it.
         var owner = [Int32](repeating: -1, count: nx * ny)
         for (k, top) in tops.enumerated() { owner[top.j * nx + top.i] = Int32(k) }
+        for (index, keeper) in mergedInto {
+            let top = allTops[index]
+            owner[top.j * nx + top.i] = Int32(keeper)
+        }
         var path: [Int] = []
         func resolve(_ start: Int) -> Int32 {
             path.removeAll(keepingCapacity: true)
@@ -360,6 +380,51 @@ public struct TreeDetector: Sendable {
                     confidence: (confidence * 100).rounded() / 100))
         }
         return trees
+    }
+
+    /// Tops that are bumps on one crown, merged: highest first, a top joins the nearest higher kept top within
+    /// `distance` when the canopy on the straight line between them stays above the lower top less the dip. Returns
+    /// the kept tops in their original order and, for each merged top's index in `tops`, the index of its keeper
+    /// among the kept.
+    static func mergeTops(
+        _ tops: [(i: Int, j: Int, h: Float)], smooth: [Float], nx: Int, cellSize: Double, distance: Double,
+        dip: Double, dipFraction: Double
+    ) -> (kept: [(i: Int, j: Int, h: Float)], mergedInto: [Int: Int]) {
+        guard distance > 0, tops.count > 1 else { return (tops, [:]) }
+        let order = tops.indices.sorted { tops[$0].h > tops[$1].h }
+        let reach = distance / cellSize
+        var keepers: [Int] = []
+        var keeperOf: [Int: Int] = [:]
+        for index in order {
+            let top = tops[index]
+            let gap = Float(max(dip, dipFraction * Double(top.h)))
+            var best: (keeper: Int, d2: Double)?
+            for keeper in keepers {
+                let other = tops[keeper]
+                let di = Double(other.i - top.i)
+                let dj = Double(other.j - top.j)
+                let d2 = di * di + dj * dj
+                guard d2 <= reach * reach, d2 < (best?.d2 ?? .infinity) else { continue }
+                // The lowest canopy on the line between them.
+                let steps = max(2, Int(d2.squareRoot().rounded(.up)) * 2)
+                var lowest = Float.infinity
+                for step in 1..<steps {
+                    let t = Double(step) / Double(steps)
+                    let i = Int((Double(top.i) + di * t).rounded())
+                    let j = Int((Double(top.j) + dj * t).rounded())
+                    lowest = min(lowest, smooth[j * nx + i])
+                }
+                if lowest >= top.h - gap { best = (keeper, d2) }
+            }
+            if let best {
+                keeperOf[index] = best.keeper
+            } else {
+                keepers.append(index)
+            }
+        }
+        let keptIndices = tops.indices.filter { keeperOf[$0] == nil }
+        let position = Dictionary(uniqueKeysWithValues: keptIndices.enumerated().map { ($1, $0) })
+        return (keptIndices.map { tops[$0] }, keeperOf.mapValues { position[$0]! })
     }
 
     /// The median of eight values (the mean of the middle two), by a sorting network: no array, no allocation.

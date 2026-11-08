@@ -133,6 +133,23 @@ import Testing
         #expect(unmasked.count == Self.truth.count + 1, "the flat roof reads as one 'tree' without the mask")
     }
 
+    @Test func aLumpyCrownIsOneTreeButTwoCrownsWithAGapAreTwo() {
+        // One wide crown with two bumps 5 m apart that dip about two metres between them: a single cypress.
+        let lumpy = [(x: -2.5, y: 0.0, height: 24.0, radius: 9.0), (x: 2.5, y: 0.0, height: 23.0, radius: 9.0)]
+        let (points, ground) = Self.forest(lumpy)
+        let one = TreeDetector().detect(points: points, ground: ground)
+        #expect(one.count == 1, "found \(one.count)")
+        #expect(abs((one.first?.height ?? 0) - 24) < 0.5)
+        // Without merging the bumps read as two trees.
+        var unmerged = TreeDetector()
+        unmerged.mergeDistance = 0
+        #expect(unmerged.detect(points: points, ground: ground).count == 2)
+        // Two crowns 9 m apart with open ground between them stay two.
+        let pair = [(x: -4.5, y: 0.0, height: 20.0, radius: 3.5), (x: 4.5, y: 0.0, height: 19.0, radius: 3.5)]
+        let (pairPoints, pairGround) = Self.forest(pair)
+        #expect(TreeDetector().detect(points: pairPoints, ground: pairGround).count == 2)
+    }
+
     @Test func dropsTreesAtTheEdgeOfTheData() {
         let (points, ground) = Self.forest([(x: 57, y: 0, height: 20, radius: 4), (x: 0, y: 0, height: 20, radius: 4)])
         let found = TreeDetector().detect(points: points, ground: ground)
