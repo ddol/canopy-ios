@@ -83,7 +83,10 @@ Hidden for now (`Features.limbTagging`). To bring it back as an extension:
 - Show which areas are loaded on the map, and let a player drop one.
 - The AR overlay loads a site per L16 tile as the player walks; a city-scale walk should drop sites far behind and
   draw only what is within range of the camera as it moves, rather than within 150 m of where it was last rebuilt.
-- The wireframe shapes a player fits or adjusts in AR (height, foliage height and width, a tree's trunk by eye) are
-  shown and then forgotten: there is no field observation for height or crown yet, and nothing writes to Gerardus's
-  trees layer. Decide what a fitted shape is evidence of and record it.
+- The wireframe shapes and ring profiles a player fits or adjusts in AR are kept for the session only: there is no
+  field observation for height, crown or a profile yet, and nothing writes to Gerardus's trees layer. Decide what a
+  fitted profile is evidence of and record it.
+- Surveyed cells are kept on the phone; share them through a changeset so the server can count an area as done.
+- Merging the bumps of one crown cuts false trunks under big crowns, but detections saved to the server's trees layer
+  before it stay there until that area is loaded again and the server's copy is reconciled.
 - Selecting in AR covers trees only; buildings and street features are drawn but not pickable.

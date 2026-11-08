@@ -101,7 +101,8 @@ struct MapScreen: View {
     private var map: some View {
         let layers = MapLayers(
             state: model.census, boundary: model.boundary, visibility: visibility, region: viewport,
-            detectedLimit: detectedLimit, reference: model.mapReference)
+            detectedLimit: detectedLimit, reference: model.mapReference, surveyed: Set(model.surveyedCells.keys),
+            treeForms: model.treeForms, treeProfiles: model.treeProfiles)
         switch baseMap {
         case .apple:
             CanopyMapView(layers: layers, selection: $selection, viewport: viewport ?? .goldenGatePark)
@@ -214,7 +215,12 @@ struct MapScreen: View {
                 Toggle("Hazard tags", systemImage: "exclamationmark.triangle", isOn: $visibility.tags)
             }
             Toggle("Routes", systemImage: "point.topleft.down.to.point.bottomright.curvepath", isOn: $visibility.routes)
-            Toggle("S2 L16 tiles", systemImage: "square.grid.3x3", isOn: $visibility.tiles)
+            Toggle("S2 cells (L13 and L16)", systemImage: "square.grid.3x3", isOn: $visibility.tiles)
+            NavigationLink {
+                SurveyedCellsScreen(viewport: viewport ?? .goldenGatePark)
+            } label: {
+                Label("Surveyed cells (L16)", systemImage: "checkmark.square")
+            }
             Divider()
             Section("Aerial LiDAR") {
                 Button("Load real trees in view", systemImage: "tree") {

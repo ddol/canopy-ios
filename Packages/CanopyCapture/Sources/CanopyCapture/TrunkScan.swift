@@ -13,6 +13,49 @@ public struct TrunkCapture: Sendable {
     /// World position of the trunk centre at ground level.
     public var trunkBase: SIMD3<Float>
     public var cameraPosition: SIMD3<Float>
+    /// The raw depth points kept round the trunk, relative to `trunkBase`: x and z from the trunk's axis at the
+    /// ground, y above the ground. Empty on a device without scene depth.
+    public var points: [SIMD3<Float>] = []
+    /// The ground's height in the evidence mesh's frame, whose origin is on the trunk's axis at the height the scan
+    /// started.
+    public var groundHeight: Double = 0
+
+    /// A ring fitted to the scan `height` metres above the ground: a circle through the raw depth points in a band
+    /// there when it holds enough of them, else through the evidence mesh's slice. The centre is from the trunk's
+    /// base (x, z). Throws when the scan has too little of the trunk at that height.
+    public func fitSection(at height: Double, halfWidth: Float = 0.05) throws -> FittedCircle {
+        let analysis = TrunkAnalysis()
+        let band = points.slice(atHeight: Float(height), halfWidth: halfWidth)
+        let slice =
+            band.count >= analysis.minimumDepthPoints
+            ? band
+            : [-0.04, -0.02, 0, 0.02, 0.04].flatMap { evidence.slice(atHeight: Float(groundHeight + height + $0)) }
+        guard slice.count >= 12 else { throw TrunkAnalysisError.notEnoughPoints(slice.count) }
+        let circle: FittedCircle
+        do {
+            circle = try CircleFit.robustFit(slice)
+        } catch {
+            throw TrunkAnalysisError.notEnoughPoints(slice.count)
+        }
+        let arcDegrees = circle.arc * 180 / .pi
+        guard arcDegrees >= 60 else { throw TrunkAnalysisError.arcTooShort(degrees: arcDegrees) }
+        let diameter = 2 * circle.radius
+        guard analysis.plausibleDiameters.contains(diameter) else {
+            throw TrunkAnalysisError.implausibleDiameter(diameter)
+        }
+        return circle
+    }
+
+    /// `fitSection` applied to a profile's ring: its radius and centre from the scan, marked as fitted.
+    public func snapping(_ section: TreeSection) throws -> TreeSection {
+        let circle = try fitSection(at: section.height)
+        var snapped = section
+        snapped.radius = circle.radius
+        snapped.offset = circle.center
+        snapped.radiusUncertainty = circle.radiusUncertainty
+        snapped.source = .scan
+        return snapped
+    }
 }
 
 /// How far a trunk scan has got, for live feedback while the player walks round.
@@ -77,13 +120,16 @@ public enum TrunkScan {
         let trunkCenter = center + SIMD3(Float(analysis.center.x), 0, Float(analysis.center.y))
         let cropRadius = min(Double(radius), analysis.circle.radius + evidenceMargin)
         let evidence = world.cropped(around: trunkCenter, radius: Float(cropRadius), below: below, above: above)
+        let trunkBase = trunkCenter + SIMD3(0, Float(ground), 0)
         return TrunkCapture(
             analysis: analysis,
             evidence: evidence,
             glb: try GLB.data(for: evidence),
             cropRadius: cropRadius,
-            trunkBase: trunkCenter + SIMD3(0, Float(ground), 0),
-            cameraPosition: camera
+            trunkBase: trunkBase,
+            cameraPosition: camera,
+            points: points.cropped(around: trunkBase, radius: radius, below: 0.5, above: below + above),
+            groundHeight: ground
         )
     }
 

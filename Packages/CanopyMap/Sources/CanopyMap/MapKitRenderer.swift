@@ -49,9 +49,17 @@ struct MapKitMap: View {
                 }
             }
             ForEach(layers.tiles) { tile in
-                MapPolygon(coordinates: tile.corners.map(CLLocationCoordinate2D.init))
-                    .foregroundStyle(.clear)
-                    .stroke(Color.canopyLineStrong, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                if tile.level <= 13 {
+                    MapPolygon(coordinates: tile.corners.map(CLLocationCoordinate2D.init))
+                        .foregroundStyle(.clear)
+                        .stroke(Color.canopyInkMuted, lineWidth: 2)
+                } else {
+                    MapPolygon(coordinates: tile.corners.map(CLLocationCoordinate2D.init))
+                        .foregroundStyle(tile.surveyed ? Color.canopyBrand.opacity(0.14) : .clear)
+                        .stroke(
+                            tile.surveyed ? Color.canopyBrand : Color.canopyLineStrong,
+                            style: StrokeStyle(lineWidth: tile.surveyed ? 1.5 : 1, dash: tile.surveyed ? [] : [4, 3]))
+                }
             }
             ForEach(layers.routes) { route in
                 MapPolyline(coordinates: route.points.map(CLLocationCoordinate2D.init))

@@ -1,3 +1,4 @@
+import CanopyCapture
 import CanopyMap
 import CanopyModel
 import CanopyPlayers
@@ -33,6 +34,13 @@ final class AppModel {
     private(set) var scanCount = 0
     /// The tiles pulled from the shared map so far (see AppModel+SharedMap).
     private(set) var followedTiles: Set<S2CellID> = []
+    /// The level-16 cells the player has marked as surveyed (see AppModel+Survey).
+    private(set) var surveyedCells: [S2CellID: SurveyedCell] = [:]
+    /// Tree shapes the player has adjusted by eye in AR, by wireframe id (`census:<uuid>` or a Gerardus feature id),
+    /// drawn the same on the wireframe map. In memory only.
+    var treeForms: [String: TreeForm] = [:]
+    /// Ring-by-ring profiles fitted over scanned trunks in AR, by the same ids. In memory only.
+    var treeProfiles: [String: TreeProfile] = [:]
     /// Bookkeeping for syncing on its own (`syncSoon`).
     @ObservationIgnored var pendingSync: Task<Void, Never>?
     @ObservationIgnored var syncAgain = false
@@ -174,6 +182,8 @@ final class AppModel {
         followedTiles = Set(((try? await store.sharedTiles()) ?? [:]).keys)
         scanCount = (try? await store.evidenceCount()) ?? 0
         candidateSources = await store.candidateSources()
+        surveyedCells = Dictionary(
+            ((try? await store.surveyedCells()) ?? []).map { ($0.cell, $0) }, uniquingKeysWith: { _, last in last })
     }
 
     // MARK: Census actions

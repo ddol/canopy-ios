@@ -1,5 +1,6 @@
 import CanopyCapture
 import CanopyDesign
+import CanopyMap
 import CanopyModel
 import CanopyStore
 import QuickLook
@@ -54,10 +55,26 @@ struct MeasurementSheet: View {
                         LabeledContent("Trunk diameter by eye") {
                             Text(format.length(form.trunkDiameter, fractionDigits: 2)).font(CanopyFont.mono())
                         }
+                        if let profile = measurement.profile {
+                            ForEach(profile.sections.filter(\.isKept)) { ring in
+                                LabeledContent(
+                                    ring.part.label + " " + format.length(ring.height, fractionDigits: 2) + " up"
+                                ) {
+                                    Text(
+                                        format.length(ring.diameter, fractionDigits: 2)
+                                            + (ring.source == .confirmed ? " ✓" : " (scan)")
+                                    )
+                                    .font(CanopyFont.mono())
+                                }
+                            }
+                        }
                     } header: {
-                        Text("Fitted by eye")
+                        Text("Fitted in AR")
                     } footer: {
-                        Text("From the wireframe you matched to the tree. Not saved with the measurement yet.")
+                        Text(
+                            "From the wireframe you matched to the tree. Rings marked (scan) were fitted to the scan's "
+                                + "points at that height; ✓ ones you confirmed against the tree. Not saved with the "
+                                + "measurement yet.")
                     }
                 }
 
@@ -145,7 +162,11 @@ struct MeasurementSheet: View {
             tree: measurement.target,
             position: measurement.position
         )
-        if saved != nil {
+        if let saved {
+            // The wireframe drawn for this tree, in AR and on the map, is now the one fitted to it.
+            let key = MapLayers.censusWireframeID(saved.id)
+            if let form = measurement.form { model.treeForms[key] = form }
+            if let profile = measurement.profile { model.treeProfiles[key] = profile }
             shareURL = try? model.shareableGLB(BlobStore.reference(for: capture.glb))
             onSaved()
         }

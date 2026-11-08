@@ -227,3 +227,39 @@ extension LocalStore {
         try databaseForTesting.query("SELECT count(*) FROM \(table)") { $0.int(0) }.first ?? 0
     }
 }
+
+@Suite struct SurveyedCellTests {
+    let player = PlayerID(rawValue: "T:_tester")
+
+    @Test func surveyedCellsAreKeptReplacedAndCleared() async throws {
+        let store = try LocalStore.inMemory()
+        let cell = GeoPoint(latitude: 37.7699, longitude: -122.4757).tile
+        try await store.setSurveyed(
+            SurveyedCell(cell: cell, playerID: player, confirmed: 3, rejected: 1, unreviewed: 7))
+        try await store.setSurveyed(
+            SurveyedCell(cell: cell, playerID: player, confirmed: 4, rejected: 1, unreviewed: 6))
+        let cells = try await store.surveyedCells()
+        #expect(cells.count == 1)
+        #expect(cells.first?.confirmed == 4)
+        #expect(cells.first?.cell == cell)
+        try await store.clearSurveyed(cell)
+        #expect(try await store.surveyedCells().isEmpty)
+    }
+
+    @Test func aCellCensusCountsTreesByWhatThePlayerBelieves() {
+        let point = GeoPoint(latitude: 37.7699, longitude: -122.4757)
+        func tree(_ status: CountStatus, proposed: CountStatus? = nil) -> Tree {
+            Tree(
+                meta: RecordMeta(playerID: player, chunk: point.chunk),
+                position: Position(geo: point, covariance: .isotropic(horizontal: 2, vertical: 2)),
+                countStatus: status, proposedStatus: proposed)
+        }
+        let trees = [tree(.detected), tree(.detected), tree(.confirmed), tree(.detected, proposed: .removed)]
+        let census = try! #require(CellCensus.byCell(trees)[point.tile])
+        #expect(census.detected == 2)
+        #expect(census.confirmed == 1)
+        #expect(census.rejected == 1)
+        #expect(census.reviewed == 2)
+        #expect(census.total == 4)
+    }
+}

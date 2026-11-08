@@ -43,17 +43,39 @@ struct TreeFormSliders: View {
     }
 }
 
-/// The sliders for the tree being fitted over a scanned trunk, and the buttons to move it, go back to scanning, or
-/// go on to the measurement.
+/// The tree being fitted over a scanned trunk: its shape by four sliders, or ring by ring (each snapped to the scan
+/// and checked against the tree), and the buttons to move it, go back to scanning, or go on to the measurement.
 struct TreeFitPanel: View {
-    @Binding var form: TreeForm
+    @Binding var profile: TreeProfile
+    @Binding var selectedSection: TreeSection.ID?
+    var onSnap: () -> Void
     var onMoveHere: () -> Void
     var onBack: () -> Void
     var onMeasurement: () -> Void
 
+    enum Mode: String, CaseIterable {
+        case shape
+        case rings
+    }
+
+    @State private var mode = Mode.shape
+
     var body: some View {
         VStack(spacing: Spacing.xs) {
-            TreeFormSliders(form: $form)
+            Picker("Edit", selection: $mode) {
+                Text("Shape").tag(Mode.shape)
+                Text("Rings").tag(Mode.rings)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("fit-mode")
+            switch mode {
+            case .shape:
+                // The rings fitted or confirmed against the tree stay; the rest follow the sliders.
+                TreeFormSliders(
+                    form: Binding(get: { profile.form }, set: { profile = profile.following($0.clamped) }))
+            case .rings:
+                TreeSectionEditor(profile: $profile, selected: $selectedSection, onSnap: onSnap)
+            }
             HStack(spacing: Spacing.s) {
                 Button("Back", systemImage: "chevron.backward", action: onBack)
                     .buttonStyle(.canopySecondary)
@@ -71,6 +93,170 @@ struct TreeFitPanel: View {
         .padding(Spacing.s)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.large))
         .accessibilityIdentifier("tree-fit")
+        .onChange(of: mode) {
+            if mode == .rings, selectedSection == nil {
+                selectedSection =
+                    profile.trunk.first { abs($0.height - DBH.standardHeight) < 0.01 }?.id
+                    ?? profile.sections.first?.id
+            }
+            if mode == .shape { selectedSection = nil }
+        }
+    }
+}
+
+/// The rings of a profile: one chip per ring to pick it, sliders for the picked ring's height and width, and
+/// snapping it to the scan, confirming it, adding a ring above it or taking it out.
+struct TreeSectionEditor: View {
+    @Binding var profile: TreeProfile
+    @Binding var selected: TreeSection.ID?
+    var onSnap: () -> Void
+    private let format = QuantityFormat()
+
+    private var section: TreeSection? { selected.flatMap { profile.section($0) } }
+
+    var body: some View {
+        VStack(spacing: Spacing.xs) {
+            ScrollView(.horizontal) {
+                HStack(spacing: Spacing.xs) {
+                    ForEach(profile.sections) { ring in
+                        chip(ring)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+            .accessibilityIdentifier("fit-rings")
+            if let section {
+                slider(
+                    "Height", value: Binding(get: { section.height }, set: { reshape(height: $0) }),
+                    in: TreeProfile.heights, step: 0.05, digits: 2, id: "ring-height")
+                slider(
+                    section.part == .trunk ? "Trunk diameter" : "Foliage width",
+                    value: Binding(get: { section.diameter }, set: { reshape(radius: $0 / 2) }),
+                    in: section.part == .trunk ? TreeForm.trunkDiameters : TreeForm.crownWidths,
+                    step: section.part == .trunk ? 0.01 : 0.25, digits: section.part == .trunk ? 2 : 1,
+                    id: "ring-width")
+                HStack(spacing: Spacing.s) {
+                    Button("Snap to scan", systemImage: "scope", action: onSnap)
+                        .accessibilityIdentifier("ring-snap")
+                    Button(
+                        section.source == .confirmed ? "Confirmed" : "Looks right",
+                        systemImage: section.source == .confirmed ? "checkmark.seal.fill" : "checkmark.seal"
+                    ) {
+                        update { $0.source = $0.source == .confirmed ? ($0.offset == nil ? .eye : .scan) : .confirmed }
+                    }
+                    .tint(section.source == .confirmed ? Color.canopyBrand : nil)
+                    .accessibilityIdentifier("ring-confirm")
+                    Spacer(minLength: 0)
+                    Button("Add ring above", systemImage: "plus.circle") {
+                        if let added = profile.addSection(above: section.id) { selected = added }
+                    }
+                    .labelStyle(.iconOnly)
+                    .accessibilityIdentifier("ring-add")
+                    Button("Remove ring", systemImage: "minus.circle", role: .destructive) {
+                        let part = section.part
+                        profile.removeSection(section.id)
+                        selected = profile.sections.last { $0.part == part }?.id ?? profile.sections.first?.id
+                    }
+                    .labelStyle(.iconOnly)
+                    .disabled(profile.sections.filter { $0.part == section.part }.count <= 1)
+                    .accessibilityIdentifier("ring-remove")
+                }
+                .buttonStyle(.canopySecondary)
+                .labelStyle(.titleAndIcon)
+                .font(.footnote)
+                Text(describe(section))
+                    .font(CanopyFont.mono(.caption2))
+                    .foregroundStyle(Color.canopyInkMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("Pick a ring.").font(.footnote).foregroundStyle(Color.canopyInkMuted)
+            }
+        }
+    }
+
+    private func chip(_ ring: TreeSection) -> some View {
+        let picked = ring.id == selected
+        return Button {
+            selected = ring.id
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: ring.part == .trunk ? "circle" : "leaf")
+                Text(format.length(ring.height, fractionDigits: ring.height < 10 ? 2 : 1))
+                if ring.source == .confirmed {
+                    Image(systemName: "checkmark.seal.fill")
+                } else if ring.source == .scan {
+                    Image(systemName: "scope")
+                }
+            }
+            .font(CanopyFont.mono(.caption))
+            .padding(.horizontal, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
+            .background(tint(ring).opacity(picked ? 0.3 : 0.12), in: Capsule())
+            .overlay(Capsule().strokeBorder(picked ? tint(ring) : .clear, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(ring.part.label) ring \(format.length(ring.height, fractionDigits: 2)) up")
+        .accessibilityAddTraits(picked ? .isSelected : [])
+    }
+
+    private func tint(_ ring: TreeSection) -> Color {
+        switch ring.source {
+        case .eye: Color.canopyInkMuted
+        case .scan: Color.canopySurvey
+        case .confirmed: Color.canopyBrand
+        }
+    }
+
+    private func describe(_ ring: TreeSection) -> String {
+        var text = ring.part.label + " " + format.length(ring.height, fractionDigits: 2) + " up, "
+        text += (ring.part == .trunk ? "⌀ " : "") + format.length(ring.diameter, fractionDigits: 2)
+        if let sigma = ring.radiusUncertainty, ring.source != .eye {
+            text += " ± " + format.length(2 * sigma, fractionDigits: 3)
+        }
+        switch ring.source {
+        case .eye: text += " · by eye"
+        case .scan: text += " · fitted to the scan"
+        case .confirmed: text += " · confirmed"
+        }
+        return text
+    }
+
+    /// Moves or resizes the picked ring by hand: it is then no longer the scan's fit.
+    private func reshape(height: Double? = nil, radius: Double? = nil) {
+        guard var ring = section else { return }
+        if let height { ring.height = height }
+        if let radius { ring.radius = radius }
+        if ring.height != section?.height || ring.radius != section?.radius {
+            ring.source = .eye
+            ring.offset = nil
+            ring.radiusUncertainty = nil
+        }
+        profile[ring.id] = ring
+    }
+
+    private func update(_ change: (inout TreeSection) -> Void) {
+        guard var ring = section else { return }
+        change(&ring)
+        profile[ring.id] = ring
+    }
+
+    private func slider(
+        _ label: String, value: Binding<Double>, in range: ClosedRange<Double>, step: Double, digits: Int, id: String
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(label).font(.footnote)
+                Spacer()
+                Text(format.length(value.wrappedValue, fractionDigits: digits))
+                    .font(CanopyFont.mono(.footnote))
+                    .foregroundStyle(Color.canopyInkMuted)
+            }
+            Slider(value: value, in: range, step: step) {
+                Text(label)
+            }
+            .tint(Color.canopySurvey)
+            .accessibilityIdentifier(id)
+        }
     }
 }
 

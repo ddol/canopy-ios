@@ -23,7 +23,7 @@ struct LiDARCensusView: View {
     @State private var fit: TreeFit?
 
     // The site overlay.
-    @State private var overlayLayers: Set<SiteWireframes.Layer> = [.trees, .buildings]
+    @State private var overlayLayers: Set<SiteWireframes.Layer> = [.trees, .buildings, .cells]
     @State private var showsCensusTrees = true
     /// The AR session origin's map position, from the best GPS fix so far and the camera's offset then.
     @State private var sessionOrigin: GeoPoint?
@@ -31,9 +31,8 @@ struct LiDARCensusView: View {
     /// The tile whose site was last asked for on arrival, so a slow server is asked once.
     @State private var autoLoadTile: S2CellID?
     @State private var loadingVectors = false
-    /// The tree picked by tapping, and the shapes the player has adjusted, by wireframe id.
+    /// The tree picked by tapping; the shapes the player adjusts live on the model, shared with the map.
     @State private var selection: ARTreeSelection?
-    @State private var treeForms: [String: TreeForm] = [:]
     private let format = QuantityFormat()
 
     var body: some View {
@@ -106,14 +105,27 @@ struct LiDARCensusView: View {
     private var bottomPanel: some View {
         if fit != nil {
             TreeFitPanel(
-                form: fitFormBinding, onMoveHere: moveTreeHere, onBack: stopFitting, onMeasurement: showMeasurement)
+                profile: fitProfileBinding, selectedSection: fitSectionBinding, onSnap: snapSelectedSection,
+                onMoveHere: moveTreeHere, onBack: stopFitting, onMeasurement: showMeasurement)
         } else if let selection {
             SelectedTreePanel(
-                selection: selection, form: selectedFormBinding, isAdjusted: treeForms[selection.id] != nil,
+                selection: selection, form: selectedFormBinding, isAdjusted: model.treeForms[selection.id] != nil,
                 onReset: resetSelectedForm, onScan: startScan, onDone: deselect)
         } else {
             controls
         }
+    }
+
+    /// What the whole overlay is drawn from: the loaded sites, the placement, the layers and the adjusted shapes.
+    private var overlayInputs: OverlayInputs {
+        OverlayInputs(
+            sites: model.loadedVectors.count, registration: registered?.registrationID, origin: sessionOrigin,
+            layers: overlayLayers, forms: model.treeForms)
+    }
+
+    /// What the census trees and cells are drawn from.
+    private var censusInputs: [Int] {
+        [showsCensusTrees ? 1 : 0, model.census.trees.count, model.surveyedCells.count, model.treeProfiles.count]
     }
 
     /// What the overlay follows: the fix, taps, loaded sites, the registration, the placement and the layer choices.
@@ -126,12 +138,8 @@ struct LiDARCensusView: View {
             .onChange(of: capture.lastTap) {
                 if let tap = capture.lastTap { handleTap(at: tap.point) }
             }
-            .onChange(of: model.loadedVectors.count) { rebuildOverlay() }
-            .onChange(of: registered?.registrationID) { rebuildOverlay() }
-            .onChange(of: sessionOrigin) { rebuildOverlay() }
-            .onChange(of: overlayLayers) { rebuildOverlay() }
-            .onChange(of: showsCensusTrees) { rebuildOverlay(site: false) }
-            .onChange(of: model.census.trees.count) { rebuildOverlay(site: false) }
+            .onChange(of: overlayInputs) { rebuildOverlay() }
+            .onChange(of: censusInputs) { rebuildOverlay(site: false) }
             .onChange(of: model.aerial) {
                 guard loadingVectors, case .working(let message) = model.aerial else { return }
                 notice = message
@@ -200,6 +208,20 @@ struct LiDARCensusView: View {
                 }
                 Toggle("Census trees", isOn: $showsCensusTrees)
             }
+            if let cell = currentCell {
+                Section("This cell") {
+                    Text(cellSummary(cell))
+                    if model.isSurveyed(cell) {
+                        Button("Unmark surveyed", systemImage: "xmark.square") {
+                            Task { await model.unmarkSurveyed(cell) }
+                        }
+                    } else {
+                        Button("Mark this cell surveyed", systemImage: "checkmark.square") {
+                            Task { await model.markSurveyed(cell) }
+                        }
+                    }
+                }
+            }
             Section("Gerardus") {
                 Button("Load vectors here", systemImage: "arrow.down.circle") {
                     if let here = location.geoPoint { loadVectors(around: here) }
@@ -249,6 +271,31 @@ struct LiDARCensusView: View {
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("overlay-status")
         }
+        if let cell = currentCell {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: model.isSurveyed(cell) ? "checkmark.square" : "square.grid.3x3")
+                Text(cellSummary(cell))
+            }
+            .font(CanopyFont.mono(.caption))
+            .foregroundStyle(model.isSurveyed(cell) ? Color.canopyBrand : Color.canopyInkMuted)
+            .padding(.horizontal, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
+            .background(.thinMaterial, in: Capsule())
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("cell-status")
+        }
+    }
+
+    /// The level-16 cell the player stands in.
+    private var currentCell: S2CellID? { (location.geoPoint ?? sessionOrigin)?.tile }
+
+    /// "L16 80858-7b53 · 12 of 40 looked at", or "· surveyed" once it is marked.
+    private func cellSummary(_ cell: S2CellID) -> String {
+        let counts = model.cellCensus(cell)
+        let state =
+            model.isSurveyed(cell)
+            ? "surveyed, \(counts.detected) left as detected" : "\(counts.reviewed) of \(counts.total) looked at"
+        return "L16 " + cell.familyDisplay + " · " + state
     }
 
     private var overlayStatus: String {
@@ -431,13 +478,22 @@ struct LiDARCensusView: View {
                 return
             }
             // The fitted tree starts from the selected tree's shape when one is selected, else from the DBH.
-            var form = selection.map { treeForms[$0.id] ?? $0.baseForm } ?? TreeForm(dbh: result.analysis.dbh)
+            var form = selection.map { model.treeForms[$0.id] ?? $0.baseForm } ?? TreeForm(dbh: result.analysis.dbh)
             form.trunkDiameter = result.analysis.dbh.diameter.value
             form = form.clamped
             deselect()
-            fit = TreeFit(capture: result, position: position, form: form, base: result.trunkBase)
-            capture.showTree(form, lean: result.analysis.lean, at: result.trunkBase)
-            notice = "Step back and move the sliders until the wireframe matches the tree."
+            // The breast-height ring starts fitted to the scan, as the DBH was.
+            var profile = TreeProfile(form: form)
+            if let breast = profile.trunk.first(where: { abs($0.height - DBH.standardHeight) < 0.01 }),
+                let snapped = try? result.snapping(breast)
+            {
+                profile[breast.id] = snapped
+            }
+            let fit = TreeFit(capture: result, position: position, profile: profile, base: result.trunkBase)
+            self.fit = fit
+            showFit(fit)
+            notice =
+                "Step back and move the sliders until the wireframe matches the tree. Rings: snap each to the scan and check it."
         } catch {
             notice = Self.describe(error)
         }
@@ -460,16 +516,58 @@ struct LiDARCensusView: View {
 
     // MARK: Fitting the wireframe tree
 
-    /// A slider's binding into the fitted form: every change redraws the tree.
-    private var fitFormBinding: Binding<TreeForm> {
+    /// Draws the fitted tree as it stands, with the ring being edited picked out.
+    private func showFit(_ fit: TreeFit) {
+        capture.showTree(fit.profile, lean: fit.capture.analysis.lean, at: fit.base, highlight: fit.selectedSection)
+    }
+
+    /// The panel's binding into the fitted profile: every change redraws the tree.
+    private var fitProfileBinding: Binding<TreeProfile> {
         Binding(
-            get: { fit?.form ?? TreeForm(trunkDiameter: 0.3, height: 8, crownHeight: 5, crownWidth: 5) },
-            set: { form in
+            get: {
+                fit?.profile
+                    ?? TreeProfile(form: TreeForm(trunkDiameter: 0.3, height: 8, crownHeight: 5, crownWidth: 5))
+            },
+            set: { profile in
                 guard var fit else { return }
-                fit.form = form.clamped
+                fit.profile = profile
+                if let selected = fit.selectedSection, profile.section(selected) == nil { fit.selectedSection = nil }
                 self.fit = fit
-                capture.showTree(fit.form, lean: fit.capture.analysis.lean, at: fit.base)
+                showFit(fit)
             })
+    }
+
+    /// The ring being edited.
+    private var fitSectionBinding: Binding<TreeSection.ID?> {
+        Binding(
+            get: { fit?.selectedSection },
+            set: { id in
+                guard var fit else { return }
+                fit.selectedSection = id
+                self.fit = fit
+                showFit(fit)
+            })
+    }
+
+    /// Fits the ring being edited to the scan at its height.
+    private func snapSelectedSection() {
+        guard var fit, let id = fit.selectedSection, let section = fit.profile.section(id) else { return }
+        do {
+            fit.profile[id] = try fit.capture.snapping(section)
+            self.fit = fit
+            showFit(fit)
+            notice =
+                "Ring fitted to the scan " + format.length(section.height, fractionDigits: 2)
+                + " up. Tap \"Looks right\" if it matches the tree."
+        } catch TrunkAnalysisError.notEnoughPoints {
+            notice =
+                "The scan has too little of the tree " + format.length(section.height, fractionDigits: 2)
+                + " up to fit a ring there."
+        } catch TrunkAnalysisError.arcTooShort {
+            notice = "The scan covers too little of the trunk at that height. Walk round it and scan again."
+        } catch {
+            notice = Self.describe(error)
+        }
     }
 
     /// Stands the tree on the ground under the centre of the view instead.
@@ -487,7 +585,7 @@ struct LiDARCensusView: View {
             fit.position = position(of: fit.base, camera: hit.cameraPosition, device: device)
         }
         self.fit = fit
-        capture.showTree(fit.form, lean: fit.capture.analysis.lean, at: fit.base)
+        showFit(fit)
         notice = nil
     }
 
@@ -502,7 +600,8 @@ struct LiDARCensusView: View {
         guard let fit else { return }
         notice = nil
         capture.pause()
-        measurement = Measurement(capture: fit.capture, position: fit.position, target: target, form: fit.form)
+        measurement = Measurement(
+            capture: fit.capture, position: fit.position, target: target, form: fit.form, profile: fit.profile)
     }
 
     // MARK: Placing the session
@@ -596,7 +695,7 @@ struct LiDARCensusView: View {
         let sites = placedSites()
         let camera = capture.cameraPosition ?? .zero
         if site {
-            for layer in SiteWireframes.Layer.allCases {
+            for layer in SiteWireframes.Layer.allCases where layer.isSiteLayer {
                 let name = "site-" + layer.rawValue
                 guard overlayLayers.contains(layer), !sites.isEmpty else {
                     capture.hideWireframes(named: name)
@@ -609,7 +708,7 @@ struct LiDARCensusView: View {
                     let centre = site.frame.site(ofARKit: camera)
                     for item in SiteWireframes.items(
                         site.loaded.vectors.features, layer: layer, frame: site.frame,
-                        centre: SIMD2(Float(centre.x), Float(centre.y)), forms: treeForms)
+                        centre: SIMD2(Float(centre.x), Float(centre.y)), forms: model.treeForms)
                     where seen.insert(item.id).inserted {
                         items.append(item)
                     }
@@ -621,39 +720,90 @@ struct LiDARCensusView: View {
             }
         }
         rebuildCensusTrees(sites: sites)
+        rebuildCells(sites: sites)
     }
+
+    /// Where a map point is on the ground in the AR world: on a loaded site's ground grid when one has it, else on
+    /// the ground under the session origin. Nil until the session is placed.
+    private func arGroundPoint(_ geo: GeoPoint, sites: [PlacedSite], arGround: Float) -> SIMD3<Float>? {
+        if let site = sites.first(where: {
+            ARSiteFrame.groundHeight($0.loaded.vectors.ground, at: $0.frame.site(of: geo)) != nil
+        }) ?? sites.first {
+            let xy = site.frame.site(of: geo)
+            let z =
+                ARSiteFrame.groundHeight(site.loaded.vectors.ground, at: xy)
+                ?? Self.typicalGround(site.loaded.vectors)
+            return site.frame.arkit(SIMD3<Double>(xy.x, xy.y, z))
+        }
+        guard let sessionOrigin else { return nil }
+        let enu = LocalFrame(origin: sessionOrigin).enu(of: geo)
+        return SIMD3(Float(enu.east), arGround, Float(-enu.north))
+    }
+
+    /// The S2 cells round the player on the ground: level-16 tiles (surveyed ones in green) and their level-13
+    /// parents, each with posts at its corners.
+    private func rebuildCells(sites: [PlacedSite]) {
+        let names = ["cells-l16", "cells-l16-surveyed", "cells-l13"]
+        guard overlayLayers.contains(.cells), let here = location.geoPoint ?? sessionOrigin else {
+            for name in names { capture.hideWireframes(named: name) }
+            return
+        }
+        let arGround = arGroundAtOrigin
+        let cells = SiteWireframes.cells(around: here)
+        func item(_ cell: S2CellID) -> WireframeItem {
+            SiteWireframes.cellItem(cell) { geo in arGroundPoint(geo, sites: sites, arGround: arGround) ?? .zero }
+        }
+        let surveyed = cells.level16.filter(model.isSurveyed)
+        let open = cells.level16.filter { !model.isSurveyed($0) }
+        capture.showWireframes(
+            WireframeLayer(name: names[0], items: open.map(item), color: Self.cellColor, lineWidth: 0.02))
+        capture.showWireframes(
+            WireframeLayer(
+                name: names[1], items: surveyed.map(item), color: Self.surveyedCellColor, lineWidth: 0.03))
+        capture.showWireframes(
+            WireframeLayer(name: names[2], items: cells.level13.map(item), color: Self.cell13Color, lineWidth: 0.05))
+    }
+
+    static let cellColor = SIMD4<Float>(0.62, 0.68, 0.60, 1)
+    static let surveyedCellColor = SIMD4<Float>(0.35, 0.78, 0.45, 1)
+    static let cell13Color = SIMD4<Float>(0.45, 0.62, 0.90, 1)
 
     /// The census's trees within 120 m, as wireframes of what is known about them.
     private func rebuildCensusTrees(sites: [PlacedSite]) {
         let name = "census-trees"
         guard showsCensusTrees, let here = location.geoPoint ?? sessionOrigin else {
             capture.hideWireframes(named: name)
+            capture.hideWireframes(named: name + "-surveyed")
             return
         }
         let arGround = arGroundAtOrigin
-        let items = model.census.trees(near: here, within: 120, limit: 400).compactMap { tree, _ -> WireframeItem? in
-            let geo = tree.position.geo
-            let base: SIMD3<Float>
-            if let site = sites.first(where: {
-                ARSiteFrame.groundHeight($0.loaded.vectors.ground, at: $0.frame.site(of: geo)) != nil
-            }) ?? sites.first {
-                let xy = site.frame.site(of: geo)
-                let z =
-                    ARSiteFrame.groundHeight(site.loaded.vectors.ground, at: xy)
-                    ?? Self.typicalGround(site.loaded.vectors)
-                base = site.frame.arkit(SIMD3<Double>(xy.x, xy.y, z))
-            } else if let sessionOrigin {
-                let enu = LocalFrame(origin: sessionOrigin).enu(of: geo)
-                base = SIMD3(Float(enu.east), arGround, Float(-enu.north))
-            } else {
-                return nil
-            }
+        var items: [WireframeItem] = []
+        // Detections in a surveyed cell were looked over and left: drawn faint and thin.
+        var surveyed: [WireframeItem] = []
+        for (tree, _) in model.census.trees(near: here, within: 120, limit: 400) {
+            guard let base = arGroundPoint(tree.position.geo, sites: sites, arGround: arGround) else { continue }
             let id = ARTreeSelection.censusPrefix + tree.id.uuidString
-            return SiteWireframes.treeItem(
-                id: id, form: treeForms[id] ?? Self.censusForm(tree), lean: tree.lean, at: base)
+            var item = SiteWireframes.treeItem(
+                id: id, form: model.treeProfiles[id]?.form ?? model.treeForms[id] ?? Self.censusForm(tree),
+                lean: tree.lean, at: base)
+            if let profile = model.treeProfiles[id] {
+                item.segments =
+                    WireframeTree.figure(
+                        profile, lean: tree.lean, at: base, detail: SiteWireframes.treeDetail
+                    ).all
+            }
+            if tree.effectiveStatus == .detected, model.isSurveyed(tree.position.tile) {
+                surveyed.append(item)
+            } else {
+                items.append(item)
+            }
         }
         capture.showWireframes(
             WireframeLayer(name: name, items: items, color: Self.censusColor, lineWidth: 0.015))
+        capture.showWireframes(
+            WireframeLayer(
+                name: name + "-surveyed", items: surveyed, color: Self.censusColor * SIMD4(1, 1, 1, 0.35),
+                lineWidth: 0.008))
     }
 
     /// What the census knows of a tree's shape: its DBH and height when measured, a middling tree otherwise.
@@ -674,6 +824,7 @@ struct LiDARCensusView: View {
         case .trees: CaptureSession.crownColor
         case .buildings: SIMD4(0.75, 0.69, 0.55, 1)
         case .streets: SIMD4(0.55, 0.55, 0.45, 1)
+        case .cells: cellColor
         }
     }
 
@@ -726,43 +877,18 @@ struct LiDARCensusView: View {
     private var selectedFormBinding: Binding<TreeForm> {
         Binding(
             get: {
-                selection.map { treeForms[$0.id] ?? $0.baseForm }
+                selection.map { model.treeForms[$0.id] ?? $0.baseForm }
                     ?? TreeForm(dbh: DBH(diameter: Quantity(0.3, uncertainty: 0.1), method: .estimate))
             },
             set: { form in
                 guard let selection else { return }
-                treeForms[selection.id] = form.clamped
-                rebuildTrees(for: selection)
+                model.treeForms[selection.id] = form.clamped
             })
     }
 
     private func resetSelectedForm() {
         guard let selection else { return }
-        treeForms[selection.id] = nil
-        rebuildTrees(for: selection)
-    }
-
-    /// Redraws the trees a selection belongs to: the census layer, or the site trees.
-    private func rebuildTrees(for selection: ARTreeSelection) {
-        if selection.censusID != nil {
-            rebuildOverlay(site: false)
-        } else {
-            let sites = placedSites()
-            let camera = capture.cameraPosition ?? .zero
-            var seen: Set<String> = []
-            var items: [WireframeItem] = []
-            for site in sites {
-                let centre = site.frame.site(ofARKit: camera)
-                for item in SiteWireframes.items(
-                    site.loaded.vectors.features, layer: .trees, frame: site.frame,
-                    centre: SIMD2(Float(centre.x), Float(centre.y)), forms: treeForms)
-                where seen.insert(item.id).inserted {
-                    items.append(item)
-                }
-            }
-            capture.showWireframes(
-                WireframeLayer(name: "site-trees", items: items, color: Self.color(of: .trees), lineWidth: 0.015))
-        }
+        model.treeForms[selection.id] = nil
     }
 
     private func gerardusTree(_ id: String) -> GerardusTree? {
@@ -852,15 +978,23 @@ struct Measurement: Identifiable {
     let target: Tree?
     /// The tree's shape as the player fitted it by eye in AR, if they did.
     var form: TreeForm?
+    /// The rings of that shape, with the ones fitted to the scan and checked against the tree marked.
+    var profile: TreeProfile?
 }
 
 /// A measured trunk with the wireframe tree the player is fitting over it.
 struct TreeFit {
     var capture: TrunkCapture
     var position: Position
-    var form: TreeForm
+    /// The rings of the tree, from the ground up.
+    var profile: TreeProfile
     /// World point the tree stands on.
     var base: SIMD3<Float>
+    /// The ring being edited, drawn in the highlight colour.
+    var selectedSection: TreeSection.ID?
+
+    /// The four-slider shape the rings sum to.
+    var form: TreeForm { profile.form }
 }
 
 /// A crosshair at the centre of the AR view.
@@ -884,4 +1018,13 @@ struct ARViewContainer: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+/// The inputs the AR overlay is drawn from, compared as one so the view watches them in one place.
+private struct OverlayInputs: Equatable {
+    var sites: Int
+    var registration: String?
+    var origin: GeoPoint?
+    var layers: Set<SiteWireframes.Layer>
+    var forms: [String: TreeForm]
 }

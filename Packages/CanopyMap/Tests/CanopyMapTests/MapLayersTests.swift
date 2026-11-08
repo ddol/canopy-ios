@@ -43,8 +43,18 @@ import Testing
         #expect(all.trees.count == 2)
         #expect(all.tags.map(\.id) == [tag.id])
         #expect(all.trees.first { $0.id == trees[1].id }?.hazardCount == 1)
-        #expect(all.tiles.map(\.id) == [a.tile, b.tile].sorted())
+        #expect(all.tiles.filter { $0.level == 16 }.map(\.id) == [a.tile, b.tile].sorted())
+        #expect(
+            all.tiles.filter { $0.level == 13 }.map(\.id)
+                == Set([a.tile, b.tile].map { $0.parent(level: 13) }).sorted())
         #expect(all.tiles.allSatisfy { $0.corners.count == 4 })
+        #expect(all.tiles.allSatisfy { !$0.surveyed })
+        let surveyed = MapLayers(
+            state: state, visibility: .init(tags: true, routes: true, tiles: true), surveyed: [a.tile])
+        #expect(surveyed.tiles.first { $0.id == a.tile }?.surveyed == true)
+        #expect(surveyed.tiles.first { $0.id == b.tile }?.surveyed == false)
+        #expect(surveyed.trees.first { $0.id == trees[0].id }?.inSurveyedCell == true)
+        #expect(surveyed.trees.first { $0.id == trees[1].id }?.inSurveyedCell == false)
 
         let quiet = MapLayers(
             state: state, visibility: .init(statuses: [.confirmed], tags: false, routes: false, tiles: false))

@@ -138,3 +138,32 @@ import simd
         #expect(abs(top - 30) < 0.01)
     }
 }
+
+@Suite struct CellWireframeTests {
+    @Test func theCellsRoundAPointAreItsTileAndNeighboursWithTheirParents() {
+        let here = GeoPoint(latitude: 37.7694, longitude: -122.4770)
+        let cells = SiteWireframes.cells(around: here, radius: 250)
+        #expect(cells.level16.contains(here.tile))
+        #expect(cells.level16.count >= 9)
+        #expect(cells.level13.contains(here.tile.parent(level: 13)))
+        #expect(cells.level13.count <= 4)
+        #expect(cells.level16.allSatisfy { $0.level == 16 })
+    }
+
+    @Test func aCellItemIsItsOutlineLiftedWithAPostAtEachCorner() {
+        let cell = GeoPoint(latitude: 37.7694, longitude: -122.4770).tile
+        let frame = LocalFrame(origin: cell.center)
+        let item = SiteWireframes.cellItem(cell) { geo in
+            let enu = frame.enu(of: geo)
+            return SIMD3(Float(enu.east), 0, Float(-enu.north))
+        }
+        #expect(item.id == "cell:" + cell.token)
+        #expect(item.segments.count == 8)
+        let posts = item.segments.filter { $0.from.x == $0.to.x && $0.from.z == $0.to.z }
+        #expect(posts.count == 4)
+        #expect(posts.allSatisfy { abs(($0.to.y - $0.from.y) - 1.5) < 1e-5 })
+        #expect(item.segments.allSatisfy { abs($0.from.y - 0.15) < 1e-5 })
+        let l13 = SiteWireframes.cellItem(cell.parent(level: 13)) { _ in .zero }
+        #expect(l13.segments.contains { abs($0.to.y - 6.15) < 1e-5 })
+    }
+}
