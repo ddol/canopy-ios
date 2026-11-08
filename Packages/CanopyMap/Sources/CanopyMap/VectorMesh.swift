@@ -36,6 +36,11 @@ struct VectorMesh {
         }
     }
 
+    /// A line's outline where it lies, with nothing raised or filled: a footprint drawn without walls.
+    mutating func add(outline line: LineFeature) {
+        add(scenePolyline: line.vertices.map(place), closed: line.closed)
+    }
+
     /// The roof of an extruded footprint or building part, when it has one.
     mutating func addLid(_ line: LineFeature, layer: ReferenceLayer, wallSurfaces: Bool) {
         guard let face = VectorGeometry.lid(line, layer: layer, wallSurfaces: wallSurfaces) else { return }
@@ -161,5 +166,16 @@ struct VectorMesh {
             node.addChildNode(edge)
         }
         return node
+    }
+}
+
+extension UIColor {
+    func withMultipliedBrightness(_ factor: CGFloat) -> UIColor {
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        getRed(&r, green: &g, blue: &b, alpha: &a)
+        return UIColor(red: r * factor, green: g * factor, blue: b * factor, alpha: a)
     }
 }

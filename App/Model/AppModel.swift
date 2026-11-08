@@ -54,6 +54,11 @@ final class AppModel {
     /// When each tile's summary was last asked for, so moving the map back and forth does not ask again at once.
     @ObservationIgnored var summariesAskedAt: [S2CellID: Date] = [:]
     @ObservationIgnored var pendingSummaries: Task<Void, Never>?
+    /// The city's tiles the server holds trees in, from its summaries, for a sync to follow when the map shows the
+    /// whole city (see `summariseCity`).
+    var cityTiles: Set<S2CellID> = []
+    /// When the whole city's summaries were last asked for.
+    @ObservationIgnored var cityAskedAt: Date?
     @ObservationIgnored var syncAgain = false
     /// Other players' open changesets near the tiles this device follows, for the player to agree with or reject.
     var reviewQueue: [GerardusMapClient.OpenChangeset] = []
@@ -105,8 +110,12 @@ final class AppModel {
     /// Who records are attributed to: the Game Center player once signed in, the local id before.
     var player: Player { players.player }
 
-    /// Whether Settings shows the admin flags to this player.
-    var isAdmin: Bool { adminSettings.isAdmin(player) }
+    /// Whether this player sees the admin flags and tools: listed in this build (`AdminSettings`), or an admin on the
+    /// Gerardus server, as a sync last found.
+    var isAdmin: Bool { adminSettings.isAdmin(player) || serverPlayer?.isAdmin == true }
+
+    /// Whether the map shows the whole city (`AdminSettings.wholeCity`): admins only, for now.
+    var showsWholeCity: Bool { isAdmin && adminSettings.wholeCity }
 
     private func updateMapReference() {
         mapReference = MapLayers.Reference.merged(
@@ -337,6 +346,9 @@ extension AppModel {
                 try await store.updateChangeset(changeset)
             }
             if let client = mapClient {
+                // Who the server says the player is decides whether the map shows the whole city, so ask first.
+                if serverPlayer == nil { serverPlayer = try? await client.player() }
+                try? await summariseCity(client)
                 try await pullSharedMap(client)
                 try await refreshReviewQueue(client)
             }

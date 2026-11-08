@@ -126,6 +126,37 @@ import simd
         #expect(streets[0].segments.count == 2)
     }
 
+    /// A closed ring 10 m square at the origin, `height` metres tall.
+    private func ring(_ id: String, kind: FeatureKind, height: Float = 0) throws -> LineFeature {
+        var line = try LineFeature(fields: [])
+        line.featureID = id
+        line.kind = kind
+        line.closed = true
+        line.height = height
+        line.xyz = [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0]
+        return line
+    }
+
+    @Test func onlyTheReconstructedBuildingsAreDrawnNeverDataSFsBoxes() throws {
+        let frame = ARSiteFrame(
+            origin: siteOrigin, georeference: Self.georeference(about: siteOrigin), arGroundAtOrigin: 0,
+            siteGroundAtOrigin: 0)
+        let box = VectorReference.Feature(layer: .boxes, line: try ring("box", kind: .building, height: 9))
+        let footprint = VectorReference.Feature(
+            layer: .footprints, line: try ring("footprint", kind: .building, height: 9))
+        let facade = VectorReference.Feature(layer: .observed, line: try ring("facade", kind: .wallPlane))
+        let roof = VectorReference.Feature(layer: .buildings, line: try ring("roof", kind: .roofPlane))
+        let reconstructed = SiteWireframes.items(
+            [box, footprint, facade, roof], layer: .buildings, frame: frame, centre: .zero)
+        #expect(reconstructed.map(\.id) == ["roof"])
+
+        // Without reconstructed buildings, a footprint is its outline on the ground: four sides, nothing raised.
+        let flat = SiteWireframes.items([box, footprint], layer: .buildings, frame: frame, centre: .zero)
+        #expect(flat.map(\.id) == ["footprint"])
+        #expect(flat[0].segments.count == 4)
+        #expect(flat[0].segments.allSatisfy { abs($0.from.y) < 0.01 && abs($0.to.y) < 0.01 })
+    }
+
     @Test func anAdjustedFormReplacesTheServersShape() {
         let georeference = Self.georeference(about: siteOrigin)
         let frame = ARSiteFrame(

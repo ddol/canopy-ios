@@ -6,10 +6,11 @@ import SceneKit
 import SwiftUI
 import simd
 
-/// The map with no base map, drawn the way the Mac visualiser draws a site: Gerardus's ground grid, buildings as
-/// their walls and roofs, streets and kerbs as lines, Gerardus's trees as a trunk and crown rings, and the census's
-/// trees as the same figure in their status colour, all in 3D. Drag to move, two fingers to turn and tilt, pinch to
-/// zoom, tap a tree to select it.
+/// The map with no base map, drawn the way the Mac visualiser draws a site: Gerardus's ground grid, the buildings it
+/// reconstructed with their walls and roofs, streets and kerbs as lines, Gerardus's trees as a trunk and crown rings,
+/// and the census's trees as the same figure in their status colour, all in 3D. It moves as Apple's map does: drag to
+/// move, pinch to zoom, twist to turn, two fingers up or down to tilt, double-tap to zoom in, two-finger tap to zoom
+/// out, tap a tree to select it.
 public struct WireframeRenderer: MapRenderer {
     public init() {}
 
@@ -21,7 +22,7 @@ public struct WireframeRenderer: MapRenderer {
             layers: layers, selection: selection, viewport: viewport, focus: focus, onViewportChange: onViewportChange
         )
         .overlay(alignment: .bottomLeading) {
-            Text("Drag to move · Two fingers to turn, tilt and zoom · Tap a tree")
+            Text("Pinch to zoom · Twist to turn · Two fingers up or down to tilt · Tap a tree")
                 .font(.caption2)
                 .foregroundStyle(Color.canopyInkMuted)
                 .padding(.horizontal, Spacing.xs)
@@ -124,9 +125,6 @@ struct WireframeMap: UIViewRepresentable {
     let focus: MapFocus?
     let onViewportChange: @MainActor (MapViewport) -> Void
 
-    static let fieldOfView: CGFloat = 52
-    static let distances: ClosedRange<Float> = 12...4000
-
     func makeCoordinator() -> Coordinator { Coordinator(anchor: viewport.center) }
 
     func makeUIView(context: Context) -> SCNView {
@@ -137,15 +135,14 @@ struct WireframeMap: UIViewRepresentable {
         view.allowsCameraControl = false
         view.scene = coordinator.scene
         view.pointOfView = coordinator.camera
-        let move = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.move(_:)))
-        move.maximumNumberOfTouches = 1
-        let tilt = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.tilt(_:)))
-        tilt.minimumNumberOfTouches = 2
-        tilt.maximumNumberOfTouches = 2
-        let turn = UIRotationGestureRecognizer(target: coordinator, action: #selector(Coordinator.turn(_:)))
-        let pinch = UIPinchGestureRecognizer(target: coordinator, action: #selector(Coordinator.pinch(_:)))
+        let touch = MapTouchGesture(target: coordinator, action: #selector(Coordinator.touch(_:)))
+        let zoomIn = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.zoomIn(_:)))
+        zoomIn.numberOfTapsRequired = 2
+        let zoomOut = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.zoomOut(_:)))
+        zoomOut.numberOfTouchesRequired = 2
         let tap = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tap(_:)))
-        for gesture in [move, tilt, turn, pinch, tap] as [UIGestureRecognizer] {
+        tap.require(toFail: zoomIn)
+        for gesture in [touch, zoomIn, zoomOut, tap] as [UIGestureRecognizer] {
             gesture.delegate = coordinator
             view.addGestureRecognizer(gesture)
         }
@@ -188,16 +185,18 @@ struct WireframeMap: UIViewRepresentable {
         var onSelect: @MainActor (UUID?) -> Void = { _ in }
         var focusID: UUID?
 
-        /// Camera rig: looking at `target` from `distance` metres, `tilt` radians above the ground, turned
-        /// `azimuth` radians from north-up (camera south of the target looking north).
-        var target = SIMD3<Float>.zero
-        var distance: Float = 300
-        var tilt: Float = 55 * .pi / 180
-        var azimuth: Float = 0
-        private var targetAtStart = SIMD3<Float>.zero
-        private var distanceAtStart: Float = 300
-        private var tiltAtStart: Float = 0
-        private var azimuthAtStart: Float = 0
+        /// Where the camera is (`CameraRig`).
+        var rig = CameraRig(
+            target: .zero, distance: 300, tilt: 55 * .pi / 180, azimuth: 0, size: CGSize(width: 390, height: 700))
+        /// Where the gesture under way started: the rig, the fingers, and the ground point between them, which
+        /// stays under the fingers as they move. Started again whenever a finger lands or lifts.
+        private var gestureStart: (rig: CameraRig, points: [CGPoint], anchor: SIMD3<Float>?, fingers: Int)?
+        private var intent = TwoFingerIntent.undecided
+        /// The last tenth of a second of a one-finger drag, for the glide after it.
+        private var samples: [(time: CFTimeInterval, point: CGPoint)] = []
+        private var glide: CADisplayLink?
+        private var glideVelocity = CGPoint.zero
+        private var glideTime: CFTimeInterval = 0
 
         private var reference: MapLayers.Reference?
         private var elevation: Float = 0
@@ -220,6 +219,8 @@ struct WireframeMap: UIViewRepresentable {
         private var treeForms: [String: TreeForm] = [:]
         private var treeProfiles: [String: TreeProfile] = [:]
         private var selected: UUID?
+        /// Which of the sites' parts are shown: the ground, and the vectors (buildings, streets, Gerardus's trees).
+        private var visibility = MapLayers.Visibility()
         private var context: (routes: [MapLayers.RouteLine], boundary: [[GeoPoint]], tiles: [MapLayers.TileOutline])?
 
         init(anchor: GeoPoint) {
@@ -227,8 +228,9 @@ struct WireframeMap: UIViewRepresentable {
             super.init()
             camera.camera = SCNCamera()
             camera.camera?.zNear = 0.5
-            camera.camera?.zFar = 12000
-            camera.camera?.fieldOfView = WireframeMap.fieldOfView
+            camera.camera?.zFar = 60000
+            camera.camera?.automaticallyAdjustsZRange = true
+            camera.camera?.fieldOfView = CGFloat(rig.fieldOfView)
             scene.rootNode.addChildNode(camera)
             scene.rootNode.addChildNode(siteRoot)
             scene.rootNode.addChildNode(siteTreeRoot)
@@ -241,6 +243,11 @@ struct WireframeMap: UIViewRepresentable {
         // MARK: Content
 
         func apply(_ layers: MapLayers, selection: UUID?) {
+            if layers.visibility != visibility {
+                visibility = layers.visibility
+                for node in siteNodes.values { applyVisibility(to: node) }
+                siteTreeRoot.isHidden = !visibility.vectors
+            }
             let formsChanged = layers.treeForms != treeForms || layers.treeProfiles != treeProfiles
             treeForms = layers.treeForms
             treeProfiles = layers.treeProfiles
@@ -335,45 +342,76 @@ struct WireframeMap: UIViewRepresentable {
             SiteToScene(georeference: site.georeference, scene: anchor, elevation: elevation)
         }
 
-        /// A site's ground, buildings and streets, of the features it draws.
+        /// A site's ground, buildings and streets, of the features it draws. Buildings are the ones Gerardus
+        /// reconstructed, roofs apart from walls (`SiteBuildings`); DataSF's boxes are never drawn over them.
         private func siteNode(_ site: MapLayers.Reference.Site, key: String) -> SCNNode {
             let node = SCNNode()
             let transform = transform(site)
             let place: @Sendable (SIMD3<Float>) -> SIMD3<Float> = { transform.place($0) }
             if let ground = site.vectors.ground {
-                node.addChildNode(
-                    VectorMesh(
-                        ground: ground, place: place,
-                        tint: (low: Self.groundLow, high: Self.groundHigh, range: groundRange)
-                    )
-                    .node(color: .white, fill: true, edgeColor: CanopyColor.lineStrong.uiColor))
+                let mesh = VectorMesh(
+                    ground: ground, place: place, tint: (low: Self.groundLow, high: Self.groundHigh, range: groundRange)
+                )
+                .node(color: .white, fill: true, edgeColor: CanopyColor.lineStrong.uiColor)
+                mesh.name = Part.ground.rawValue
+                node.addChildNode(mesh)
             }
             let features = site.vectors.features
-            let hasBoxes = features.contains { $0.layer == .boxes || $0.layer == .buildings }
+            let reconstructed = SiteBuildings.reconstructed(features)
             let wallSurfaces = features.contains { $0.layer == .buildings && $0.line.kind == .wallSurface }
-            var buildings = VectorMesh(place: place)
+            var walls = VectorMesh(place: place)
+            var roofs = VectorMesh(place: place)
             var streets = VectorMesh(place: place)
             for feature in features where owners[feature.line.featureID] == key {
                 let line = feature.line
-                if line.kind == .sensor || line.kind == .correction { continue }
-                // Box walls stand where the footprint would be extruded; the footprint still gives the roof.
-                if hasBoxes, feature.layer == .footprints {
-                    buildings.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                if line.kind == .sensor || line.kind == .correction || feature.layer == .trees { continue }
+                if let drawn = SiteBuildings.drawn(feature, reconstructed: reconstructed) {
+                    switch drawn {
+                    case .asSent where line.kind == .roofPlane:
+                        roofs.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                    case .asSent:
+                        walls.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                        walls.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                    case .outline:
+                        walls.add(outline: line)
+                    }
                     continue
                 }
                 switch feature.layer {
-                case .trees:
-                    break  // `siteTreesNode`
-                case .footprints, .boxes, .buildings, .observed:
-                    buildings.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
-                    buildings.addLid(line, layer: feature.layer, wallSurfaces: wallSurfaces)
+                case .boxes, .footprints, .buildings:
+                    continue
+                case .observed where line.kind != .pole:
+                    continue
                 default:
                     streets.add(line, layer: feature.layer, wallSurfaces: wallSurfaces)
                 }
             }
-            node.addChildNode(buildings.node(color: UIColor(red: 0.75, green: 0.69, blue: 0.55, alpha: 0.55)))
-            node.addChildNode(streets.node(color: UIColor(red: 0.55, green: 0.55, blue: 0.45, alpha: 1)))
+            let buildings = SCNNode()
+            buildings.name = Part.buildings.rawValue
+            buildings.addChildNode(walls.node(color: Self.wallColor))
+            buildings.addChildNode(roofs.node(color: Self.roofColor))
+            node.addChildNode(buildings)
+            let streetNode = streets.node(color: UIColor(red: 0.55, green: 0.55, blue: 0.45, alpha: 1))
+            streetNode.name = Part.streets.rawValue
+            node.addChildNode(streetNode)
+            applyVisibility(to: node)
             return node
+        }
+
+        /// The parts of a site's node, by name, so the map's layer switches show and hide them.
+        enum Part: String {
+            case ground, buildings, streets
+        }
+
+        static let wallColor = UIColor(red: 0.75, green: 0.69, blue: 0.55, alpha: 0.6)
+        static let roofColor = UIColor(red: 0.78, green: 0.52, blue: 0.42, alpha: 0.85)
+
+        /// Shows a site's ground with the ground switch, and its buildings and streets with the vectors switch.
+        private func applyVisibility(to node: SCNNode) {
+            node.childNode(withName: Part.ground.rawValue, recursively: false)?.isHidden = !visibility.ground
+            for part in [Part.buildings, .streets] {
+                node.childNode(withName: part.rawValue, recursively: false)?.isHidden = !visibility.vectors
+            }
         }
 
         /// A site's Gerardus trees, each in the shape the player gave it in AR when they did.
@@ -532,26 +570,25 @@ struct WireframeMap: UIViewRepresentable {
         // MARK: Camera
 
         func look(at viewport: MapViewport) {
-            target = scenePoint(viewport.center)
+            stopGliding()
+            rig.target = scenePoint(viewport.center)
             let halfSpan = Float(viewport.cornerDistance / 2.squareRoot())
-            distance = min(
-                max(
-                    halfSpan / Float(tan(WireframeMap.fieldOfView / 2 * .pi / 180)) * 1.1,
-                    WireframeMap.distances.lowerBound),
-                WireframeMap.distances.upperBound)
+            rig.distance = halfSpan / tan(rig.fieldOfView / 2 * .pi / 180) * 1.1
+            rig = rig.clamped()
             placeCamera()
         }
 
         private func placeCamera() {
-            let offset = SIMD3(sin(azimuth) * cos(tilt), sin(tilt), cos(azimuth) * cos(tilt)) * distance
-            camera.position = SCNVector3(target + offset)
-            camera.look(at: SCNVector3(target))
+            if let size = view?.bounds.size, size.width > 0 { rig.size = size }
+            camera.position = SCNVector3(rig.position)
+            camera.look(at: SCNVector3(rig.target))
         }
 
         /// The region in view, from the target and the distance.
         var currentViewport: MapViewport {
+            let target = rig.target
             let centre = anchor.geoPoint(of: ENU(east: Double(target.x), north: Double(-target.z), up: 0)).point
-            let halfSpan = Double(distance) * tan(WireframeMap.fieldOfView / 2 * .pi / 180)
+            let halfSpan = Double(rig.distance) * tan(Double(rig.fieldOfView) / 2 * .pi / 180)
             return MapViewport(center: centre, radius: halfSpan)
         }
 
@@ -559,57 +596,182 @@ struct WireframeMap: UIViewRepresentable {
             onViewportChange(currentViewport)
         }
 
-        /// Ground metres per point at the target's depth.
-        private var metresPerPoint: Float {
-            let height = Float(view?.bounds.height ?? 800)
-            return distance * 2 * Float(tan(WireframeMap.fieldOfView / 2 * .pi / 180)) / max(height, 1)
+        // MARK: Gestures, as on Apple's map
+
+        /// One finger drags the map, and it glides on when let go. Two fingers pinch to zoom and twist to turn about
+        /// the point between them, which stays under them as they move; both moving up or down together tilt it.
+        @objc func touch(_ gesture: MapTouchGesture) {
+            let points = gesture.points
+            switch gesture.state {
+            case .began:
+                stopGliding()
+                samples = []
+                begin(points, fingers: gesture.fingers)
+                follow(points)
+            case .changed:
+                if gestureStart?.fingers != gesture.fingers { begin(points, fingers: gesture.fingers) }
+                follow(points)
+                if points.count == 1 { remember(points[0]) } else { samples = [] }
+            case .ended, .cancelled:
+                let velocity = gesture.state == .ended ? releaseVelocity() : .zero
+                gestureStart = nil
+                if hypot(velocity.x, velocity.y) > 150 {
+                    startGliding(velocity)
+                } else {
+                    report()
+                }
+            default:
+                break
+            }
         }
 
-        @objc func move(_ gesture: UIPanGestureRecognizer) {
+        private func begin(_ points: [CGPoint], fingers: Int) {
+            if let size = view?.bounds.size, size.width > 0 { rig.size = size }
+            gestureStart = (rig, points, rig.ground(at: TwoFingerIntent.centroid(points)), fingers)
+            intent = .undecided
+        }
+
+        private func follow(_ points: [CGPoint]) {
+            guard let start = gestureStart, !points.isEmpty, !start.points.isEmpty else { return }
+            if points.count == 1 || start.points.count == 1 {
+                rig = Self.drag(start.rig, anchor: start.anchor, from: start.points[0], to: points[0])
+            } else {
+                if intent == .undecided { intent = TwoFingerIntent.classify(from: start.points, to: points) }
+                switch intent {
+                case .undecided: return
+                case .tilt: rig = Self.tilt(start.rig, from: start.points, to: points)
+                case .transform: rig = Self.transform(start.rig, anchor: start.anchor, from: start.points, to: points)
+                }
+            }
+            placeCamera()
+        }
+
+        /// The rig after a finger dragged from `start` to `now`: the ground point first touched (`anchor`) stays under
+        /// the finger. Near the horizon, where that point is too far off to follow, the map slides by the ground's
+        /// scale at the target instead.
+        nonisolated static func drag(
+            _ rig: CameraRig, anchor: SIMD3<Float>?, from start: CGPoint, to now: CGPoint
+        ) -> CameraRig {
+            if let anchor, rig.ground(at: now) != nil { return rig.keeping(anchor, under: now) }
+            let forward = SIMD3<Float>(-sin(rig.azimuth), 0, -cos(rig.azimuth))
+            let right = SIMD3<Float>(cos(rig.azimuth), 0, -sin(rig.azimuth))
+            let scale = rig.metresPerPoint
+            var moved = rig
+            moved.target += -right * Float(now.x - start.x) * scale + forward * Float(now.y - start.y) * scale
+            return moved
+        }
+
+        /// The rig after two fingers moved up or down together: up tilts the view towards the horizon.
+        nonisolated static func tilt(_ rig: CameraRig, from start: [CGPoint], to now: [CGPoint]) -> CameraRig {
+            var tilted = rig
+            tilted.tilt += Float(TwoFingerIntent.centroid(now).y - TwoFingerIntent.centroid(start).y) * 0.006
+            return tilted.clamped()
+        }
+
+        /// The rig after two fingers pinched, twisted and moved: zoomed by how much their spacing changed, turned as
+        /// far as they turned, with the ground point first between them (`anchor`) still between them.
+        nonisolated static func transform(
+            _ rig: CameraRig, anchor: SIMD3<Float>?, from start: [CGPoint], to now: [CGPoint]
+        ) -> CameraRig {
+            var moved = rig
+            let before = TwoFingerIntent.spacing(start)
+            let after = TwoFingerIntent.spacing(now)
+            if before > 1, after > 1 { moved.distance = rig.distance * Float(before / after) }
+            moved.azimuth = rig.azimuth + Float(TwoFingerIntent.angle(from: start, to: now))
+            moved = moved.clamped()
+            if let anchor { moved = moved.keeping(anchor, under: TwoFingerIntent.centroid(now)) }
+            return moved
+        }
+
+        /// Double tap: in by half, keeping the tapped point where it is.
+        @objc func zoomIn(_ gesture: UITapGestureRecognizer) {
             guard let view else { return }
-            if gesture.state == .began { targetAtStart = target }
-            let t = gesture.translation(in: view)
-            let forward = SIMD3(-sin(azimuth), 0, -cos(azimuth))
-            let right = SIMD3(cos(azimuth), 0, -sin(azimuth))
-            let scale = metresPerPoint
-            target = targetAtStart - right * Float(t.x) * scale + forward * Float(t.y) * scale
-            placeCamera()
-            if gesture.state == .ended || gesture.state == .cancelled { report() }
+            let point = gesture.location(in: view)
+            rig.size = view.bounds.size
+            var next = rig
+            next.distance /= 2
+            next = next.clamped()
+            if let anchor = rig.ground(at: point) { next = next.keeping(anchor, under: point) }
+            animate(to: next)
         }
 
-        /// Two fingers up or down tilt the view, as on Apple's map.
-        @objc func tilt(_ gesture: UIPanGestureRecognizer) {
-            guard let view else { return }
-            if gesture.state == .began { tiltAtStart = tilt }
-            let t = gesture.translation(in: view)
-            tilt = min(max(tiltAtStart + Float(t.y) * 0.006, 8 * .pi / 180), 88 * .pi / 180)
-            placeCamera()
-            if gesture.state == .ended || gesture.state == .cancelled { report() }
+        /// Two-finger tap: out by double.
+        @objc func zoomOut(_ gesture: UITapGestureRecognizer) {
+            var next = rig
+            next.distance *= 2
+            animate(to: next.clamped())
         }
 
-        /// Two fingers turning turn the map round the target.
-        @objc func turn(_ gesture: UIRotationGestureRecognizer) {
-            if gesture.state == .began { azimuthAtStart = azimuth }
-            azimuth = azimuthAtStart - Float(gesture.rotation)
+        private func animate(to next: CameraRig) {
+            stopGliding()
+            rig = next
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.3
             placeCamera()
-            if gesture.state == .ended || gesture.state == .cancelled { report() }
+            SCNTransaction.commit()
+            report()
         }
 
-        /// Pinch, turn and tilt work together, as on Apple's map; a tap stands alone.
+        private func remember(_ point: CGPoint) {
+            let now = CACurrentMediaTime()
+            samples.append((now, point))
+            samples.removeAll { now - $0.time > 0.1 }
+        }
+
+        /// How fast the finger was moving as it lifted, in points a second; nothing when it had stopped.
+        private func releaseVelocity() -> CGPoint {
+            guard let first = samples.first, let last = samples.last, last.time - first.time > 0.01,
+                CACurrentMediaTime() - last.time < 0.08
+            else { return .zero }
+            let seconds = CGFloat(last.time - first.time)
+            return CGPoint(x: (last.point.x - first.point.x) / seconds, y: (last.point.y - first.point.y) / seconds)
+        }
+
+        private func startGliding(_ velocity: CGPoint) {
+            stopGliding()
+            glideVelocity = velocity
+            glideTime = CACurrentMediaTime()
+            let link = CADisplayLink(target: self, selector: #selector(glideStep(_:)))
+            link.add(to: .main, forMode: .common)
+            glide = link
+        }
+
+        /// The map gliding on after a flick, slowing as Apple's map does, until a finger stops it.
+        @objc private func glideStep(_ link: CADisplayLink) {
+            let now = CACurrentMediaTime()
+            let seconds = CGFloat(now - glideTime)
+            glideTime = now
+            let step = CGPoint(x: glideVelocity.x * seconds, y: glideVelocity.y * seconds)
+            rig = Self.drag(rig, anchor: nil, from: .zero, to: step)
+            placeCamera()
+            let slowing = exp(-seconds / 0.325)
+            glideVelocity = CGPoint(x: glideVelocity.x * slowing, y: glideVelocity.y * slowing)
+            if hypot(glideVelocity.x, glideVelocity.y) < 20 {
+                stopGliding()
+                report()
+            }
+        }
+
+        private func stopGliding() {
+            guard let glide else { return }
+            glide.invalidate()
+            self.glide = nil
+        }
+
+        /// A finger landing stops a glide, as on Apple's map.
+        nonisolated func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch
+        ) -> Bool {
+            MainActor.assumeIsolated { stopGliding() }
+            return true
+        }
+
+        /// The map gesture and the taps each stand alone.
         nonisolated func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
         ) -> Bool {
-            !(gestureRecognizer is UITapGestureRecognizer) && !(other is UITapGestureRecognizer)
-        }
-
-        @objc func pinch(_ gesture: UIPinchGestureRecognizer) {
-            if gesture.state == .began { distanceAtStart = distance }
-            distance = min(
-                max(distanceAtStart / Float(gesture.scale), WireframeMap.distances.lowerBound),
-                WireframeMap.distances.upperBound)
-            placeCamera()
-            if gesture.state == .ended || gesture.state == .cancelled { report() }
+            false
         }
 
         @objc func tap(_ gesture: UITapGestureRecognizer) {
