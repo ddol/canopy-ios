@@ -298,6 +298,27 @@ public actor LocalStore {
         }
     }
 
+    // MARK: Surveyed cells
+
+    /// The level-16 cells marked as surveyed on this device.
+    public func surveyedCells() throws -> [SurveyedCell] {
+        try db.query("SELECT payload FROM surveyed_cells") { row in
+            try CanopyJSON.decoder.decode(SurveyedCell.self, from: Data(row.string(0).utf8))
+        }
+    }
+
+    /// Marks a cell as surveyed, replacing an earlier mark.
+    public func setSurveyed(_ cell: SurveyedCell) throws {
+        try db.run(
+            "INSERT OR REPLACE INTO surveyed_cells (s2_l16_token, payload) VALUES (?, ?)",
+            [.text(cell.cell.token), .text(try Self.json(cell))])
+    }
+
+    /// Takes a cell's mark away.
+    public func clearSurveyed(_ cell: S2CellID) throws {
+        try db.run("DELETE FROM surveyed_cells WHERE s2_l16_token = ?", [.text(cell.token)])
+    }
+
     /// The tiles pulled from the shared map, and the sequence to pull each from next.
     public func sharedTiles() throws -> [S2CellID: Int64] {
         let rows = try db.query("SELECT s2_l16_token, sequence FROM shared_tiles") { row in
@@ -726,6 +747,14 @@ enum Schema {
         CREATE TABLE store_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        """,
+        // 5: the level-16 cells the player has marked as surveyed. On the device only, until the server has a
+        // record for them.
+        """
+        CREATE TABLE surveyed_cells (
+            s2_l16_token TEXT PRIMARY KEY,
+            payload TEXT NOT NULL
         );
         """,
     ]

@@ -133,14 +133,57 @@ public enum SiteWireframes {
         case trees
         case buildings
         case streets
+        /// S2 cells on the ground: level 16 (the sites and the census's tiles) and level 13 (the server's cells).
+        case cells
 
         public var label: String {
             switch self {
             case .trees: "Trees"
             case .buildings: "Buildings"
             case .streets: "Streets and kerbs"
+            case .cells: "S2 cells (L13, L16)"
             }
         }
+
+        /// Whether the layer is drawn from a site's features; the cells are drawn from the map alone.
+        public var isSiteLayer: Bool { self != .cells }
+    }
+
+    /// Posts at a cell's corners, in metres: short for a level-16 cell, tall for a level-13 one.
+    public static func cellPostHeight(level: Int) -> Float { level <= 13 ? 6 : 1.5 }
+
+    /// The cells drawn round a point: the level-16 cells within `radius` of it (sampled on a grid), and their
+    /// level-13 parents.
+    public static func cells(
+        around centre: GeoPoint, radius: Double = 250
+    ) -> (level16: [S2CellID], level13: [S2CellID]) {
+        let frame = LocalFrame(origin: centre)
+        var level16: Set<S2CellID> = []
+        let step = 50.0
+        var east = -radius
+        while east <= radius {
+            var north = -radius
+            while north <= radius {
+                if (east * east + north * north).squareRoot() <= radius {
+                    level16.insert(frame.geoPoint(of: ENU(east: east, north: north, up: 0)).point.tile)
+                }
+                north += step
+            }
+            east += step
+        }
+        let level13 = Set(level16.map { $0.parent(level: 13) })
+        return (level16.sorted(), level13.sorted())
+    }
+
+    /// A cell as a wireframe: its outline a little above the ground and a post at each corner. `place` gives the AR
+    /// world point on the ground under a map point.
+    public static func cellItem(_ cell: S2CellID, place: (GeoPoint) -> SIMD3<Float>) -> WireframeItem {
+        let lift = SIMD3<Float>(0, 0.15, 0)
+        let corners = cell.vertices.map { place($0) + lift }
+        var segments = Wireframe.polyline(corners, closed: true)
+        let post = SIMD3<Float>(0, cellPostHeight(level: cell.level), 0)
+        segments += corners.map { Wireframe.Segment(from: $0, to: $0 + post) }
+        return WireframeItem(id: "cell:" + cell.token, segments: segments)
     }
 
     /// How far from the centre features are drawn, in metres.
@@ -229,6 +272,9 @@ public enum SiteWireframes {
                 let segments = Wireframe.polyline(line.vertices.map(frame.arkit), closed: line.closed)
                 return segments.isEmpty ? nil : WireframeItem(id: line.featureID, segments: segments)
             }
+        case .cells:
+            // Not a site layer: see `cellItem`.
+            return []
         }
     }
 }

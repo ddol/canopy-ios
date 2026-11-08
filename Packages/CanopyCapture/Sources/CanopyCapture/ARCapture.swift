@@ -320,7 +320,14 @@
         /// replacing any shown before. Trunk brown and crown green, as the Mac visualiser draws them, through whatever
         /// is in front.
         public func showTree(_ form: TreeForm, lean: Lean? = nil, at base: SIMD3<Float>) {
-            let figure = WireframeTree.figure(form, lean: lean, at: base)
+            showTree(TreeProfile(form: form), lean: lean, at: base)
+        }
+
+        /// The fitted tree as a profile of rings, with the ring being edited drawn in the highlight colour.
+        public func showTree(
+            _ profile: TreeProfile, lean: Lean? = nil, at base: SIMD3<Float>, highlight: TreeSection.ID? = nil
+        ) {
+            let figure = WireframeTree.figure(profile, lean: lean, at: base, highlight: highlight)
             showWireframes(
                 WireframeLayer(
                     name: Self.fitTrunkLayer, items: [WireframeItem(id: "fit-trunk", segments: figure.trunk)],
@@ -329,6 +336,15 @@
                 WireframeLayer(
                     name: Self.fitCrownLayer, items: [WireframeItem(id: "fit-crown", segments: figure.crown)],
                     color: Self.crownColor, throughWalls: true))
+            if figure.highlighted.isEmpty {
+                hideWireframes(named: Self.fitHighlightLayer)
+            } else {
+                showWireframes(
+                    WireframeLayer(
+                        name: Self.fitHighlightLayer,
+                        items: [WireframeItem(id: "fit-highlight", segments: figure.highlighted)],
+                        color: Self.highlightColor, lineWidth: WireframeTree.lineWidth * 2, throughWalls: true))
+            }
             treeBase = base
         }
 
@@ -336,11 +352,15 @@
         public func hideTree() {
             hideWireframes(named: Self.fitTrunkLayer)
             hideWireframes(named: Self.fitCrownLayer)
+            hideWireframes(named: Self.fitHighlightLayer)
             treeBase = nil
         }
 
         static let fitTrunkLayer = "fit-trunk"
         static let fitCrownLayer = "fit-crown"
+        static let fitHighlightLayer = "fit-highlight"
+        /// The ring being edited: the survey orange.
+        public static let highlightColor = SIMD4<Float>(1.0, 0.62, 0.25, 1)
         /// The Mac visualiser's tree colours.
         public static let trunkColor = SIMD4<Float>(0.70, 0.48, 0.28, 1)
         public static let crownColor = SIMD4<Float>(0.55, 0.95, 0.30, 1)

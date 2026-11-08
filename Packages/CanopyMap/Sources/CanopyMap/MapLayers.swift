@@ -1,3 +1,4 @@
+import CanopyCapture
 import CanopyModel
 import CanopyReference
 import Foundation
@@ -13,7 +14,7 @@ public struct MapLayers: Equatable, Sendable {
         public var statuses: Set<CountStatus>
         public var tags = true
         public var routes = true
-        /// S2 L16 tile outlines.
+        /// S2 cell outlines: the level-16 tiles with trees or marked surveyed, and their level-13 parents.
         public var tiles = false
         /// Gerardus's vectors (building outlines and walls, streets, kerbs) over the base map.
         public var vectors = true
@@ -40,10 +41,12 @@ public struct MapLayers: Equatable, Sendable {
         public var dbh: Double?
         public var height: Double?
         public var lean: Lean?
+        /// A detection in a cell the player has marked as surveyed: looked over without a verdict, drawn faint.
+        public var inSurveyedCell = false
 
         public init(
             id: UUID, location: GeoPoint, status: CountStatus, hazardCount: Int, dbh: Double? = nil,
-            height: Double? = nil, lean: Lean? = nil
+            height: Double? = nil, lean: Lean? = nil, inSurveyedCell: Bool = false
         ) {
             self.id = id
             self.location = location
@@ -52,6 +55,7 @@ public struct MapLayers: Equatable, Sendable {
             self.dbh = dbh
             self.height = height
             self.lean = lean
+            self.inSurveyedCell = inSurveyedCell
         }
 
         public var symbol: TreeSymbol { TreeSymbol(status) }
@@ -70,10 +74,20 @@ public struct MapLayers: Equatable, Sendable {
         public var points: [GeoPoint]
     }
 
-    /// An S2 L16 tile's outline.
+    /// An S2 cell's outline: a level-16 tile, or a level-13 cell (the server's unit) round the tiles.
     public struct TileOutline: Identifiable, Hashable, Sendable {
         public var id: S2CellID
         public var corners: [GeoPoint]
+        /// Whether the player has marked the cell as surveyed (level-16 cells only).
+        public var surveyed: Bool
+
+        public init(id: S2CellID, corners: [GeoPoint]? = nil, surveyed: Bool = false) {
+            self.id = id
+            self.corners = corners ?? id.vertices
+            self.surveyed = surveyed
+        }
+
+        public var level: Int { id.level }
     }
 
     /// Gerardus's own data for the areas loaded: canopy heights from the aerial point cloud, and vectors (outlines,
@@ -168,6 +182,11 @@ public struct MapLayers: Equatable, Sendable {
     public var boundary: [[GeoPoint]]
     public var visibility: Visibility
     public var reference: Reference?
+    /// Tree shapes the player adjusted by eye in AR, by wireframe id (`census:<uuid>` or a Gerardus feature id),
+    /// so the wireframe map draws them the same.
+    public var treeForms: [String: TreeForm]
+    /// Profiles fitted ring by ring over scanned trunks in AR, by the same ids; drawn in place of a form.
+    public var treeProfiles: [String: TreeProfile] = [:]
 
     public init(
         trees: [TreeMarker] = [],
@@ -176,7 +195,8 @@ public struct MapLayers: Equatable, Sendable {
         tiles: [TileOutline] = [],
         boundary: [[GeoPoint]] = [],
         visibility: Visibility = Visibility(),
-        reference: Reference? = nil
+        reference: Reference? = nil,
+        treeForms: [String: TreeForm] = [:]
     ) {
         self.trees = trees
         self.tags = tags
@@ -185,9 +205,14 @@ public struct MapLayers: Equatable, Sendable {
         self.boundary = boundary
         self.visibility = visibility
         self.reference = reference
+        self.treeForms = treeForms
     }
 
-    /// Builds the layers from the census. Removed trees are left out; tiles are the L16 tiles holding a tree.
+    /// The wireframe id of a census tree, shared with the AR view's selection.
+    public static func censusWireframeID(_ id: UUID) -> String { "census:" + id.uuidString }
+
+    /// Builds the layers from the census. Removed trees are left out; tiles are the L16 tiles holding a tree or
+    /// marked surveyed, with their L13 parents.
     ///
     /// Real aerial data gives thousands of detected trees, more than a map can draw as markers. With a `region`,
     /// detected trees are drawn only inside it (with a margin), at most `detectedLimit` of them, nearest the centre
@@ -199,7 +224,10 @@ public struct MapLayers: Equatable, Sendable {
         visibility: Visibility = Visibility(),
         region: MapViewport? = nil,
         detectedLimit: Int = 600,
-        reference: Reference? = nil
+        reference: Reference? = nil,
+        surveyed: Set<S2CellID> = [],
+        treeForms: [String: TreeForm] = [:],
+        treeProfiles: [String: TreeProfile] = [:]
     ) {
         let hazards = Dictionary(grouping: state.tags.values, by: \.treeID).mapValues(\.count)
         var shown = state.trees.values
@@ -226,17 +254,20 @@ public struct MapLayers: Equatable, Sendable {
                 TreeMarker(
                     id: tree.id, location: tree.position.geo, status: tree.displayStatus,
                     hazardCount: hazards[tree.id] ?? 0, dbh: tree.dbh?.diameter.value,
-                    height: tree.height?.height.value, lean: tree.lean)
+                    height: tree.height?.height.value, lean: tree.lean,
+                    inSurveyedCell: tree.displayStatus == .detected && surveyed.contains(tree.position.tile))
             }
         let tags =
             visibility.tags
             ? state.tags.values.sorted { $0.id.uuidString < $1.id.uuidString }.map { tag in
                 TagMarker(id: tag.id, treeID: tag.treeID, location: tag.point.position.geo, urgency: tag.urgency)
             } : []
-        let tiles =
-            visibility.tiles
-            ? Set(state.trees.values.map(\.position.tile)).sorted().map { TileOutline(id: $0, corners: $0.vertices) }
-            : []
+        var tiles: [TileOutline] = []
+        if visibility.tiles {
+            let level16 = Set(state.trees.values.map(\.position.tile)).union(surveyed)
+            tiles = Set(level16.map { $0.parent(level: 13) }).sorted().map { TileOutline(id: $0) }
+            tiles += level16.sorted().map { TileOutline(id: $0, surveyed: surveyed.contains($0)) }
+        }
         self.init(
             trees: trees,
             tags: tags,
@@ -244,8 +275,10 @@ public struct MapLayers: Equatable, Sendable {
             tiles: tiles,
             boundary: boundary,
             visibility: visibility,
-            reference: reference
+            reference: reference,
+            treeForms: treeForms
         )
+        self.treeProfiles = treeProfiles
     }
 }
 

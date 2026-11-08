@@ -60,8 +60,52 @@ public enum WireframeTree {
     public struct Figure: Equatable, Sendable {
         public var trunk: [Segment]
         public var crown: [Segment]
+        /// The ring picked out for editing, when a profile is drawn with one.
+        public var highlighted: [Segment] = []
 
-        public var all: [Segment] { trunk + crown }
+        public var all: [Segment] { trunk + crown + highlighted }
+    }
+
+    /// The lines of a profile standing at `base`: a ring per section at its height (on the leaning axis, or at its
+    /// own fitted centre), with uprights joining each ring of a part to the next, so a tapering trunk and a bulging
+    /// crown read as such. The ring with `highlight`'s id is returned apart, to be drawn in another colour.
+    public static func figure(
+        _ profile: TreeProfile, lean: Lean? = nil, at base: SIMD3<Float> = .zero, detail: Float = 1,
+        highlight: TreeSection.ID? = nil
+    ) -> Figure {
+        let tilt = Self.tilt(lean)
+        let ringCount = max(8, Int((Float(ringSegments) * detail).rounded()))
+        let uprightCount = max(4, Int((Float(uprights) * detail).rounded()))
+        func centre(_ section: TreeSection) -> SIMD3<Float> {
+            let h = Float(section.height)
+            if let offset = section.offset {
+                return base + SIMD3(Float(offset.x), h, Float(offset.y))
+            }
+            return base + SIMD3(tilt.x * h, h, tilt.z * h)
+        }
+        var figure = Figure(trunk: [], crown: [])
+        for part in TreeSection.Part.allCases {
+            var lines: [Segment] = []
+            let rings = profile.sections.filter { $0.part == part }
+            for section in rings {
+                let ring = Wireframe.ring(centre: centre(section), radius: Float(section.radius), count: ringCount)
+                if section.id == highlight {
+                    figure.highlighted += ring
+                } else {
+                    lines += ring
+                }
+            }
+            for (lower, upper) in zip(rings, rings.dropFirst()) {
+                lines += uprights(
+                    from: centre(lower), to: centre(upper), radius: Float(lower.radius),
+                    topRadius: Float(upper.radius), count: uprightCount)
+            }
+            switch part {
+            case .trunk: figure.trunk = lines
+            case .crown: figure.crown = lines
+            }
+        }
+        return figure
     }
 
     /// Points around each ring.
@@ -118,11 +162,14 @@ public enum WireframeTree {
         return SIMD3(sin(radians) * slope, 0, -cos(radians) * slope)
     }
 
-    static func uprights(from bottom: SIMD3<Float>, to top: SIMD3<Float>, radius: Float, count: Int) -> [Segment] {
-        (0..<count).map { i in
+    static func uprights(
+        from bottom: SIMD3<Float>, to top: SIMD3<Float>, radius: Float, topRadius: Float? = nil, count: Int
+    ) -> [Segment] {
+        let upperRadius = topRadius ?? radius
+        return (0..<count).map { i in
             let angle = Float(i) / Float(count) * 2 * .pi
-            let offset = SIMD3(cos(angle) * radius, 0, sin(angle) * radius)
-            return Segment(from: bottom + offset, to: top + offset)
+            let direction = SIMD3(cos(angle), 0, sin(angle))
+            return Segment(from: bottom + direction * radius, to: top + direction * upperRadius)
         }
     }
 
