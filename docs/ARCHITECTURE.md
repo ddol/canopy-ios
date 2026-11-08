@@ -270,9 +270,12 @@ them anyway.
 **Pulling the shared map.** After pushing, sync brings this device's copy of the shared map up to date
 (`AppModel.pullSharedMap`). It follows every tile pulled before, plus the tiles in view when the map shows at most
 400 m from centre to corner. A tile it has never pulled gets a snapshot (`GetTile`); the rest get the ops applied since
-their cursor (`PullChanges`). If the server's log goes backwards (its database was replaced), or an update names a
-tree the device has never seen, the tile gets a fresh snapshot. Tiles are asked about four at a time (as are their
-open changesets for the review queue), so a sync takes a few round trips rather than two per tile.
+their cursor (`PullChanges`). Before pulling, one `GetTileSummaries` asks for the latest sequence of every tile pulled
+before, and only the tiles whose sequence is not the cursor are pulled (`AppModel.tilesToPull`); a server too old to
+answer it (UNIMPLEMENTED) has every tile pulled, as before. If the server's log goes backwards (its database was
+replaced), or an update names a tree the device has never seen, the tile gets a fresh snapshot. Tiles are asked about
+four at a time (as are their open changesets for the review queue), so a sync takes a few round trips rather than two
+per tile.
 
 Everything lands in one store transaction (`LocalStore.applyShared`), in the `shared` and `shared_tiles` tables.
 Derivation then starts from the shared map, so the server's trees and tags win over the aerial candidates and other
@@ -322,18 +325,32 @@ reported to the player and detection carries on without it.
 
 `MapLayers` is a plain description of what to draw, built from `CensusState`: trees filtered by the statuses the
 player shows (`Visibility.statuses`, the chips under the summary bar), tags, routes, tiles, the boundary, and
-`Reference`, the last loaded area's own data. Renderers implement `MapRenderer`:
+`Reference`, the last loaded area's own data. Renderers implement `MapRenderer`.
 
-- `MapKitRenderer` draws on Apple's map with MapKit for SwiftUI. Each tree is a view, so detected trees are capped
-  (250 to 400, nearest the centre first). MapKit lays out every one of those views whenever the map's content is
+**Level of detail.** A park-wide view holds thousands of trees and every loaded site, more than either renderer draws
+smoothly, so only the level-16 tiles nearest the centre are drawn in full (`MapDetail`): at most 16 of them, and none
+once more than 36 are in view. Trees, tags, vector lines (by the tile each starts in) and loaded sites (by their own
+tile) are drawn only there. Every other tile near the view that holds trees is one patch (`TileSummary`) shaded by
+trees per hectare, on a square-root scale that fills at 120 per hectare; with more than 800 tiles in view the patches
+are whole level-13 cells instead. Tapping a patch zooms to where its tile is drawn in full. The counts are the phone's
+own (`CensusTiles`, the census by tile, made once per census change); for a tile the phone holds no trees in, they are
+the server's: when the map settles on a wide view, `AppModel.summariseSoon` asks `GetTileSummaries` about the tiles round
+it (at most 4096, nearest first, each again only after two minutes) and keeps the answers in `serverTiles`.
+
+
+- `MapKitRenderer` draws on Apple's map with MapKit for SwiftUI. Each tree is a view, so detected trees in the tiles
+  drawn in full are capped (250 to 400, nearest the centre first). Patches are polygons. MapKit lays out every one of those views whenever the map's content is
   applied, so the map view is equatable on what it draws (layers, focus, selection) and the rest of the screen
   changing (a progress message, a banner) leaves it alone.
 - `WireframeRenderer` (Layers → **Gerardus wireframe**) draws with no base map, the way the Mac visualiser draws
-  a site: a SceneKit scene of every loaded site (`MapLayers.Reference.sites`: the ground grid, buildings as walls
-  and roofs, streets and kerbs, Gerardus's trees as trunk and crown rings) with the census's trees as the same
-  figure in their status colour, from their DBH and height when measured. `SiteToScene` composes each site's
+  a site: a SceneKit scene of the loaded sites drawn in full (`MapLayers.detailedSites`: the ground grid, buildings as
+  walls and roofs, streets and kerbs, Gerardus's trees as trunk and crown rings), one node per site added and taken
+  away as the detail changes, with the census's trees as the same figure in their status colour, from their DBH and
+  height when measured, batched into one mesh per colour. Every loaded site's ground still places points, so heights do
+  not change with the detail. `SiteToScene` composes each site's
   georeference with the scene's local frame as one affine map. One finger drags; two fingers turn (rotation
-  gesture), tilt (vertical pan) and zoom (pinch) together; a tap selects a tree (an unseen box round each figure).
+  gesture), tilt (vertical pan) and zoom (pinch) together; a tap selects the tree whose trunk, projected to the
+  screen, is within a finger's width, or zooms to the patch under it.
   The ground is tinted by height over the loaded sites' range (per-vertex colours), and extruded or box-walled
   footprints get a lid (`VectorGeometry.lid`). The camera reports its viewport like the other renderer, so loading
   in view and following tiles work the same.

@@ -209,6 +209,68 @@ public struct GerardusMapClient: GerardusClient {
         return TileSnapshot(entities: entities, latestSequence: Int64(fields.first { $0.number == 2 }?.uint ?? 0))
     }
 
+    // MARK: Tile summaries
+
+    /// What a tile holds on the shared map, without its entities: trees by count status, tags, and the tile's latest
+    /// sequence.
+    public struct TileCounts: Equatable, Sendable {
+        public var tile: S2CellID
+        public var detected = 0
+        public var proposed = 0
+        public var confirmed = 0
+        public var verified = 0
+        public var removed = 0
+        public var tags = 0
+        /// The tile's latest sequence: a followed tile whose cursor is already here has nothing new to pull.
+        public var latestSequence: Int64 = 0
+        public var updatedAt: Date?
+
+        public init(tile: S2CellID) {
+            self.tile = tile
+        }
+
+        /// Trees players proposed, confirmed or verified.
+        public var reviewed: Int { proposed + confirmed + verified }
+    }
+
+    /// How many tiles one GetTileSummaries may ask about.
+    public static let summaryBatch = 4096
+
+    /// What each tile holds, `summaryBatch` tiles a call; tiles with nothing in them are left out. A server older than
+    /// GetTileSummaries answers UNIMPLEMENTED (`GRPCStatusError.unimplemented`).
+    public func tileSummaries(_ tiles: some Collection<S2CellID>) async throws -> [S2CellID: TileCounts] {
+        let tiles = Set(tiles).sorted()
+        var out: [S2CellID: TileCounts] = [:]
+        for start in stride(from: 0, to: tiles.count, by: Self.summaryBatch) {
+            var request = ProtoWriter()
+            for tile in tiles[start..<min(start + Self.summaryBatch, tiles.count)] {
+                request.string(1, tile.token)
+            }
+            for field in try await call("GetTileSummaries", request) where field.number == 1 {
+                let parts = try ProtoReader.fields(field.bytes)
+                guard let tile = parts.first(where: { $0.number == 1 }).flatMap({ S2CellID(token: $0.string) }) else {
+                    continue
+                }
+                var counts = TileCounts(tile: tile)
+                for f in parts {
+                    switch f.number {
+                    case 2: counts.detected = f.int
+                    case 3: counts.proposed = f.int
+                    case 4: counts.confirmed = f.int
+                    case 5: counts.verified = f.int
+                    case 6: counts.removed = f.int
+                    case 7: counts.tags = f.int
+                    case 8: counts.latestSequence = Int64(bitPattern: f.uint)
+                    case 9: counts.updatedAt = MapMessages.date(try ProtoReader.fields(f.bytes))
+                    default: break
+                    }
+                }
+                out[tile] = counts
+            }
+        }
+        return out
+    }
+
     // MARK: Detected trees
 
     public struct ImportResult: Equatable, Sendable {

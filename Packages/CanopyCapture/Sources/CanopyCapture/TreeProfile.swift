@@ -165,3 +165,26 @@ public struct TreeProfile: Equatable, Sendable, Codable {
         }
     }
 }
+
+/// A tree being fitted in AR: the shape the four sliders were last set to, and the rings it gives with the snapped
+/// and confirmed ones kept. The sliders read the shape, not the rings: the rings sum to a shape too
+/// (`TreeProfile.form`), but that reads the trunk at the kept breast-height ring, so a slider bound to it could not
+/// move while that ring is kept.
+public struct TreeFitting: Equatable, Sendable {
+    /// What the shape sliders were last set to.
+    public private(set) var shape: TreeForm
+    /// The rings, edited one by one or redrawn from the shape.
+    public var profile: TreeProfile
+
+    public init(shape: TreeForm, profile: TreeProfile? = nil) {
+        self.shape = shape.clamped
+        self.profile = profile ?? TreeProfile(form: shape)
+    }
+
+    /// Sets the shape: the rings fitted or confirmed against the tree stay where they are, and the rest are drawn
+    /// again from it.
+    public mutating func reshape(_ form: TreeForm) {
+        shape = form.clamped
+        profile = profile.following(shape)
+    }
+}

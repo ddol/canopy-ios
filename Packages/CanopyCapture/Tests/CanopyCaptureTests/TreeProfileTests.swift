@@ -104,3 +104,28 @@ import simd
         }
     }
 }
+
+@Suite struct TreeFittingTests {
+    @Test func theShapeSlidersMoveWhileTheBreastHeightRingStaysSnapped() throws {
+        let form = TreeForm(trunkDiameter: 0.5, height: 12, crownHeight: 8, crownWidth: 6)
+        var profile = TreeProfile(form: form)
+        let breast = try #require(profile.trunk.first { $0.height == DBH.standardHeight })
+        profile[breast.id] = TreeSection(
+            id: breast.id, part: .trunk, height: DBH.standardHeight, radius: 0.31, source: .scan)
+        var fitting = TreeFitting(shape: form, profile: profile)
+
+        var wider = fitting.shape
+        wider.trunkDiameter = 0.8
+        fitting.reshape(wider)
+
+        // The slider reads what it was set to, not the kept ring.
+        #expect(fitting.shape.trunkDiameter == 0.8)
+        // The kept ring stays; the trunk's other rings follow the slider.
+        #expect(fitting.profile.section(breast.id)?.radius == 0.31)
+        let others = fitting.profile.trunk.filter { $0.id != breast.id }
+        #expect(!others.isEmpty)
+        #expect(others.allSatisfy { $0.radius == 0.4 })
+        // The summary still reads the trunk at the fitted ring.
+        #expect(abs(fitting.profile.form.trunkDiameter - 0.62) < 1e-9)
+    }
+}

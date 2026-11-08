@@ -105,7 +105,7 @@ private struct CellRow: View {
                         .buttonStyle(.borderless)
                         .disabled(busy)
                 }
-                Button("Rebuild all", role: .destructive) { onPrepare(true) }
+                Button("Rebuild all", role: .destructive) { confirmingRebuild = true }
                     .buttonStyle(.borderless)
                     .disabled(busy)
             }
@@ -113,7 +113,22 @@ private struct CellRow: View {
         }
         .padding(.vertical, Spacing.xxs)
         .accessibilityElement(children: .combine)
+        // Rebuilding makes the server fetch every source again for every site in the cell: an hour or more of its
+        // time, and the sites already prepared are rebuilt too. One stray tap should not start that.
+        .confirmationDialog(
+            "Rebuild all \(coverage.total) sites in \(coverage.cell.familyDisplay)?", isPresented: $confirmingRebuild,
+            titleVisibility: .visible
+        ) {
+            Button("Rebuild all \(coverage.total) sites", role: .destructive) { onPrepare(true) }
+        } message: {
+            Text(
+                "The server fetches the aerial points, footprints and streets again for every site in the cell, the "
+                    + "\(coverage.count) already prepared included, and builds each model afresh. That takes an hour or "
+                    + "more of the server's time.")
+        }
     }
+
+    @State private var confirmingRebuild = false
 }
 
 private struct PreparationRow: View {

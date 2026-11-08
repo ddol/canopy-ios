@@ -20,7 +20,12 @@ final class AppModel {
     }
 
     private(set) var phase: Phase = .loading
-    private(set) var census = CensusState()
+    private(set) var census = CensusState() {
+        didSet { censusTiles = CensusTiles(census) }
+    }
+    /// The census's trees by level-16 tile, for the map to draw only some tiles in full without placing every tree
+    /// each time it is drawn.
+    private(set) var censusTiles = CensusTiles(CensusState())
     private(set) var summary = CensusSummary(confirmed: 0, estimated: 0, coverage: 0)
     private(set) var changesets: [Changeset] = []
     private(set) var boundary: [[GeoPoint]] = []
@@ -43,6 +48,12 @@ final class AppModel {
     var treeProfiles: [String: TreeProfile] = [:]
     /// Bookkeeping for syncing on its own (`syncSoon`).
     @ObservationIgnored var pendingSync: Task<Void, Never>?
+    /// The server's counts for the tiles round recent map views (GetTileSummaries), so a wide view shades tiles this
+    /// phone never pulled. In memory only.
+    var serverTiles: [S2CellID: TileSummary] = [:]
+    /// When each tile's summary was last asked for, so moving the map back and forth does not ask again at once.
+    @ObservationIgnored var summariesAskedAt: [S2CellID: Date] = [:]
+    @ObservationIgnored var pendingSummaries: Task<Void, Never>?
     @ObservationIgnored var syncAgain = false
     /// Other players' open changesets near the tiles this device follows, for the player to agree with or reject.
     var reviewQueue: [GerardusMapClient.OpenChangeset] = []

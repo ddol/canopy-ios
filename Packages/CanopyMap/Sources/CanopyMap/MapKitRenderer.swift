@@ -37,14 +37,37 @@ struct MapKitMap: View {
     }
 
     var body: some View {
+        MapReader { proxy in
+            map
+                // A tap on a patch zooms to where its tile is drawn in full. Patches hold no markers, so this never
+                // competes with selecting a tree.
+                .simultaneousGesture(
+                    SpatialTapGesture().onEnded { tap in
+                        guard let coordinate = proxy.convert(tap.location, from: .local),
+                            let patch = layers.summary(
+                                at: GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude))
+                        else { return }
+                        withAnimation { position = .region(MKCoordinateRegion(MapViewport(around: patch.id))) }
+                    })
+        }
+    }
+
+    private var map: some View {
         Map(position: $position, selection: $selection) {
             ForEach(Array(layers.boundary.enumerated()), id: \.offset) { _, ring in
                 MapPolygon(coordinates: ring.map(CLLocationCoordinate2D.init))
                     .foregroundStyle(Color.canopyBrand.opacity(0.06))
                     .stroke(Color.canopyBrand.opacity(0.5), lineWidth: 1.5)
             }
-            if layers.visibility.vectors, let reference = layers.reference {
-                ForEach(Array(reference.lines.enumerated()), id: \.offset) { _, line in
+            ForEach(layers.summaries) { patch in
+                MapPolygon(coordinates: patch.corners.map(CLLocationCoordinate2D.init))
+                    .foregroundStyle(Color.canopyBrand.opacity(0.06 + 0.5 * patch.density))
+                    .stroke(
+                        patch.surveyed ? Color.canopyBrand : Color.canopyBrand.opacity(0.25),
+                        lineWidth: patch.surveyed ? 1.5 : 0.5)
+            }
+            if layers.visibility.vectors {
+                ForEach(Array(layers.detailedLines.enumerated()), id: \.offset) { _, line in
                     vector(line)
                 }
             }

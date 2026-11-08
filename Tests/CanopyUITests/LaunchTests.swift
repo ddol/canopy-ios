@@ -7,6 +7,8 @@ final class LaunchTests: XCTestCase {
     let mapTimeout: TimeInterval = 90
     /// The first synthetic candidate in Fixtures/ggp/tree-candidates.geojson.
     let firstTreeID = "tree-17174592-BB4C-47D2-B2B8-FE45CFF2DFB5"
+    /// A region round that candidate small enough to be drawn in full: the whole park is only shaded tile by tile.
+    let nearFirstTree = ["-canopy.mapStart", "37.77075,-122.48306,150"]
 
     override func setUp() {
         continueAfterFailure = false
@@ -36,7 +38,7 @@ final class LaunchTests: XCTestCase {
 
     @MainActor
     func testConfirmingATreeFromItsSheetMakesItProposed() {
-        let app = launch()
+        let app = launch(nearFirstTree)
         waitForMap(app)
         let tree = app.buttons[firstTreeID].firstMatch
         XCTAssertTrue(tree.waitForExistence(timeout: mapTimeout))
@@ -58,7 +60,7 @@ final class LaunchTests: XCTestCase {
 
     @MainActor
     func testTreesFilterByStatusAndTheMapCanLeaveOutAppleMaps() {
-        let app = launch()
+        let app = launch(nearFirstTree)
         waitForMap(app)
         let tree = app.buttons[firstTreeID].firstMatch
         XCTAssertTrue(tree.waitForExistence(timeout: mapTimeout))
@@ -240,9 +242,9 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
-    private func launch() -> XCUIApplication {
+    private func launch(_ arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-ui-testing"]
+        app.launchArguments = ["-ui-testing"] + arguments
         app.launch()
         return app
     }

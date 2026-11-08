@@ -45,7 +45,11 @@ extension AppModel {
     /// they are asked a few at a time rather than one round trip after another.
     func pullSharedMap(_ client: GerardusMapClient) async throws {
         let cursors = try await store.sharedTiles()
-        let updates = try await Self.concurrently(try await followedTiles().sorted()) {
+        let followed = try await followedTiles().sorted()
+        // One question for every tile pulled before, rather than one each: only the tiles that changed are pulled.
+        let summaries = try await Self.summaries(of: followed.filter { cursors[$0] != nil }, client)
+        let tiles = Self.tilesToPull(followed, cursors: cursors, summaries: summaries)
+        let updates = try await Self.concurrently(tiles) {
             tile -> LocalStore.SharedTileUpdate? in
             guard let since = cursors[tile] else { return try await Self.snapshot(tile, client) }
             let page = try await client.pullChanges(in: tile, since: since)
@@ -67,6 +71,83 @@ extension AppModel {
         let snapshots = try await Self.concurrently(stale.sorted()) { try await Self.snapshot($0, client) }
         if !snapshots.isEmpty {
             try await store.applyShared(snapshots)
+        }
+    }
+
+    /// Which followed tiles to pull, given the server's summaries of the ones pulled before: a tile never pulled, and a
+    /// tile whose latest sequence is not the one this phone holds (the server moved on, or its database was replaced).
+    /// Without summaries, from a server too old to give them, every tile.
+    nonisolated static func tilesToPull(
+        _ followed: [S2CellID], cursors: [S2CellID: Int64], summaries: [S2CellID: GerardusMapClient.TileCounts]?
+    ) -> [S2CellID] {
+        guard let summaries else { return followed }
+        return followed.filter { tile in
+            guard let since = cursors[tile] else { return true }
+            return (summaries[tile]?.latestSequence ?? 0) != since
+        }
+    }
+
+    /// The server's summaries of some tiles, or nil from a server too old to give them (it answers UNIMPLEMENTED).
+    nonisolated static func summaries(
+        of tiles: [S2CellID], _ client: GerardusMapClient
+    ) async throws -> [S2CellID: GerardusMapClient.TileCounts]? {
+        guard !tiles.isEmpty else { return [:] }
+        do {
+            return try await client.tileSummaries(tiles)
+        } catch let error as GRPCStatusError where error.code == GRPCStatusError.unimplemented {
+            return nil
+        }
+    }
+
+    /// The level-16 tiles a view could shade from the server's summaries, nearest the centre first and at most one
+    /// call's worth: every tile round it (with the map's margin), or every tile in the level-13 cells round it when it
+    /// is zoomed out that far. None for a view close enough to draw every tile in full.
+    nonisolated static func summaryTiles(around viewport: MapViewport) -> [S2CellID] {
+        let detail = MapDetail(region: viewport)
+        guard detail.tilesInView > MapDetail.detailedTileLimit else { return [] }
+        let padded = MapViewport(
+            center: viewport.center, latitudeDelta: viewport.latitudeDelta * 1.3,
+            longitudeDelta: viewport.longitudeDelta * 1.3)
+        let tiles: Set<S2CellID> =
+            detail.summaryLevel < S2CellID.tileLevel
+            ? Set(
+                MapDetail.cells(in: padded, level: detail.summaryLevel, step: 400)
+                    .flatMap { $0.children(atLevel: S2CellID.tileLevel) })
+            : MapDetail.cells(in: padded, level: S2CellID.tileLevel, step: 40)
+        let frame = LocalFrame(origin: viewport.center)
+        let distances: [(tile: S2CellID, metres: Double)] = tiles.map { tile in
+            (tile, frame.enu(of: tile.center).horizontalDistance)
+        }
+        let nearest = distances.sorted { a, b in
+            a.metres != b.metres ? a.metres < b.metres : a.tile < b.tile
+        }
+        return nearest.prefix(GerardusMapClient.summaryBatch).map(\.tile)
+    }
+
+    /// Asks the server, a moment after the map settles, what the tiles round it hold, so a wide view shades tiles this
+    /// phone never pulled. Tiles asked about in the last two minutes are not asked again. A server too old to answer,
+    /// or no answer at all, leaves the map shading what the phone holds.
+    func summariseSoon(_ viewport: MapViewport) {
+        guard let client = mapClient, phase == .ready, !Self.isTesting() else { return }
+        let now = Date()
+        let tiles = Self.summaryTiles(around: viewport).filter {
+            summariesAskedAt[$0].map { now.timeIntervalSince($0) > 120 } ?? true
+        }
+        guard !tiles.isEmpty else { return }
+        pendingSummaries?.cancel()
+        pendingSummaries = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self,
+                let answer = try? await Self.summaries(of: tiles, client), !Task.isCancelled
+            else { return }
+            var known = serverTiles
+            for tile in tiles {
+                summariesAskedAt[tile] = now
+                known[tile] = answer[tile].map {
+                    TileSummary(id: tile, detected: $0.detected, reviewed: $0.reviewed, tags: $0.tags)
+                }
+            }
+            serverTiles = known
         }
     }
 
@@ -139,6 +220,7 @@ extension AppModel {
     /// The map stopped moving: remember where, and pull its tiles if any are new and the view is close enough.
     func mapDidSettle(_ viewport: MapViewport) {
         mapViewport = viewport
+        summariseSoon(viewport)
         guard viewport.cornerDistance <= Self.pullRadiusLimit, !Self.tiles(in: viewport).isSubset(of: followedTiles)
         else { return }
         syncSoon(after: .seconds(3))

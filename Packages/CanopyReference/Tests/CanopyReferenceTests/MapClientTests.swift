@@ -194,6 +194,36 @@ import Testing
         #expect(record.fields["countStatus"] == "confirmed")
     }
 
+    @Test func tileSummariesAskForEachTileOnceAndComeBackByTile() async throws {
+        let other = GeoPoint(latitude: 37.7690, longitude: -122.5000).tile
+        var answer = ProtoWriter()
+        answer.message(1) { s in
+            s.string(1, tile.token)
+            s.uint(2, 12)
+            s.uint(4, 3)
+            s.uint(5, 1)
+            s.uint(7, 2)
+            s.uint(8, 77)
+            s.message(9) { $0.uint(1, 1_761_200_000) }
+        }
+        answer.message(1) { $0.string(1, "not a token") }
+        let mock = MockTransport()
+        mock.responses[GerardusMapClient.service + "GetTileSummaries"] = .success([answer.data])
+
+        let summaries = try await GerardusMapClient(transport: mock).tileSummaries([tile, other, tile])
+        let request = try fields(try #require(mock.sent.first?.requests.first))
+        #expect(Set(request.filter { $0.number == 1 }.map(\.string)) == [tile.token, other.token])
+        #expect(request.count == 2, "each tile once")
+        #expect(summaries.count == 1)
+        let counts = try #require(summaries[tile])
+        #expect(counts.detected == 12)
+        #expect(counts.reviewed == 4)
+        #expect(counts.tags == 2)
+        #expect(counts.latestSequence == 77)
+        #expect(counts.updatedAt == Date(timeIntervalSince1970: 1_761_200_000))
+        #expect(summaries[other] == nil, "a tile with nothing in it is left out")
+    }
+
     @Test func blobsComeDownByTheirHashAndAMissingOneIsNotFound() async throws {
         let bytes = Data("glTF".utf8)
         let ref = String(repeating: "cd", count: 32)
