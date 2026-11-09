@@ -5,6 +5,8 @@ import XCTest
 final class LaunchTests: XCTestCase {
     /// The first query against the map snapshots all 200 tree annotations, which takes 15 s or more on CI runners.
     let mapTimeout: TimeInterval = 90
+    /// Lists and their counts can take a while to change on a CI runner, whose accessibility snapshots take seconds each.
+    let listTimeout: TimeInterval = 60
     /// The first synthetic candidate in Fixtures/ggp/tree-candidates.geojson.
     let firstTreeID = "tree-17174592-BB4C-47D2-B2B8-FE45CFF2DFB5"
     /// A region round that candidate small enough to be drawn in full: the whole park is only shaded tile by tile.
@@ -18,7 +20,7 @@ final class LaunchTests: XCTestCase {
     func testEveryTabIsReachable() {
         let app = launch()
         waitForMap(app)
-        for name in ["Map", "Census", "Me"] {
+        for name in ["Map", "Census", "Proposals", "Me"] {
             let tab = app.buttons[name].firstMatch
             XCTAssertTrue(tab.waitForExistence(timeout: 10), "missing tab \(name)")
             tab.tap()
@@ -125,35 +127,52 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
-    func testMeListsPendingChangesAndTheSimulatedApprovalAppliesThem() {
+    func testProposalsListsPendingChangesAndTheSimulatedApprovalAppliesThem() {
         let app = launch()
         app.buttons["Census"].firstMatch.tap()
         let confirm = app.buttons["Confirm tree"].firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        XCTAssertTrue(confirm.waitForExistence(timeout: listTimeout))
         confirm.tap()
 
-        app.buttons["Me"].firstMatch.tap()
+        // Nothing waits for review with no server, so the tab opens on the player's own proposals.
+        app.buttons["Proposals"].firstMatch.tap()
         let row = app.buttons["changeset-row"].firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(row.waitForExistence(timeout: listTimeout))
         XCTAssertTrue(row.label.contains("Confirm tree"), row.label)
         XCTAssertTrue(row.label.contains("Pending"), row.label)
         // What it still needs, in words.
         XCTAssertTrue(row.label.contains("simulated server"), row.label)
-        XCTAssertTrue(app.buttons["scans-link"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(text(app, "Your proposals (1)").waitForExistence(timeout: listTimeout))
 
-        app.buttons["Sync now"].firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["sync-submitted"].firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(text(app, "Your proposals (1)").exists)
+        // Me keeps sync and the scans, and no longer lists proposals.
+        app.buttons["Me"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["scans-link"].firstMatch.waitForExistence(timeout: listTimeout))
+        XCTAssertFalse(app.buttons["changeset-row"].exists)
+        let syncNow = app.buttons["Sync now"].firstMatch
+        XCTAssertTrue(syncNow.waitForExistence(timeout: listTimeout))
+        syncNow.tap()
+        XCTAssertTrue(app.staticTexts["sync-submitted"].firstMatch.waitForExistence(timeout: listTimeout))
 
+        app.buttons["Proposals"].firstMatch.tap()
+        XCTAssertTrue(text(app, "Your proposals (1)").waitForExistence(timeout: listTimeout))
         let approve = app.buttons["Simulate trusted approval"].firstMatch
         scroll(app, toReveal: approve)
+        XCTAssertTrue(approve.waitForExistence(timeout: listTimeout))
         approve.tap()
-        let applied = app.staticTexts["On the map"].firstMatch
-        scroll(app, toReveal: applied)
-        XCTAssertTrue(applied.waitForExistence(timeout: 10))
-        app.swipeDown()
-        app.swipeDown()
-        XCTAssertTrue(text(app, "Your proposals (0)").waitForExistence(timeout: 10))
+        XCTAssertTrue(text(app, "Your proposals (0)").waitForExistence(timeout: listTimeout))
+
+        pickList(app, "History")
+        XCTAssertTrue(text(app, "History (1)").waitForExistence(timeout: listTimeout))
+        let applied = app.buttons["changeset-row"].firstMatch
+        XCTAssertTrue(applied.waitForExistence(timeout: listTimeout))
+        XCTAssertTrue(applied.label.contains("On the map"), applied.label)
+
+        // With no server, Review says where other players' changes come from.
+        pickList(app, "Review")
+        let noServer = "Other players' changes near you show here once a Gerardus server is set in Me → Settings."
+        XCTAssertTrue(app.staticTexts[noServer].firstMatch.waitForExistence(timeout: listTimeout))
+        XCTAssertTrue(text(app, "Review (0)").waitForExistence(timeout: listTimeout))
+        XCTAssertFalse(app.buttons["changeset-row"].exists)
     }
 
     @MainActor
@@ -231,6 +250,20 @@ final class LaunchTests: XCTestCase {
     @MainActor
     private func waitForMap(_ app: XCUIApplication) {
         XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
+    }
+
+    /// Picks one of the Proposals tab's lists in its segmented control. A busy runner can miss a tap, so tap again
+    /// until the segment is selected.
+    @MainActor
+    private func pickList(_ app: XCUIApplication, _ name: String) {
+        let segment = app.buttons[name].firstMatch
+        XCTAssertTrue(segment.waitForExistence(timeout: listTimeout), "missing list \(name)")
+        for _ in 0..<3 where !segment.isSelected {
+            segment.tap()
+            let selected = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "isSelected == true"), object: segment)
+            _ = XCTWaiter.wait(for: [selected], timeout: 10)
+        }
     }
 
     /// Lists load rows lazily, so swipe until the element exists.

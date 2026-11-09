@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// The tab shell: Map · Census · Me, plus Tag when limb tagging is switched on (`Features`). On iPad the tabs adapt
-/// to a sidebar.
+/// The tab shell: Map · Census · Proposals · Me, plus Tag when limb tagging is switched on (`Features`). Proposals is
+/// badged with the other players' changes waiting for this player. On iPad the tabs adapt to a sidebar.
 struct RootView: View {
     enum Section: Hashable {
         case map
         case census
         case tag
+        case proposals
         case me
     }
 
@@ -26,6 +27,10 @@ struct RootView: View {
                     TagScreen()
                 }
             }
+            Tab("Proposals", systemImage: "checklist", value: Section.proposals) {
+                ProposalsScreen()
+            }
+            .badge(model.proposalsAwaitingPlayer)
             Tab("Me", systemImage: "person.crop.circle", value: Section.me) {
                 MeScreen()
             }

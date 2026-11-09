@@ -52,6 +52,34 @@ final class StandInUITests: XCTestCase {
         keep(app, "5 settings cleared")
     }
 
+    /// With a server set, Proposals → Review lists other players' changes, and pulling the list down syncs. The
+    /// stand-in has no other players, so the queue comes back empty.
+    @MainActor
+    func testPullingProposalsDownSyncsTheReviewQueue() throws {
+        let server = try XCTUnwrap(ProcessInfo.processInfo.environment["CANOPY_STAND_IN_URL"])
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing", "-canopy.gerardusURL", server]
+        app.launch()
+        XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
+
+        app.buttons["Proposals"].firstMatch.tap()
+        let review = app.buttons["Review"].firstMatch
+        XCTAssertTrue(review.waitForExistence(timeout: 60))
+        review.tap()
+        let hint = app.staticTexts["Pull down to sync and see other players' changes near you."].firstMatch
+        XCTAssertTrue(hint.waitForExistence(timeout: 60))
+        // Pull from the hint itself: the list's frame runs up under the navigation bar, so a drag from its top edge
+        // starts on the bar and never reaches the list.
+        hint.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
+            forDuration: 0.1,
+            thenDragTo: app.collectionViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
+        XCTAssertTrue(app.staticTexts["Nothing waiting near you."].firstMatch.waitForExistence(timeout: 60))
+        keep(app, "Review after a sync")
+
+        app.buttons["Me"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["sync-submitted"].firstMatch.waitForExistence(timeout: 60))
+    }
+
     /// Layers → Load real trees in view, and the result once it shows.
     @MainActor
     private func load(_ app: XCUIApplication) throws -> XCUIElement {
