@@ -26,8 +26,10 @@
     }
 
     /// Owns the AR view: world tracking with LiDAR scene reconstruction, the mesh overlay, raycasts against the
-    /// mesh, trunk scans, and mesh snapshots for evidence. Camera frames stay inside ARKit; nothing here reads or
-    /// keeps an image.
+    /// mesh, trunk scans, aligning trunk rings to the camera, and mesh snapshots for evidence. Camera frames stay
+    /// inside ARKit except while rings are being aligned (`startAligning`): then the brightness along short lines
+    /// across each ring's edges is read from the frame in place, and only the edges' lines are kept. Nothing here
+    /// copies, stores or sends an image.
     @MainActor
     @Observable
     public final class CaptureSession: NSObject, ARSessionDelegate {
@@ -58,11 +60,21 @@
         @ObservationIgnored private var highlighted: String?
         /// Where the wireframe tree being fitted stands (trunk base, on the ground), while one is shown.
         public private(set) var treeBase: SIMD3<Float>?
+        /// Whether trunk rings are being aligned to the camera image.
+        public private(set) var isAligning = false
+        /// The rings being aligned.
+        public private(set) var aligningRings: Set<UUID> = []
+        /// The latest fit of each ring being aligned that the camera has found the edges of.
+        public private(set) var ringFits: [UUID: RingAligner.Fit] = [:]
+        @ObservationIgnored private var aligner: RingAligner?
+        @ObservationIgnored private var lastAlignment: TimeInterval = 0
 
         /// Minimum time between two ingests of the same mesh anchor, in seconds.
         static let ingestInterval: TimeInterval = 0.3
         /// Minimum time between two depth frames taken into a scan, in seconds.
         static let depthInterval: TimeInterval = 0.2
+        /// Minimum time between two camera frames read for ring edges, in seconds.
+        static let alignmentInterval: TimeInterval = 0.25
 
         public override init() {
             view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
@@ -327,7 +339,7 @@
         public func showTree(
             _ profile: TreeProfile, lean: Lean? = nil, at base: SIMD3<Float>, highlight: TreeSection.ID? = nil
         ) {
-            let figure = WireframeTree.figure(profile, lean: lean, at: base, highlight: highlight)
+            let figure = WireframeTree.figure(profile, lean: lean, at: base, highlight: highlight, marking: true)
             showWireframes(
                 WireframeLayer(
                     name: Self.fitTrunkLayer, items: [WireframeItem(id: "fit-trunk", segments: figure.trunk)],
@@ -336,6 +348,17 @@
                 WireframeLayer(
                     name: Self.fitCrownLayer, items: [WireframeItem(id: "fit-crown", segments: figure.crown)],
                     color: Self.crownColor, throughWalls: true))
+            for source in TreeSection.Source.allCases where source != .eye {
+                let name = Self.fitMarkLayer + source.rawValue
+                guard let segments = figure.marked[source], !segments.isEmpty else {
+                    hideWireframes(named: name)
+                    continue
+                }
+                showWireframes(
+                    WireframeLayer(
+                        name: name, items: [WireframeItem(id: name, segments: segments)],
+                        color: Self.color(for: source), throughWalls: true))
+            }
             if figure.highlighted.isEmpty {
                 hideWireframes(named: Self.fitHighlightLayer)
             } else {
@@ -353,17 +376,79 @@
             hideWireframes(named: Self.fitTrunkLayer)
             hideWireframes(named: Self.fitCrownLayer)
             hideWireframes(named: Self.fitHighlightLayer)
+            for source in TreeSection.Source.allCases {
+                hideWireframes(named: Self.fitMarkLayer + source.rawValue)
+            }
             treeBase = nil
         }
 
         static let fitTrunkLayer = "fit-trunk"
         static let fitCrownLayer = "fit-crown"
         static let fitHighlightLayer = "fit-highlight"
+        static let fitMarkLayer = "fit-ring-"
         /// The ring being edited: the survey orange.
         public static let highlightColor = SIMD4<Float>(1.0, 0.62, 0.25, 1)
         /// The Mac visualiser's tree colours.
         public static let trunkColor = SIMD4<Float>(0.70, 0.48, 0.28, 1)
         public static let crownColor = SIMD4<Float>(0.55, 0.95, 0.30, 1)
+        /// Rings fitted to the scan: the scan's lime. Aligned to the camera: blue. Confirmed: the brand green.
+        public static let scanRingColor = SIMD4<Float>(0.61, 0.82, 0.29, 1)
+        public static let cameraRingColor = SIMD4<Float>(0.50, 0.70, 1.0, 1)
+        public static let confirmedRingColor = SIMD4<Float>(0.44, 0.75, 0.50, 1)
+
+        static func color(for source: TreeSection.Source) -> SIMD4<Float> {
+            switch source {
+            case .eye: trunkColor
+            case .scan: scanRingColor
+            case .camera: cameraRingColor
+            case .confirmed: confirmedRingColor
+            }
+        }
+
+        // MARK: Aligning rings to the camera
+
+        /// Starts aligning rings to the trunk's edges in the camera image. A few times a second, while tracking is
+        /// good, each ring's edges are looked for in the frame near where they should fall, from the brightness
+        /// along short lines across them, read in place; only the lines past the edges are kept (`RingAligner`).
+        /// `ringFits` follows as the player walks round.
+        public func startAligning(_ aligner: RingAligner) {
+            self.aligner = aligner
+            aligningRings = Set(aligner.targets.map(\.id))
+            ringFits = [:]
+            lastAlignment = 0
+            isAligning = true
+        }
+
+        public func stopAligning() {
+            aligner = nil
+            aligningRings = []
+            ringFits = [:]
+            isAligning = false
+        }
+
+        /// Stops aligning one ring, as when it is moved by hand.
+        public func stopAligning(ring id: UUID) {
+            guard var aligner, aligningRings.contains(id) else { return }
+            aligner.remove(id)
+            guard !aligner.targets.isEmpty else { return stopAligning() }
+            self.aligner = aligner
+            aligningRings.remove(id)
+            ringFits[id] = nil
+        }
+
+        /// Reads a frame for the edges of the rings being aligned.
+        private func align(_ frame: ARFrame) {
+            guard var aligner, frame.timestamp - lastAlignment >= Self.alignmentInterval else { return }
+            guard case .normal = frame.camera.trackingState else { return }
+            lastAlignment = frame.timestamp
+            let resolution = frame.camera.imageResolution
+            let camera = CameraPose(
+                intrinsics: frame.camera.intrinsics, transform: frame.camera.transform,
+                imageSize: SIMD2(Int(resolution.width), Int(resolution.height)))
+            let found = LumaPlane.read(frame.capturedImage) { aligner.add(camera, image: $0) } ?? 0
+            self.aligner = aligner
+            if found > 0 { ringFits = aligner.fits }
+        }
 
         // MARK: Session delegate
 
@@ -376,7 +461,10 @@
         }
 
         public nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
-            MainActor.assumeIsolated { ingestDepth(frame) }
+            MainActor.assumeIsolated {
+                ingestDepth(frame)
+                align(frame)
+            }
         }
 
         /// Adds a frame's LiDAR depth to the scan, a few times a second, while tracking is good.
@@ -414,6 +502,37 @@
                 for column in 0..<width { values[row * width + column] = source[column] }
             }
             return (values, width, height)
+        }
+
+        /// The luma (brightness) plane of a captured image, read in place while its buffer is locked: never copied.
+        struct LumaPlane: LumaSource {
+            let base: UnsafeRawPointer
+            let width: Int
+            let height: Int
+            let bytesPerRow: Int
+
+            func luma(x: Int, y: Int) -> UInt8 {
+                base.load(fromByteOffset: y * bytesPerRow + x, as: UInt8.self)
+            }
+
+            /// Runs `body` on a bi-planar YCbCr image's luma plane while the buffer is locked; nil for another
+            /// format.
+            static func read<T>(_ buffer: CVPixelBuffer, _ body: (LumaPlane) -> T) -> T? {
+                let format = CVPixelBufferGetPixelFormatType(buffer)
+                guard
+                    format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                        || format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                    CVPixelBufferGetPlaneCount(buffer) >= 1
+                else { return nil }
+                CVPixelBufferLockBaseAddress(buffer, .readOnly)
+                defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+                guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return nil }
+                return body(
+                    LumaPlane(
+                        base: UnsafeRawPointer(base), width: CVPixelBufferGetWidthOfPlane(buffer, 0),
+                        height: CVPixelBufferGetHeightOfPlane(buffer, 0),
+                        bytesPerRow: CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)))
+            }
         }
 
         /// An 8-bit pixel buffer's values, row-major, with its size.

@@ -150,6 +150,9 @@ struct WireframeMap: UIViewRepresentable {
         coordinator.onViewportChange = onViewportChange
         coordinator.onSelect = { selection = $0 }
         coordinator.look(at: viewport)
+        // Say where the map opens once SwiftUI has finished this update, so it knows how much to draw in full: until
+        // a region is known everything is.
+        DispatchQueue.main.async { coordinator.report() }
         return view
     }
 
@@ -606,10 +609,14 @@ struct WireframeMap: UIViewRepresentable {
             case .began:
                 stopGliding()
                 samples = []
-                begin(points, fingers: gesture.fingers)
+                // From where the fingers touched, not where they had moved to by the time it began: the map catches
+                // up with them, and the ground under each stays under it.
+                begin(gesture.origins.count == points.count ? gesture.origins : points, fingers: gesture.fingers)
                 follow(points)
             case .changed:
-                if gestureStart?.fingers != gesture.fingers { begin(points, fingers: gesture.fingers) }
+                if gestureStart?.fingers != gesture.fingers {
+                    begin(gesture.origins.count == points.count ? gesture.origins : points, fingers: gesture.fingers)
+                }
                 follow(points)
                 if points.count == 1 { remember(points[0]) } else { samples = [] }
             case .ended, .cancelled:
@@ -669,7 +676,8 @@ struct WireframeMap: UIViewRepresentable {
         }
 
         /// The rig after two fingers pinched, twisted and moved: zoomed by how much their spacing changed, turned as
-        /// far as they turned, with the ground point first between them (`anchor`) still between them.
+        /// far as they turned past a small threshold (`TwoFingerIntent.turn`), with the ground point first between them
+        /// (`anchor`) still between them.
         nonisolated static func transform(
             _ rig: CameraRig, anchor: SIMD3<Float>?, from start: [CGPoint], to now: [CGPoint]
         ) -> CameraRig {
@@ -677,7 +685,7 @@ struct WireframeMap: UIViewRepresentable {
             let before = TwoFingerIntent.spacing(start)
             let after = TwoFingerIntent.spacing(now)
             if before > 1, after > 1 { moved.distance = rig.distance * Float(before / after) }
-            moved.azimuth = rig.azimuth + Float(TwoFingerIntent.angle(from: start, to: now))
+            moved.azimuth = rig.azimuth + Float(TwoFingerIntent.turn(TwoFingerIntent.angle(from: start, to: now)))
             moved = moved.clamped()
             if let anchor { moved = moved.keeping(anchor, under: TwoFingerIntent.centroid(now)) }
             return moved

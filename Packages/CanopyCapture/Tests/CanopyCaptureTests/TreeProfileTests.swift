@@ -76,6 +76,24 @@ import simd
         #expect(abs(centre.z + 0.2) < 1e-3)
     }
 
+    @Test func markingDrawsEachRingByHowItWasSetAndCameraRingsStayPut() throws {
+        var profile = TreeProfile(form: form)
+        let breast = try #require(profile.trunk.first { $0.height == 1.37 })
+        profile[breast.id] = TreeSection(id: breast.id, part: .trunk, height: 1.37, radius: 0.24, source: .scan)
+        let aligned = TreeSection(part: .trunk, height: 3, radius: 0.22, source: .camera, offset: SIMD2(0.05, 0))
+        profile[aligned.id] = aligned
+        let marked = WireframeTree.figure(profile, marking: true)
+        #expect(marked.marked[.scan]?.count == WireframeTree.ringSegments)
+        #expect(marked.marked[.camera]?.count == WireframeTree.ringSegments)
+        #expect(marked.marked[.eye] == nil)
+        #expect(marked.all.count == WireframeTree.figure(profile).all.count)
+        // Unmarked, they are drawn with the trunk as before.
+        #expect(WireframeTree.figure(profile).marked.isEmpty)
+        // A ring set from the camera is kept when the shape sliders move the rest.
+        let followed = profile.following(TreeForm(trunkDiameter: 0.4, height: 14, crownHeight: 9, crownWidth: 7))
+        #expect(followed.section(aligned.id) == aligned)
+    }
+
     @Test func aRingSnapsToTheScannedTrunkAtItsHeight() throws {
         // A 0.6 m trunk scanned all the way round, as raw depth points relative to its base.
         var points: [SIMD3<Float>] = []

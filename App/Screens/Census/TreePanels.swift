@@ -44,11 +44,15 @@ struct TreeFormSliders: View {
 }
 
 /// The tree being fitted over a scanned trunk: its shape by four sliders, or ring by ring (each snapped to the scan
-/// and checked against the tree), and the buttons to move it, go back to scanning, or go on to the measurement.
+/// or aligned to the camera, and checked against the tree), and the buttons to move it, go back to scanning, or go
+/// on to the measurement.
 struct TreeFitPanel: View {
     @Binding var fitting: TreeFitting
     @Binding var selectedSection: TreeSection.ID?
     var onSnap: () -> Void
+    var isAligning = false
+    var alignStatus: String?
+    var onAlign: () -> Void = {}
     var onMoveHere: () -> Void
     var onBack: () -> Void
     var onMeasurement: () -> Void
@@ -73,7 +77,9 @@ struct TreeFitPanel: View {
                 // The rings fitted or confirmed against the tree stay; the rest follow the sliders.
                 TreeFormSliders(form: Binding(get: { fitting.shape }, set: { fitting.reshape($0) }))
             case .rings:
-                TreeSectionEditor(profile: $fitting.profile, selected: $selectedSection, onSnap: onSnap)
+                TreeSectionEditor(
+                    profile: $fitting.profile, selected: $selectedSection, onSnap: onSnap, isAligning: isAligning,
+                    alignStatus: alignStatus, onAlign: onAlign)
             }
             HStack(spacing: Spacing.s) {
                 Button("Back", systemImage: "chevron.backward", action: onBack)
@@ -103,12 +109,18 @@ struct TreeFitPanel: View {
     }
 }
 
-/// The rings of a profile: one chip per ring to pick it, sliders for the picked ring's height and width, and
-/// snapping it to the scan, confirming it, adding a ring above it or taking it out.
+/// The rings of a profile: one chip per ring to pick it, aligning the trunk's rings a metre apart to the camera,
+/// sliders for the picked ring's height and width, and snapping it to the scan, confirming it, adding a ring above it
+/// or taking it out.
 struct TreeSectionEditor: View {
     @Binding var profile: TreeProfile
     @Binding var selected: TreeSection.ID?
     var onSnap: () -> Void
+    var isAligning = false
+    var alignStatus: String?
+    var onAlign: () -> Void = {}
+    /// How each confirmed ring was set before, so taking the confirmation back restores it.
+    @State private var beforeConfirming: [TreeSection.ID: TreeSection.Source] = [:]
     private let format = QuantityFormat()
 
     private var section: TreeSection? { selected.flatMap { profile.section($0) } }
@@ -124,6 +136,22 @@ struct TreeSectionEditor: View {
             }
             .scrollIndicators(.hidden)
             .accessibilityIdentifier("fit-rings")
+            HStack(spacing: Spacing.s) {
+                Button(
+                    isAligning ? "Stop aligning" : "Align steps",
+                    systemImage: isAligning ? "stop.circle" : "camera.viewfinder", action: onAlign
+                )
+                .buttonStyle(.canopySecondary)
+                .labelStyle(.titleAndIcon)
+                .accessibilityIdentifier("rings-align")
+                Text(alignStatus ?? "Rings a metre apart up the trunk, set from the camera above the scan.")
+                    .font(.caption2)
+                    .foregroundStyle(Color.canopyInkMuted)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("rings-align-status")
+            }
+            .font(.footnote)
             if let section {
                 slider(
                     "Height", value: Binding(get: { section.height }, set: { reshape(height: $0) }),
@@ -141,7 +169,14 @@ struct TreeSectionEditor: View {
                         section.source == .confirmed ? "Confirmed" : "Looks right",
                         systemImage: section.source == .confirmed ? "checkmark.seal.fill" : "checkmark.seal"
                     ) {
-                        update { $0.source = $0.source == .confirmed ? ($0.offset == nil ? .eye : .scan) : .confirmed }
+                        update { ring in
+                            if ring.source == .confirmed {
+                                ring.source = beforeConfirming[ring.id] ?? (ring.offset == nil ? .eye : .scan)
+                            } else {
+                                beforeConfirming[ring.id] = ring.source
+                                ring.source = .confirmed
+                            }
+                        }
                     }
                     .tint(section.source == .confirmed ? Color.canopyBrand : nil)
                     .accessibilityIdentifier("ring-confirm")
@@ -185,6 +220,8 @@ struct TreeSectionEditor: View {
                     Image(systemName: "checkmark.seal.fill")
                 } else if ring.source == .scan {
                     Image(systemName: "scope")
+                } else if ring.source == .camera {
+                    Image(systemName: "camera.viewfinder")
                 }
             }
             .font(CanopyFont.mono(.caption))
@@ -200,8 +237,10 @@ struct TreeSectionEditor: View {
 
     private func tint(_ ring: TreeSection) -> Color {
         switch ring.source {
+        // As the rings are drawn in AR: the scan's lime, the camera's blue, the brand green.
         case .eye: Color.canopyInkMuted
-        case .scan: Color.canopySurvey
+        case .scan: Color.canopyAccent
+        case .camera: StatusTone.moved.foreground.color
         case .confirmed: Color.canopyBrand
         }
     }
@@ -215,6 +254,7 @@ struct TreeSectionEditor: View {
         switch ring.source {
         case .eye: text += " · by eye"
         case .scan: text += " · fitted to the scan"
+        case .camera: text += " · aligned to the camera"
         case .confirmed: text += " · confirmed"
         }
         return text

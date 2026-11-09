@@ -106,6 +106,15 @@ enum TwoFingerIntent: Equatable {
         return turn
     }
 
+    /// A twist smaller than this, in radians (about 8°), leaves the map's heading alone, so a pinch does not turn it
+    /// by accident; past it the map turns with the fingers, less this much, so it starts turning smoothly.
+    static let turnThreshold: CGFloat = 0.14
+
+    /// How far the map turns for fingers that turned `angle` radians.
+    static func turn(_ angle: CGFloat) -> CGFloat {
+        abs(angle) <= turnThreshold ? 0 : angle - (angle > 0 ? turnThreshold : -turnThreshold)
+    }
+
     static func centroid(_ points: [CGPoint]) -> CGPoint {
         let n = CGFloat(max(points.count, 1))
         return CGPoint(x: points.map(\.x).reduce(0, +) / n, y: points.map(\.y).reduce(0, +) / n)
@@ -114,12 +123,15 @@ enum TwoFingerIntent: Equatable {
 
 /// The map's drag, pinch, turn and tilt as one gesture that follows one or two fingers, so the map can carry on
 /// smoothly as a finger lands or lifts (Apple's map does the same). It begins once a finger has moved a little, so
-/// taps still reach the tap recognisers.
+/// taps still reach the tap recognisers, and measures from where the fingers were when the last one landed or lifted
+/// (`origins`), so the ground under each finger stays under it from the moment it touched.
 final class MapTouchGesture: UIGestureRecognizer {
     private var tracked: [UITouch] = []
     private var starts: [ObjectIdentifier: CGPoint] = [:]
     /// Changes whenever a finger lands or lifts, so the handler starts again from where the fingers are.
     private(set) var fingers = 0
+    /// Where the tracked fingers were when the last one landed or lifted.
+    private(set) var origins: [CGPoint] = []
 
     /// Where the tracked fingers are, at most two.
     var points: [CGPoint] { tracked.prefix(2).map { $0.location(in: view) } }
@@ -134,6 +146,7 @@ final class MapTouchGesture: UIGestureRecognizer {
             starts[ObjectIdentifier(touch)] = touch.location(in: view)
         }
         fingers += 1
+        origins = points
         if state == .began || state == .changed { state = .changed }
     }
 
@@ -161,6 +174,7 @@ final class MapTouchGesture: UIGestureRecognizer {
     private func lift(_ touches: Set<UITouch>, ending: UIGestureRecognizer.State) {
         tracked.removeAll { touches.contains($0) }
         fingers += 1
+        origins = points
         if tracked.isEmpty {
             state = state == .possible ? .failed : ending
         } else if state == .began || state == .changed {
@@ -173,5 +187,6 @@ final class MapTouchGesture: UIGestureRecognizer {
         tracked = []
         starts = [:]
         fingers = 0
+        origins = []
     }
 }

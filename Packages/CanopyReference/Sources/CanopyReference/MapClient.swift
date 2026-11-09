@@ -224,6 +224,10 @@ public struct GerardusMapClient: GerardusClient {
         /// The tile's latest sequence: a followed tile whose cursor is already here has nothing new to pull.
         public var latestSequence: Int64 = 0
         public var updatedAt: Date?
+        /// When trees were last detected over the whole tile, and by what; nil when never (or from a server too old to
+        /// say).
+        public var detectedAt: Date?
+        public var detector: String?
 
         public init(tile: S2CellID) {
             self.tile = tile
@@ -236,8 +240,8 @@ public struct GerardusMapClient: GerardusClient {
     /// How many tiles one GetTileSummaries may ask about.
     public static let summaryBatch = 4096
 
-    /// What each tile holds, `summaryBatch` tiles a call; tiles with nothing in them are left out. A server older than
-    /// GetTileSummaries answers UNIMPLEMENTED (`GRPCStatusError.unimplemented`).
+    /// What each tile holds, `summaryBatch` tiles a call; tiles with nothing in them, and never detected in full, are
+    /// left out. A server older than GetTileSummaries answers UNIMPLEMENTED (`GRPCStatusError.unimplemented`).
     public func tileSummaries(_ tiles: some Collection<S2CellID>) async throws -> [S2CellID: TileCounts] {
         let tiles = Set(tiles).sorted()
         var out: [S2CellID: TileCounts] = [:]
@@ -262,6 +266,8 @@ public struct GerardusMapClient: GerardusClient {
                     case 7: counts.tags = f.int
                     case 8: counts.latestSequence = Int64(bitPattern: f.uint)
                     case 9: counts.updatedAt = MapMessages.date(try ProtoReader.fields(f.bytes))
+                    case 10: counts.detectedAt = MapMessages.date(try ProtoReader.fields(f.bytes))
+                    case 11: counts.detector = f.string
                     default: break
                     }
                 }

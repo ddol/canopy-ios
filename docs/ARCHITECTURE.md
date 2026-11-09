@@ -83,8 +83,10 @@ everything on the simulator.
 
 `CaptureSession` runs `ARWorldTrackingConfiguration` with scene reconstruction (with classification where
 supported) and `gravityAndHeading` alignment, so world +x is east and −z is north. The mesh overlay is
-RealityKit's scene-understanding debug view. Camera frames stay inside ARKit; the app never reads
-`capturedImage`.
+RealityKit's scene-understanding debug view. Camera frames stay inside ARKit, except while trunk rings are being
+aligned (**Rings → Align steps**, below): then the luma plane of `capturedImage` is read in place, along short lines
+across each ring's edges, a few times a second. Only the lines past the edges are kept. No frame is copied, stored
+or sent.
 
 **Scan trunk** raycasts through the screen centre against the mesh (within 6 m) to find a point on the trunk,
 then keeps the scene around it while the player walks round. ARKit keeps refining its reconstruction: the side
@@ -127,6 +129,31 @@ After **Finish scan** a wireframe tree (`TreeForm`, `WireframeTree`: the Mac vis
 rings, with the trunk's diameter) stands on the measured trunk base, and four sliders (trunk diameter, height,
 foliage height, foliage width) fit it to the real tree by eye before the measurement sheet; the fitted figures are
 shown there, not yet saved.
+
+**Rings a metre apart.** The fitted tree is a stack of rings (`TreeProfile`).
+
+- **On Finish scan.** `TrunkSteps.fitted` places a trunk ring at every metre from 1 m up to the crown's base. Each
+  step the depth points reach is fitted to them, as breast height is (`TrunkCapture.snapping`). The depth points
+  come from within 3.5 m of the phone, and the scan region reaches 4 m above the tapped point, so in practice the
+  fitted steps stop around 3 m.
+- **Above the scan, Rings → Align steps** sets the remaining steps from the camera:
+  1. **Predict.** `TrunkSteps.predicted` puts each step on a straight axis at a straight taper, both fitted through
+     the rings below (`TrunkTaper`). Rings under 0.5 m, in the butt flare, are left out. The lean is capped at 30°,
+     and the taper at 3 cm of radius narrower to 0.5 cm wider per metre.
+  2. **Find the edges.** A few times a second, while tracking is good, `RingAligner` projects each ring's left and
+     right grazing points into the frame. For each point it averages five short lines across the edge over a 6 cm
+     height band, and takes the strongest brightness step near the prediction, sub-pixel.
+  3. **Turn each edge into a line.** The plane through the camera, the edge's ray and the trunk's axis cuts the
+     ring's height in a line, which the ring must touch: `n · c − r = k`, linear in its centre and radius.
+  4. **Collect viewpoints.** Lines are kept per 5° of bearing round the trunk, so standing still adds nothing.
+  5. **Solve.** Weighted least squares over every viewpoint, with the prediction as a prior. The worst line more than
+     3σ off is dropped, then the next, until none is or half are gone.
+- **One viewpoint or many.** From one viewpoint the prior holds the ring's distance and the edges set its width and
+  place across the view. Walking round fixes the centre too.
+- **After aligning.** Aligned rings are marked `camera`. In AR they are drawn blue, beside lime for scan-fitted and
+  green for confirmed rings. A ring moved by hand, confirmed or taken out stops being aligned.
+- **Tests.** The geometry is tested against rendered synthetic images of upright and leaning trunks
+  (`RingAlignmentTests`, `TrunkStepsTests`).
 
 **Site overlay.** The same view draws the loaded Gerardus sites round the player as wireframe layers
 (`SiteWireframes`: trees, buildings, streets) and the census's trees, through `CaptureSession.showWireframes`.
@@ -175,10 +202,12 @@ trip or two, and with a cache it is fitted once per site: it depends only on the
 **Real trees.** `AerialTrees.load` prepares the site if needed and streams the canopy classes (unclassified and
 vegetation; 3DEP's San Francisco tiles leave trees unclassified), the DataSF building footprints and the ground
 model. OpenStreetMap is not loaded: the shared tree layer takes nothing from it (Gerardus ADR-0005, ADR-0008), so
-detection must not depend on it. An admin can opt in for checking (see *Admin flags*). Given an
-`Area` it streams only a circle (`StreamReferenceRequest`'s centre and radius, in the site frame) plus a 20 m margin
-so edge crowns are whole; the app asks for the map's visible region, at most 150 m from its centre, which is about
-4 MB at 1 m voxels instead of 15 MB for the whole site. Then it runs `TreeDetector`:
+detection must not depend on it. An admin can opt in for checking (see *Admin flags*). The app streams the whole
+site (`StreamReferenceRequest` with radius 0): the L16 tile at the map centre and its 8 neighbours, so every one of
+those tiles is detected in full. It used to stream a circle round the map centre, at most 150 m, which was a third of
+the data (about 4 MB instead of 15 MB at 1 m voxels; 9 MB instead of about 25 MB at Stow Lake) but left the tiles on
+its edge part detected, on the phone and on the server, which drew as circles of trees. `AerialTrees.load` still takes
+an `Area` for a circle. Then it runs `TreeDetector`:
 
 1. a 0.5 m canopy height model: the highest return above the ground model in each cell, single-cell pits filled,
    smoothed with a 3 × 3 binomial kernel;
@@ -197,8 +226,18 @@ trees. A result answers for the part of its area inside the site's own 9 tiles (
 already acted on (and dropping a new one within 2.5 m of such a kept one).
 On a site with 26 million points this takes under 2 s including download; the dense groves are somewhat over-split,
 which players correct with Not a tree. The Map tab's Layers menu has **Load real trees in view**, and the map shows
-the data's credits while real trees are loaded. From a zoomed-out map the load covers only the middle, so the map
-then moves to the loaded area. The result says what changed (the sample it replaced, or trees new or gone since the
+the data's credits, behind a **Data** tag that twirls open, while real trees are loaded. From a zoomed-out map the
+load covers only the site at the middle, so the map then moves to it.
+
+**Tiles detected in full.** S2 cells are the unit of what is loaded, stored and drawn: a site is an L16 tile and its
+8 neighbours, the shared map is per L16 tile, and a load detects whole tiles. The tiles detected in full are kept in
+`AppModel.detectedTiles`, on the phone across launches and, from a server that records them, from its tile summaries
+(`TileSummary.detected_at`, Gerardus PR "tile detections"). **Layers → Detect every park tile in full** (admins) runs
+the series of loads that fills the park: `detectPark` takes the park's L16 tiles (`parkTiles`, the tiles with any of a
+25 m grid of points inside its boundary) less those detected in full, and loads a whole site at a time, each the one
+round the first tile still to do that covers most tiles still to do, preferring a site the server has prepared
+(`nextSite`). Each site's trees are stored on the phone and sent with `ImportDetectedTrees` for its 9 tiles. About
+three dozen sites cover the park's few hundred tiles. The result says what changed (the sample it replaced, or trees new or gone since the
 area was last loaded); debug and TestFlight builds add how long each step took, which is also logged. Reducing the
 data further is on the [backlog](BACKLOG.md); [PERFORMANCE.md](PERFORMANCE.md) has the measurements.
 
@@ -261,8 +300,8 @@ CanopyModel's own JSON (`CanopyJSON`).
 `local:<uuid>` before sign-in) and `x-gerardus-player-alias` (`GerardusIdentity`). The server keys accounts and roles
 on the id, which it does not verify yet. A changeset's author must be the caller.
 
-**Detected trees.** After **Load real trees in view**, the app saves the area's candidates with
-`ImportDetectedTrees`. The server applies them at once as detected trees, skipping ids it already has and L22 cells
+**Detected trees.** After **Load real trees in view**, the app saves the site's candidates with
+`ImportDetectedTrees`, naming the 9 tiles it detected in full. The server applies them at once as detected trees, skipping ids it already has and L22 cells
 that are already occupied. This has to happen before anyone confirms them, because a change to a tree the server
 has never seen comes back conflicted. Candidates found with OpenStreetMap stay on the phone, and the server refuses
 them anyway.
@@ -400,11 +439,13 @@ still handle tags, so nothing already recorded is lost, and the unit tests still
 ## Admin flags
 
 `AdminSettings` holds flags for checking the data. **Me → Settings → Admin** shows them to Game Center players whose
-team-scoped id is in the `CANOPY_ADMIN_PLAYER_IDS` build setting. It is set in `Configs/Local.xcconfig`, so the list
-stays out of the repository, and reaches the app as Info.plist `CanopyAdminPlayerIDs`. Debug builds show the flags to
+team-scoped id is in the `CANOPY_ADMIN_PLAYER_IDS` build setting, or whose id's SHA-256 (hex, either case) is in
+`CANOPY_ADMIN_PLAYER_HASHES`, which keeps the id itself out of the build. Both are set in the git-ignored
+`Configs/Local.xcconfig`, so the list stays out of the repository, and reach the app as Info.plist
+`CanopyAdminPlayerIDs` and `CanopyAdminPlayerHashes`. Debug builds show the flags to
 everyone, and every flag is off until turned on. The one flag today is **Use OpenStreetMap**: tree detection also
 masks OSM buildings, the Gerardus map gets roads and paths, and the trees found are marked as for checking only. The
-section also shows the player's id, to copy into the allowlist.
+section also shows the player's id and its hash, to copy into the list.
 
 ## Server settings
 

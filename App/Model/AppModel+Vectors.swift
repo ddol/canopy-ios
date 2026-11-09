@@ -92,7 +92,9 @@ extension AppModel {
         let reference = Self.reference(vectors, georeference: georeference, token: tile.token)
         loadedVectors[tile.token] = LoadedVectors(vectors: vectors, georeference: georeference)
         vectorAreas[tile.token] = reference
-        vectorTiles.formUnion(vectors.site.coveringL16Tokens.compactMap(S2CellID.init(token:)))
+        // The load is a 220 m circle round the tile's centre: the tile in full, but not the corners of the 8 round it,
+        // so only the tile counts as loaded and a step into a neighbour loads that one.
+        vectorTiles.insert(tile)
         vectorAttribution = Array(Set(vectorAttribution + vectors.attribution)).sorted()
         let format = QuantityFormat()
         let buildings = reference.lines.filter { $0.kind == .building || $0.kind == .wall }.count

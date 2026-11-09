@@ -34,8 +34,12 @@ final class AerialTreesUITests: XCTestCase {
         shot.lifetime = .keepAlways
         add(shot)
         XCTAssertTrue(result.label.hasPrefix("Loaded"), result.label)
+        // The credit is a "Data" tag that twirls open.
+        let credits = app.buttons["aerial-attribution-toggle"].firstMatch
+        XCTAssertTrue(credits.waitForExistence(timeout: 30))
+        credits.tap()
         let credit = app.staticTexts["aerial-attribution"].firstMatch
-        XCTAssertTrue(credit.waitForExistence(timeout: 30))
+        XCTAssertTrue(credit.waitForExistence(timeout: 5))
         XCTAssertTrue(credit.label.contains("3D Elevation Program"), credit.label)
     }
 }

@@ -99,18 +99,30 @@ import simd
         #expect(close(moved.ground(at: TwoFingerIntent.centroid(now)), anchor, within: 0.05))
     }
 
-    @Test func twistingTurnsTheMapTheWayTheFingersTurn() throws {
-        // Seen from nearly straight down, every finger keeps its own ground point, not just the one between them.
+    @Test func twistingTurnsTheMapTheWayTheFingersTurnOncePastAThreshold() throws {
         let rig = rig(tilt: 88)
         let start = [CGPoint(x: 120, y: 400), CGPoint(x: 280, y: 400)]
         let grounds = try start.map { try #require(rig.ground(at: $0)) }
         let anchor = try #require(rig.ground(at: TwoFingerIntent.centroid(start)))
-        // A quarter turn clockwise on screen about the centroid.
+        // A quarter turn clockwise on screen about the centroid turns the map clockwise by that, less the threshold.
         let now = [CGPoint(x: 200, y: 320), CGPoint(x: 200, y: 480)]
         let moved = Coordinator.transform(rig, anchor: anchor, from: start, to: now)
-        for (finger, ground) in zip(now, grounds) {
+        #expect(abs(moved.azimuth - rig.azimuth - Float(CGFloat.pi / 2 - TwoFingerIntent.turnThreshold)) < 1e-4)
+        // Seen from nearly straight down, every finger keeps its own ground point once that is taken back off, not
+        // just the one between them.
+        let back: CGFloat = -TwoFingerIntent.turnThreshold
+        let (c, s) = (cos(back), sin(back))
+        let unturned = now.map { p -> CGPoint in
+            let dx: CGFloat = p.x - 200
+            let dy: CGFloat = p.y - 400
+            return CGPoint(x: 200 + dx * c - dy * s, y: 400 + dx * s + dy * c)
+        }
+        for (finger, ground) in zip(unturned, grounds) {
             #expect(close(moved.ground(at: finger), ground, within: 3))
         }
+        // A slight twist, as fingers make while pinching, leaves the heading alone.
+        let pinch = [CGPoint(x: 100, y: 405), CGPoint(x: 300, y: 395)]
+        #expect(Coordinator.transform(rig, anchor: anchor, from: start, to: pinch).azimuth == rig.azimuth)
     }
 
     @Test func twoFingersUpTogetherTiltAndAnythingElseTransforms() {

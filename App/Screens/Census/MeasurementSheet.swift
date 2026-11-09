@@ -21,6 +21,16 @@ struct MeasurementSheet: View {
 
     private var analysis: TrunkAnalysis.Result { measurement.capture.analysis }
 
+    /// How a kept ring was set, after its diameter.
+    static func mark(_ source: TreeSection.Source) -> String {
+        switch source {
+        case .eye: ""
+        case .scan: " (scan)"
+        case .camera: " (camera)"
+        case .confirmed: " ✓"
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -60,11 +70,8 @@ struct MeasurementSheet: View {
                                 LabeledContent(
                                     ring.part.label + " " + format.length(ring.height, fractionDigits: 2) + " up"
                                 ) {
-                                    Text(
-                                        format.length(ring.diameter, fractionDigits: 2)
-                                            + (ring.source == .confirmed ? " ✓" : " (scan)")
-                                    )
-                                    .font(CanopyFont.mono())
+                                    Text(format.length(ring.diameter, fractionDigits: 2) + Self.mark(ring.source))
+                                        .font(CanopyFont.mono())
                                 }
                             }
                         }
@@ -73,8 +80,8 @@ struct MeasurementSheet: View {
                     } footer: {
                         Text(
                             "From the wireframe you matched to the tree. Rings marked (scan) were fitted to the scan's "
-                                + "points at that height; ✓ ones you confirmed against the tree. Not saved with the "
-                                + "measurement yet.")
+                                + "points at that height, (camera) to the trunk's edges in the camera image; ✓ ones you "
+                                + "confirmed against the tree. Not saved with the measurement yet.")
                     }
                 }
 

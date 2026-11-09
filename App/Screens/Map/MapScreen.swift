@@ -22,6 +22,8 @@ struct MapScreen: View {
     /// Where to move the map, such as to trees just loaded.
     @State private var focus: MapFocus?
     @AppStorage("canopy.baseMap") private var baseMap = BaseMap.apple
+    /// Whether the data credit under the map is open: closed, it is a small "Data" tag.
+    @State private var showsAttribution = false
 
     private let format = QuantityFormat()
 
@@ -62,15 +64,7 @@ struct MapScreen: View {
                             .buttonStyle(.canopySecondary)
                             .accessibilityIdentifier("load-vectors-here")
                         }
-                        if !model.mapAttribution.isEmpty {
-                            Text("Data: " + model.mapAttribution.joined(separator: " · "))
-                                .font(.caption2)
-                                .foregroundStyle(Color.canopyInkMuted)
-                                .padding(.horizontal, Spacing.xs)
-                                .padding(.vertical, Spacing.xxs)
-                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.small))
-                                .accessibilityIdentifier("aerial-attribution")
-                        }
+                        if !model.mapAttribution.isEmpty { attribution }
                     }
                     .padding(.horizontal, Spacing.m)
                     .padding(.bottom, Spacing.xs)
@@ -91,8 +85,14 @@ struct MapScreen: View {
                     // For profiling a load with Instruments without UI automation: launch with
                     // `-canopy.loadTreesAtLaunch YES` (and a server) to load the trees in view once the app is ready.
                     .task(id: model.phase) {
-                        guard model.phase == .ready, UserDefaults.standard.bool(forKey: "canopy.loadTreesAtLaunch")
-                        else { return }
+                        guard model.phase == .ready else { return }
+                        // `-canopy.detectParkAtLaunch YES` runs Layers → Detect every park tile in full.
+                        if UserDefaults.standard.bool(forKey: "canopy.detectParkAtLaunch") {
+                            try? await Task.sleep(for: .seconds(2))
+                            model.detectPark()
+                            return
+                        }
+                        guard UserDefaults.standard.bool(forKey: "canopy.loadTreesAtLaunch") else { return }
                         try? await Task.sleep(for: .seconds(2))
                         await loadTreesInView()
                     }
@@ -103,7 +103,9 @@ struct MapScreen: View {
     /// What the map draws, made once per update and shared by the map and the note under it.
     private var layers: MapLayers {
         MapLayers(
-            state: model.census, boundary: model.boundary, visibility: visibility, region: viewport,
+            // Before the map reports where it is, the region it opens on: without one, everything is drawn in full.
+            state: model.census, boundary: model.boundary, visibility: visibility,
+            region: viewport ?? Self.startViewport,
             detectedLimit: detectedLimit, reference: model.mapReference, surveyed: Set(model.surveyedCells.keys),
             treeForms: model.treeForms, treeProfiles: model.treeProfiles, censusTiles: model.censusTiles,
             remoteTiles: model.serverTiles)
@@ -132,14 +134,15 @@ struct MapScreen: View {
         }
     }
 
-    /// Loads the real trees in view, then goes to them if the map showed much more than was loaded: a zoomed-out map
-    /// loads only its middle, which would be a dot.
+    /// Loads the real trees in the site at the map centre (its tile and the 8 round it), then goes to them if the map
+    /// showed much more: a zoomed-out map loads only its middle, which would be a dot.
     private func loadTreesInView() async {
-        let radius = viewport?.cornerDistance ?? AppModel.aerialRadiusLimit
         let centre = centre
-        await model.loadAerialTrees(around: centre, radius: radius)
-        if case .done = model.aerial, radius > AppModel.aerialRadiusLimit * 1.5 {
-            focus = MapFocus(MapViewport(center: centre, radius: AppModel.aerialRadiusLimit * 1.1))
+        let shown = viewport?.cornerDistance ?? 0
+        await model.loadAerialTrees(around: centre)
+        let site = MapViewport(around: centre.tile, margin: 3.5)
+        if case .done = model.aerial, shown > site.cornerDistance * 1.5 {
+            focus = MapFocus(site)
         }
     }
 
@@ -165,6 +168,35 @@ struct MapScreen: View {
     private var showsLoadVectors: Bool {
         visibility.vectors && model.alignClient != nil && !model.aerial.isWorking
             && (viewport?.cornerDistance ?? .infinity) <= 600 && !model.hasVectors(at: centre)
+    }
+
+    /// Where the map's data comes from: a "Data" tag that twirls open to the credits.
+    private var attribution: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.xxs) {
+            Button {
+                withAnimation(.snappy) { showsAttribution.toggle() }
+            } label: {
+                HStack(spacing: 2) {
+                    Image(systemName: "chevron.right")
+                        .imageScale(.small)
+                        .rotationEffect(.degrees(showsAttribution ? 90 : 0))
+                    Text("Data")
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("aerial-attribution-toggle")
+            .accessibilityValue(showsAttribution ? "Open" : "Closed")
+            if showsAttribution {
+                Text(model.mapAttribution.joined(separator: " · "))
+                    .accessibilityIdentifier("aerial-attribution")
+                    .transition(.opacity)
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(Color.canopyInkMuted)
+        .padding(.horizontal, Spacing.xs)
+        .padding(.vertical, Spacing.xxs)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.small))
     }
 
     /// Says when only some tiles are drawn in full, and how to see the rest.
@@ -281,6 +313,20 @@ struct MapScreen: View {
                     Task { await loadTreesInView() }
                 }
                 .disabled(model.aerial.isWorking)
+                if model.isAdmin {
+                    if model.parkDetection?.isRunning == true {
+                        Button("Stop detecting the park", systemImage: "stop.circle") {
+                            model.parkDetection?.cancel()
+                        }
+                        .accessibilityIdentifier("detect-park-stop")
+                    } else {
+                        Button("Detect every park tile in full", systemImage: "square.grid.3x3.fill") {
+                            model.detectPark()
+                        }
+                        .disabled(model.aerial.isWorking)
+                        .accessibilityIdentifier("detect-park")
+                    }
+                }
             }
             Section("Gerardus vectors") {
                 Toggle("Show vectors", systemImage: "square.stack.3d.down.right", isOn: $visibility.vectors)

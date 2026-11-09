@@ -57,6 +57,13 @@ final class AppModel {
     /// The city's tiles the server holds trees in, from its summaries, for a sync to follow when the map shows the
     /// whole city (see `summariseCity`).
     var cityTiles: Set<S2CellID> = []
+    /// The tiles whose trees were detected over the whole tile, by this phone (kept across launches) or, from its
+    /// summaries, by anyone the server heard from (see AppModel+Detection).
+    var detectedTiles: Set<S2CellID> = AppModel.savedDetectedTiles() {
+        didSet { if detectedTiles != oldValue { Self.saveDetectedTiles(detectedTiles) } }
+    }
+    /// The park being detected in full, site by site (`detectPark`).
+    var parkDetection: ParkDetection?
     /// When the whole city's summaries were last asked for.
     @ObservationIgnored var cityAskedAt: Date?
     @ObservationIgnored var syncAgain = false

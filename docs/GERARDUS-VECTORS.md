@@ -24,7 +24,9 @@ ring of `crown_radius_m`, 2 m when the server gives none). Ground is left out. S
 them (ground grid, reconstructed buildings with their roofs, streets and kerbs, trees as trunk and crown rings), with
 the census's trees as the same figure in their status colour, from their DBH and height when measured. It moves as
 Apple's map does: one finger drags it, and the ground under the finger stays under it, gliding on when let go; two
-fingers pinch to zoom and twist to turn about the point between them; two fingers moving up or down together tilt it;
+fingers pinch to zoom and twist to turn about the point between them, from where they touched, so the ground under
+each stays under it (a twist under about 8° leaves the heading, so pinching does not turn the map); two fingers
+moving up or down together tilt it; the map opens drawing tiles, not every loaded object, until it is close enough;
 double-tap zooms in where tapped and a two-finger tap zooms out; tapping a tree opens its sheet. The ground grid is on
 until **Ground** (in the same menu) turns it off; it is tinted by height, dull green low to pale high over the range of
 the loaded sites, so slopes read without lighting. **Show vectors** hides the buildings, streets and Gerardus's trees.
@@ -76,9 +78,14 @@ session; nothing is written to Gerardus. The trunk scan's own fitted tree starts
 After a trunk scan the fitted tree is a stack of rings (cross-sections) from the ground up, not two cylinders.
 **Shape** moves them all with the four sliders; **Rings** picks one ring (orange in AR) to move up or down, widen or
 narrow, **Snap to scan** (a circle fitted to the scan's depth points, or its mesh, at that height: the breast-height
-ring starts snapped), **Looks right** to confirm it against the tree, add a ring above or take one out. Uprights join
-each ring to the next, so a trunk tapers and a crown bulges. Snapped and confirmed rings stay put when the Shape
-sliders move the rest. Saving the measurement keeps the fitted shape for that tree for the session, in AR and on the
+ring and a ring every metre up, as far as the depth points reach, start snapped), **Looks right** to confirm it
+against the tree, add a ring above or take one out.
+
+**Align steps** adds the rest of the steps up to the crown's base, predicted from the axis and taper of the fitted
+rings below. As the player walks round with the phone pointed up the trunk, each step moves to the trunk's edges in
+the camera image. Rings are drawn by how they were set: lime fitted to the scan, blue aligned to the camera, green
+confirmed, brown by eye. Uprights join each ring to the next, so a trunk tapers and a crown bulges. Snapped, aligned
+and confirmed rings stay put when the Shape sliders move the rest. Saving the measurement keeps the fitted shape for that tree for the session, in AR and on the
 wireframe map.
 
 The **Wireframes** menu's **S2 cells** layer draws the level-16 tiles round the player on the ground with short

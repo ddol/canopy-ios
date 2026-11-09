@@ -7,9 +7,11 @@ CANOPY_BUNDLE_ID = io.github.ddol.canopy
 // The version (CANOPY_VERSION, MARKETING_VERSION); bump it with `make bump-version`.
 #include "Version.xcconfig"
 
-// Game Center player ids, separated by spaces, that see the admin flags in Settings. Debug builds show them to
-// everyone. Set it in Local.xcconfig, so the list stays out of the repository.
+// Game Center player ids, separated by spaces, that see the admin flags in Settings, or the SHA-256 hashes of them
+// (lower- or upper-case hex), which keep the ids out of the build too. Debug builds show the flags to everyone. Set
+// them in Local.xcconfig, so the list stays out of the repository.
 CANOPY_ADMIN_PLAYER_IDS =
+CANOPY_ADMIN_PLAYER_HASHES =
 
 // Per-developer settings (signing team, bundle id). Optional and git-ignored; see Local.xcconfig.example.
 #include? "Local.xcconfig"
