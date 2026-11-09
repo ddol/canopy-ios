@@ -1,7 +1,7 @@
 import CanopyDesign
 import CanopyModel
 
-/// Plain-language summaries of changeset operations, for the Me tab.
+/// Plain-language summaries of changeset operations, for the Proposals tab.
 enum ChangesetSummary {
     static func describe(_ changeset: Changeset) -> String {
         changeset.ops.map(describe).joined(separator: "; ")

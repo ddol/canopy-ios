@@ -9,7 +9,7 @@ screens.
 ```
                          ┌──────────────────────────────────────────┐
 App (SwiftUI)            │ CanopyApp · AppModel · Map · Census ·     │
-                         │ Tag · Me                                  │
+                         │ Tag · Proposals · Me                      │
                          └──────────────────────────────────────────┘
                               │          │          │          │
          ┌────────────────────┼──────────┼──────────┼──────────┼───────────────┐
@@ -423,8 +423,16 @@ its row shows a placeholder; once it is downloaded, its picture is drawn. Blobs 
 references them, each once a sync however many changesets name it. Gerardus keeps blobs by the same hash, inserted
 once (`UploadBlob` answers `already_stored` for bytes it has), so a scan is one blob there too.
 
-**Your proposals.** Me → **Your proposals** lists the player's open changesets, and History the closed ones. Each
-row gives the trees, what it changes, its state, and what it still needs in words (`ProposalStatus`).
+**The Proposals tab** (`ProposalsScreen`) shows one list at a time, picked with a segmented control: Review, Yours
+and History. Each time it appears it opens on Review when other players' changes wait there and on Yours otherwise,
+and keeps that list while it shows, so agreeing with the last change does not switch lists; a list the player picks
+stays picked (`ProposalsScreen.Choice`). Its badge is `AppModel.proposalsAwaitingPlayer`: the review queue's length with a server set,
+and zero without one. The player's own proposals wait on other players, so they are not counted. Pulling a list down
+syncs. Each list is a SwiftUI `List`, which builds only the rows on screen, so a long history costs what is shown.
+
+**Your proposals.** Proposals → **Yours** lists the player's open changesets (`AppModel.openProposals`), and
+**History** the closed ones (`closedProposals`), newest first. Each row gives the trees, what it changes, its state,
+and what it still needs in words (`ProposalStatus`).
 `Changeset.need(authorTrusted:)` applies the policy (two players, one trusted) to the author and the approvals:
 - nothing, so the server applies it;
 - any other player, because a trusted player has agreed;
@@ -464,7 +472,7 @@ registration are not kept on the phone.
   `-canopy.sampleScan YES` record a synthetic scan on the first fixture tree when Your scans opens with none, for UI
   tests and the simulator.
 
-**Reviewing.** The review queue (Me → **Review**) lists other players' open changesets in the followed tiles
+**Reviewing.** The review queue (Proposals → **Review**) lists other players' open changesets in the followed tiles
 (`ListOpenChangesets`), leaving out the player's own changes and ones they have already agreed with. **Agree**
 records an approval (`ReviewChangeset`). A trusted player (`GetPlayer`) can also **Reject**, with a reason. The server
 applies a change once two players agree and one of them is trusted, and the next sync brings it back.

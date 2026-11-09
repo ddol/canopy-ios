@@ -73,9 +73,9 @@ Blobs are named by their SHA-256 under `blobs/`; add `.glb` to open one in a glT
    testers (people on your App Store Connect team) can install it straight away; external testers need a short
    beta review first.
 
-TestFlight builds keep the **testing tools**: Share GLB and Preview in Quick Look after a measurement, and
-Simulate trusted approval and Reset local data on the Me tab. Build with `TESTING_TOOLS=0` to leave them out,
-as an App Store build would.
+TestFlight builds keep the **testing tools**: Share GLB and Preview in Quick Look after a measurement, Simulate
+trusted approval on the Proposals tab, and Reset local data on the Me tab. Build with `TESTING_TOOLS=0` to leave
+them out, as an App Store build would.
 
 Game Center works in TestFlight once the app record exists (testers sign in with their normal Game Center
 account, against the sandbox). Before that, the app falls back to a local player id.
@@ -131,7 +131,8 @@ The Milestone 0 walkthrough:
 | Map | The park outline and 200 synthetic candidates show; the summary bar reads 0 · 200 · 0 %. Tap a tree: the sheet shows its height and its S2 L16 tile and L19 chunk in family display (`80858-745b`). |
 | Census | The camera view shows the LiDAR mesh overlay. Near a candidate (in the park), the card at the top names the nearest tree with its status, distance and bearing, and its wireframe is orange. Turn away from it: a compass in the corner shows it as an orange marker that swings round as you turn, with nearby trees faint, and the card says which way to turn. Face it: the card is outlined in orange and **Not a tree** and **Move** appear. **Move** stands its wireframe at the trunk under the reticle; dragging a finger moves it, with a line back to where it was; **Place here** makes it Proposed at the new spot, and it is drawn there. **Not a tree** on another makes it Proposed removed and selects the next nearest. **Register with 3DEP** is in the overlay menu (top right). Aim the reticle at a trunk about 1.37 m up and tap **Scan trunk**, then walk slowly round it: the captured mesh fills in lime and the card shows how much of the circumference is covered. At “Good coverage”, tap **Finish scan**: the sheet shows the diameter 1.37 m above the ground with ± and the lean. Save, then Share GLB and Preview in Quick Look (close it with Done). Away from the park there is no candidate within 60 m, so Save adds the measurement as a new tree. Before the sheet, in **Rings**, the steps a metre apart up to about 3 m are lime (fitted to the scan); **Align steps** adds the rest up to the crown's base, and walking round with the phone pointed up the trunk turns them blue on its edges. |
 | Tag | From a tree's sheet, Tag a limb hazard. Place limb point in 3D on a branch within 5 m, pick the hazard details and Save: the tag shows as Proposed. |
-| Me | The pending changes are listed. Sync now submits them; Simulate trusted approval puts them on the map. **Your scans** shows a grey picture of each scan's mesh; **Show on map** goes to the Map tab, centred on the scan's tree with its sheet open. |
+| Proposals | Yours lists the pending changes. Pull down (or Me → Sync now) to submit them; Simulate trusted approval puts them on the map, and they move to History. With a server set, the badge counts other players' changes in Review; Agree takes one off the list. |
+| Me | Sync now submits the pending changes. **Your scans** shows a grey picture of each scan's mesh; **Show on map** goes to the Map tab, centred on the scan's tree with its sheet open. |
 
 Location needs to be allowed for the Census and Tag tabs; the camera permission is for ARKit and for finding a
 trunk's edges while aligning rings (no photos are taken).

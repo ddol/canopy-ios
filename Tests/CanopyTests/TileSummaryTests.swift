@@ -50,6 +50,67 @@ import Testing
         #expect(city.contains(park.tile))
     }
 
+    @Test func aMapZoomedOutPastTheCityAsksAboutTheSameTilesWithoutListingEveryTileInView() {
+        // The Bay Area, the state and the whole globe: each listed every tile in view on the main thread (a million
+        // for the Bay Area), which froze the map and ran the app out of memory. The nearest tiles are the city's.
+        let park = GeoPoint(latitude: 37.7694, longitude: -122.4770)
+        let city = AppModel.summaryTiles(around: MapViewport(center: park, radius: 8000))
+        let zoomedOut = [
+            MapViewport(center: park, radius: 60_000), MapViewport(center: park, radius: 600_000),
+            MapViewport(center: park, latitudeDelta: 150, longitudeDelta: 360),
+        ]
+        for viewport in zoomedOut {
+            let start = ContinuousClock.now
+            let tiles = AppModel.summaryTiles(around: viewport)
+            #expect(ContinuousClock.now - start < .seconds(10))
+            #expect(tiles == city)
+        }
+    }
+
+    /// The tiles a view asks about, found as they were before the search was capped: every tile in the view and its
+    /// margin (or in the level-13 cells over them), nearest the centre first.
+    func everyTileInView(_ viewport: MapViewport) -> [S2CellID] {
+        let detail = MapDetail(region: viewport)
+        let padded = MapViewport(
+            center: viewport.center, latitudeDelta: viewport.latitudeDelta * 1.3,
+            longitudeDelta: viewport.longitudeDelta * 1.3)
+        let tiles: Set<S2CellID> =
+            detail.summaryLevel < S2CellID.tileLevel
+            ? Set(
+                MapDetail.cells(in: padded, level: detail.summaryLevel, step: 400)
+                    .flatMap { $0.children(atLevel: S2CellID.tileLevel) })
+            : MapDetail.cells(in: padded, level: S2CellID.tileLevel, step: 40)
+        let frame = LocalFrame(origin: viewport.center)
+        let distances: [(tile: S2CellID, metres: Double)] = tiles.map { tile in
+            (tile, frame.enu(of: tile.center).horizontalDistance)
+        }
+        let nearest = distances.sorted { a, b in
+            a.metres != b.metres ? a.metres < b.metres : a.tile < b.tile
+        }
+        return nearest.prefix(GerardusMapClient.summaryBatch).map(\.tile)
+    }
+
+    @Test func aViewWiderThanTheSearchAsksAboutTheSameTilesAsListingEveryTileInIt() {
+        // Wide enough that the search stops short of the view's edges, and small enough to list every tile in: the
+        // city, a phone held upright, across the antimeridian (Taveuni, Fiji), and far north (Longyearbyen), where a
+        // degree of longitude is a fifth of one at the equator. A search that stopped too close would ask about
+        // other tiles here, though each view would still agree with a wider one.
+        let park = GeoPoint(latitude: 37.7694, longitude: -122.4770)
+        let square = MapViewport(center: park, radius: 10_000)
+        let views = [
+            MapViewport(center: park, radius: 8000),
+            MapViewport(
+                center: park, latitudeDelta: square.latitudeDelta * 1.4, longitudeDelta: square.longitudeDelta / 1.4),
+            MapViewport(center: GeoPoint(latitude: -16.80, longitude: 179.98), radius: 10_000),
+            MapViewport(center: GeoPoint(latitude: 78.22, longitude: 15.65), radius: 10_000),
+        ]
+        for viewport in views {
+            let tiles = AppModel.summaryTiles(around: viewport)
+            #expect(tiles.count == GerardusMapClient.summaryBatch)
+            #expect(tiles == everyTileInView(viewport))
+        }
+    }
+
     @Test func theWholeCityIsEveryTileFromLandsEndToTheBayInAFewCalls() {
         let city = AppModel.wholeCity
         let landsEnd = GeoPoint(latitude: 37.7875, longitude: -122.5055).tile
