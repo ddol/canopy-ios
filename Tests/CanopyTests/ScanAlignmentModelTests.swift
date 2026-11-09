@@ -93,14 +93,14 @@ import simd
     @Test func theArrowsFollowTheView() {
         // From the south, looking north across the ground: right is east, away is north (scene −z).
         let level = ScanAlignmentCamera.groundAxes(right: SIMD3(1, 0, 0), front: SIMD3(0, 0, -1), up: SIMD3(0, 1, 0))
-        #expect(level.right == SIMD2(1, 0) && level.away == SIMD2(0, -1))
+        #expect(simd_distance(level.right, SIMD2(1, 0)) < 1e-5 && simd_distance(level.away, SIMD2(0, -1)) < 1e-5)
         // From the west, looking east and a little down.
         let west = ScanAlignmentCamera.groundAxes(
             right: SIMD3(0, 0, 1), front: simd_normalize(SIMD3(1, -0.3, 0)), up: simd_normalize(SIMD3(0.3, 1, 0)))
         #expect(simd_distance(west.right, SIMD2(0, 1)) < 1e-5 && simd_distance(west.away, SIMD2(1, 0)) < 1e-5)
         // Straight down with east to the right: the top of the screen, and so away, is north.
         let down = ScanAlignmentCamera.groundAxes(right: SIMD3(1, 0, 0), front: SIMD3(0, -1, 0), up: SIMD3(0, 0, -1))
-        #expect(down.right == SIMD2(1, 0) && down.away == SIMD2(0, -1))
+        #expect(simd_distance(down.right, SIMD2(1, 0)) < 1e-5 && simd_distance(down.away, SIMD2(0, -1)) < 1e-5)
     }
 
     /// The scan is readied to draw off the main thread: a unit normal at every vertex and each edge once.
