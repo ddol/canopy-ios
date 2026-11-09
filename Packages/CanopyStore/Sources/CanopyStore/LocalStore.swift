@@ -799,13 +799,17 @@ enum Schema {
         // records with the same blob are one scan saved more than once (Save tapped twice): the first record is kept,
         // the others go, and no second record can be added. Observations, trees, tags and changesets name scans by
         // hash, so they all still point at the one kept. The observations themselves are append-only and stay.
+        // Numbering each scan's records in one pass keeps this quick with thousands of scans: it runs at launch, on
+        // the main thread, and a query comparing every record with every other took seconds there.
         """
         DROP TRIGGER evidence_no_delete;
-        DELETE FROM evidence WHERE EXISTS (
-            SELECT 1 FROM evidence AS earlier
-            WHERE earlier.blob = evidence.blob
-                AND (earlier.created_at < evidence.created_at
-                    OR (earlier.created_at = evidence.created_at AND earlier.rowid < evidence.rowid))
+        DELETE FROM evidence WHERE rowid IN (
+            SELECT duplicate FROM (
+                SELECT rowid AS duplicate,
+                    row_number() OVER (PARTITION BY blob ORDER BY created_at, rowid) AS position
+                FROM evidence
+            )
+            WHERE position > 1
         );
         CREATE TRIGGER evidence_no_delete BEFORE DELETE ON evidence
             BEGIN SELECT RAISE(ABORT, 'evidence is immutable'); END;

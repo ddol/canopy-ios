@@ -287,7 +287,8 @@ scan (see *One record per scan*).
 
 Every write runs in one transaction that also re-derives the state (`CensusState.derive`) and rewrites
 `trees` and `tags`, so the derived tables always match the log; opening the store re-derives too.
-`LocalStore.record(_:by:)` appends an observation and the changeset built from it atomically.
+`LocalStore.record(_:by:)` appends an observation and the changeset built from it atomically; recording a scan
+whose observation still stands returns that observation and its changeset instead (see *One record per scan*).
 
 The blob store names each file by its SHA-256 (`blobs/ab/cdef…`), checks the hash on write
 (`put(_:expecting:)`) and on read, and never overwrites, so a scan's mesh is kept once however often it is put.

@@ -131,6 +131,32 @@ import Testing
         #expect(model.error == nil)
     }
 
+    @Test func placingATagWithOneLimbScanTwiceKeepsOneScanAndOneTag() async throws {
+        let model = try makeModel()
+        await model.load()
+        let tree = try #require(model.census.trees.values.first)
+        let limb = AppModel.LimbEvidence(glb: Data("limb glb".utf8), vertexCount: 3, triangleCount: 1, cropRadius: 1)
+        func place() async -> CanopyModel.Tag? {
+            await model.placeTag(
+                on: tree, point: Tag.Point(position: tree.position, heightAboveGround: Quantity(6, uncertainty: 1)),
+                issue: .hanger, couldHit: .path, sizeClass: .large, urgency: .high, evidence: limb)
+        }
+
+        // Save tapped twice: the second tap does nothing while the first saves.
+        async let first = place()
+        async let second = place()
+        let placed = Set(await [first, second].compactMap { $0?.id })
+        #expect(placed.count == 1)
+        let tag = try #require(placed.first)
+
+        // Saving it again later returns the tag the scan is about.
+        #expect(await place()?.id == tag)
+        #expect(model.tags(on: tree).map(\.id) == [tag])
+        #expect(model.scanCount == 1)
+        #expect(model.changesets.count == 1)
+        #expect(model.error == nil)
+    }
+
     @Test func syncSubmitsAndASimulatedTrustedApprovalAppliesTheChange() async throws {
         let model = try makeModel()
         await model.load()
