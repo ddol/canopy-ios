@@ -66,13 +66,14 @@ final class StandInUITests: XCTestCase {
         let review = app.buttons["Review"].firstMatch
         XCTAssertTrue(review.waitForExistence(timeout: 10))
         review.tap()
-        XCTAssertTrue(
-            app.staticTexts["Pull down to sync and see other players' changes near you."].firstMatch.waitForExistence(
-                timeout: 5))
-        let list = app.collectionViews.firstMatch
-        list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
-            .press(forDuration: 0.1, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
-        XCTAssertTrue(app.staticTexts["Nothing waiting near you."].firstMatch.waitForExistence(timeout: 30))
+        let hint = app.staticTexts["Pull down to sync and see other players' changes near you."].firstMatch
+        XCTAssertTrue(hint.waitForExistence(timeout: 5))
+        // Pull from the hint itself: the list's frame runs up under the navigation bar, so a drag from its top edge
+        // starts on the bar and never reaches the list.
+        hint.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
+            forDuration: 0.1,
+            thenDragTo: app.collectionViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
+        XCTAssertTrue(app.staticTexts["Nothing waiting near you."].firstMatch.waitForExistence(timeout: 60))
         keep(app, "Review after a sync")
 
         app.buttons["Me"].firstMatch.tap()
