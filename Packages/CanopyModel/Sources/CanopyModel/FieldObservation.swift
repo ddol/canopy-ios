@@ -47,7 +47,7 @@ public struct FieldObservation: Identifiable, Hashable, Codable, Sendable {
             switch self {
             case .trunkMeasured(_, _, _, let evidence): evidence
             case .tagPlaced(let tag): tag.evidenceRef
-            case .treeConfirmed, .treeAdded, .treeRejected: nil
+            case .treeConfirmed, .treeAdded, .treeRejected, .treeMoved: nil
             }
         }
     }

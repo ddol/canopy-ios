@@ -46,7 +46,8 @@ final class AppModel {
     /// Tree shapes the player has adjusted by eye in AR, by wireframe id (`census:<uuid>` or a Gerardus feature id),
     /// drawn the same on the wireframe map. In memory only.
     var treeForms: [String: TreeForm] = [:]
-    /// Ring-by-ring profiles fitted over scanned trunks in AR, by the same ids. In memory only.
+    /// Ring-by-ring profiles fitted over scanned trunks, in AR or against a saved scan, by the same ids. Saved with
+    /// their scans and restored at launch (see AppModel+Alignment).
     var treeProfiles: [String: TreeProfile] = [:]
     /// Bookkeeping for syncing on its own (`syncSoon`).
     @ObservationIgnored var pendingSync: Task<Void, Never>?
@@ -197,6 +198,10 @@ final class AppModel {
                 try await store.importCandidates(try ParkFixtures.candidates())
             }
             await refresh()
+            await loadAlignments()
+            #if DEBUG || TESTING_TOOLS
+                await seedScanIfAsked()
+            #endif
             await seedServer()
             phase = .ready
         } catch {
@@ -412,6 +417,8 @@ extension AppModel {
     func reset() async {
         do {
             try await store.reset()
+            // The rings were restored from the store, which no longer has them.
+            treeProfiles = [:]
             server = FakeGerardusClient()
             lastSync = nil
             try await store.importCandidates(try ParkFixtures.candidates())

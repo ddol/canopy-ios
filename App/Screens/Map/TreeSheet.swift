@@ -89,13 +89,14 @@ struct TreeSheet: View {
                     Section {
                         ForEach(tree.evidenceRefs, id: \.rawValue) { ref in
                             EvidenceRow(ref: ref)
+                            AlignScanButton(scan: ref, treeID: tree.id)
                         }
                     } header: {
                         Text("Evidence")
                     } footer: {
                         Text(
                             "Colourless meshes of the trunk, cropped to it: no photos. A scan from another device comes "
-                                + "down from the server when you preview it.")
+                                + "down from the server when you preview or align it.")
                     }
                 }
 

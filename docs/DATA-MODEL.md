@@ -275,8 +275,8 @@ except those a player has observed (see docs/ARCHITECTURE.md, *Aerial data and r
 a thin wrapper, no ORM). The database is `Application Support/Canopy/canopy.sqlite` (WAL mode); blobs are in
 `Application Support/Canopy/blobs/`. Both use iOS file protection
 (`completeUntilFirstUserAuthentication`). The schema is versioned with `PRAGMA user_version`. v2 renamed the v1 S2
-columns (`cell`, `cells`, `tile`) to level-named ones, v3 added the shared map, and v6 left one evidence record per
-scan (see *One record per scan*).
+columns (`cell`, `cells`, `tile`) to level-named ones, v3 added the shared map, v6 left one evidence record per
+scan (see *One record per scan*), and v7 added the scan alignments.
 
 | Table | Contents | Mutability |
 |---|---|---|
@@ -287,6 +287,7 @@ scan (see *One record per scan*).
 | `shared` | The shared map as last pulled: id, kind, version, s2_l16_token (indexed), created_by, created_at, `fields` (the entity's shared fields as JSON) | Rewritten by pulls |
 | `shared_tiles` | Each pulled tile's s2_l16_token, the sequence to pull from next, and when it was pulled | Moved on by pulls |
 | `trees`, `tags` | Current state: id, s2_l19_token, s2_l16_token (indexed), status columns, version, `payload` | **Derived**: rewritten on every write |
+| `scan_alignments` | A tree's rings aligned against one of its scans (v7): blob (SHA-256) and subject_id together as the key, saved_at (ms), `payload` (the app's `ScanAlignment` as JSON). On the phone only | Replaced when the scan is aligned again; a row this version cannot decode is skipped |
 
 Every write runs in one transaction that also re-derives the state (`CensusState.derive`) and rewrites
 `trees` and `tags`, so the derived tables always match the log; opening the store re-derives too.

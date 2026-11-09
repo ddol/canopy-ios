@@ -109,21 +109,30 @@ public enum GLB {
             document = try JSONDecoder().decode(Document.self, from: json)
         }
 
-        /// Reads the mesh back out of the buffer.
+        /// Reads the mesh back out of the buffer. A scan can come from another device, so everything the file points
+        /// at is checked before it is read: every accessor, buffer view and byte range, and every triangle corner.
         public func mesh() throws -> Mesh {
             guard let primitive = document.meshes.first?.primitives.first,
                 let positionIndex = primitive.attributes["POSITION"], let indicesIndex = primitive.indices
             else { throw Error.unsupported("no indexed POSITION primitive") }
+            guard document.accessors.indices.contains(positionIndex), document.accessors.indices.contains(indicesIndex)
+            else { throw Error.indexOutOfRange }
             let bytes = [UInt8](bin)
             let positionAccessor = document.accessors[positionIndex]
             let indexAccessor = document.accessors[indicesIndex]
             guard positionAccessor.componentType == float, positionAccessor.type == "VEC3",
                 indexAccessor.componentType == unsignedInt, indexAccessor.type == "SCALAR"
             else { throw Error.unsupported("component types") }
+            guard document.bufferViews.indices.contains(positionAccessor.bufferView),
+                document.bufferViews.indices.contains(indexAccessor.bufferView)
+            else { throw Error.indexOutOfRange }
             let positionView = document.bufferViews[positionAccessor.bufferView]
             let indexView = document.bufferViews[indexAccessor.bufferView]
-            guard positionView.byteOffset + positionAccessor.count * 12 <= bytes.count,
-                indexView.byteOffset + indexAccessor.count * 4 <= bytes.count
+            func fits(_ count: Int, of size: Int, at offset: Int) -> Bool {
+                (0...bytes.count).contains(offset) && count >= 0 && count <= (bytes.count - offset) / size
+            }
+            guard fits(positionAccessor.count, of: 12, at: positionView.byteOffset),
+                fits(indexAccessor.count, of: 4, at: indexView.byteOffset)
             else { throw Error.truncated }
             let positions = (0..<positionAccessor.count).map { i in
                 let base = positionView.byteOffset + i * 12
@@ -133,6 +142,7 @@ public enum GLB {
                     Float(bitPattern: bytes.readUInt32(at: base + 8)))
             }
             let indices = (0..<indexAccessor.count).map { bytes.readUInt32(at: indexView.byteOffset + $0 * 4) }
+            guard indices.allSatisfy({ Int($0) < positions.count }) else { throw Error.indexOutOfRange }
             return Mesh(positions: positions, indices: indices)
         }
     }
