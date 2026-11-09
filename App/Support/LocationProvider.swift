@@ -53,8 +53,10 @@ extension CensusState {
     /// The AR view asks this several times an update, and with the whole city loaded (tens of thousands of trees)
     /// placing every tree in metres took the main thread a fifth of a second or more each time. So within a radius only
     /// some trees are placed: those in the tiles round it when `tiles` (the census by tile) is given, and of those, or
-    /// of every tree without it, the ones inside a box of latitude and longitude round the circle.
-    func trees(
+    /// of every tree without it, the ones inside a box of latitude and longitude round the circle. Nonisolated, as plain
+    /// arithmetic on values: the app's main-actor default would make its closures check that they run on the main
+    /// thread.
+    nonisolated func trees(
         near point: GeoPoint, within radius: Double = .infinity, limit: Int = 20, tiles: CensusTiles? = nil
     ) -> [(Tree, Double)] {
         let frame = LocalFrame(origin: point)
@@ -77,7 +79,7 @@ extension CensusState {
 
     /// A box of latitude and longitude holding everything within `radius` metres of `point`, with a tenth to spare;
     /// nil for an unlimited radius, or one reaching a pole or the antimeridian.
-    static func box(around point: GeoPoint, radius: Double) -> MapViewport? {
+    nonisolated static func box(around point: GeoPoint, radius: Double) -> MapViewport? {
         guard radius.isFinite, radius >= 0 else { return nil }
         let box = MapViewport(center: point, radius: radius * 1.1 + 1)
         guard abs(point.latitude) + box.latitudeDelta / 2 < 89, abs(point.longitude) + box.longitudeDelta / 2 < 180
@@ -87,7 +89,7 @@ extension CensusState {
 
     /// Half again the farthest a level-16 tile reaches from its centre, from the tile at `point`: tiles change size
     /// only slowly across the Earth, so the ones round it reach no farther.
-    static func tileReach(at point: GeoPoint) -> Double {
+    nonisolated static func tileReach(at point: GeoPoint) -> Double {
         let tile = point.tile
         let frame = LocalFrame(origin: tile.center)
         return 1.5 * (tile.vertices.map { frame.enu(of: $0).horizontalDistance }.max() ?? 0)
