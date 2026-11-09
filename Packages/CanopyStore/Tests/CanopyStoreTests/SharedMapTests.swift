@@ -80,4 +80,29 @@ import Testing
         #expect(derived.meta.version == 1)
         #expect(try await store.sharedRecords().count == 1)
     }
+
+    @Test func forgettingATileDropsItsRecordsAndCursorAndKeepsThisDevicesWork() async throws {
+        let store = try LocalStore.inMemory()
+        try await store.importCandidates([candidate])
+        let far = GeoPoint(latitude: 37.7704, longitude: -122.5090)
+        var theirs = TreeCandidate(id: UUID(), location: far, confidence: 1, isSynthetic: false).makeTree()
+        theirs.countStatus = .confirmed
+        let nearby = TreeCandidate(
+            id: UUID(), location: GeoPoint(latitude: 37.76995, longitude: -122.47575), confidence: 1, isSynthetic: false
+        ).makeTree()
+        try await store.applyShared([
+            .init(tile: tile, sequence: 3, content: .snapshot([try record(nearby)])),
+            .init(tile: far.tile, sequence: 7, content: .snapshot([try record(theirs)])),
+        ])
+        try await store.record(.treeConfirmed(treeID: candidate.id), by: PlayerID(rawValue: "T:_me"))
+        #expect(await store.state().trees.count == 3)
+
+        try await store.forgetShared([far.tile])
+        #expect(try await store.sharedTiles() == [tile: 3])
+        let state = await store.state()
+        #expect(state.trees[theirs.id] == nil)
+        #expect(state.trees[nearby.id] != nil)
+        #expect(state.trees[candidate.id]?.displayStatus == .proposed, "this device's work is still folded")
+        #expect(try await store.sharedRecords().map(\.id) == [nearby.id])
+    }
 }

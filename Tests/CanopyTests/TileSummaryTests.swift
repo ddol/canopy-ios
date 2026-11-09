@@ -1,6 +1,7 @@
 import CanopyMap
 import CanopyModel
 import CanopyReference
+import CanopyStore
 import Foundation
 import Testing
 
@@ -63,12 +64,37 @@ import Testing
         #expect(Set(city).count == city.count)
     }
 
-    @Test func onlyTilesWithTreesStandingAreFollowed() {
-        var removed = GerardusMapClient.TileCounts(tile: b)
-        removed.removed = 4
-        var proposed = GerardusMapClient.TileCounts(tile: c)
-        proposed.proposed = 1
-        let summaries = [a: counts(a, latest: 1), b: removed, c: proposed, d: GerardusMapClient.TileCounts(tile: d)]
-        #expect(AppModel.tilesWithTrees(summaries) == [a, c])
+    @Test func aViewPullsOnlyTheTilesItDrawsInFull() {
+        let park = GeoPoint(latitude: 37.7694, longitude: -122.4770)
+        let close = MapViewport(center: park, radius: 200)
+        #expect(AppModel.drawnTiles(in: close) == MapDetail(region: close).detailed)
+        #expect(AppModel.drawnTiles(in: close).count <= MapDetail.detailedTileLimit)
+        #expect(AppModel.drawnTiles(in: .goldenGatePark).isEmpty)
+        #expect(AppModel.drawnTiles(in: .sanFrancisco).isEmpty)
+    }
+
+    /// A sync follows the tiles drawn in full now and the pulled tiles the player has been to; a tile pulled only because
+    /// an earlier version followed the whole city is left as it is.
+    @MainActor
+    @Test func aSyncFollowsTheTilesDrawnInFullAndThoseVisitedBefore() async throws {
+        let model = AppModel(
+            store: try LocalStore.inMemory(),
+            player: Player(id: PlayerID(rawValue: "T:_test"), alias: "Test", source: .gameCenter))
+        try await model.store.applyShared(
+            [a, b, c].map { LocalStore.SharedTileUpdate(tile: $0, sequence: 1, content: .snapshot([])) })
+        model.visitedTiles = [a]
+        #expect(try await model.followedTiles() == [a])
+        model.mapViewport = MapViewport(center: d.center, radius: 60)
+        let followed = try await model.followedTiles()
+        #expect(followed.contains(a) && followed.contains(d))
+        #expect(!followed.contains(b) && !followed.contains(c))
+        #expect(model.visitedTiles.contains(d), "a tile drawn in full is remembered as visited")
+        model.mapViewport = .sanFrancisco
+        let city = try await model.followedTiles()
+        #expect(!city.contains(b), "the whole city is shaded, not pulled")
+
+        // The tiles pulled only for the whole city are forgotten; those the player has been to stay.
+        try await model.forgetUnfollowed(city)
+        #expect(Set(try await model.store.sharedTiles().keys) == [a])
     }
 }

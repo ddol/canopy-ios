@@ -15,6 +15,11 @@ public enum LocalStoreError: Error, Equatable {
 /// date in the same transaction, so the tables always match the log. Opening a store re-derives too, and rewrites
 /// those tables only when the schema or the derivation has changed since they were written (`Schema.derived`).
 ///
+/// Opening a store only opens the database: reading what derivation needs and deriving waits for `prepare()`, or for
+/// the first call that needs the census, and runs on the store's own executor. With a city's worth of shared trees that
+/// takes seconds, which an app opening its store at launch would otherwise spend on the main thread before its first
+/// frame.
+///
 /// What derivation reads (the candidates, the shared map, the log and the changesets' states) is kept in memory as it
 /// is in the database, so a write decodes only what it adds, and only the rows of trees and tags that changed are
 /// written: a player's tap costs much the same with thirty thousand trees in the park as with two hundred.
@@ -22,8 +27,8 @@ public actor LocalStore {
     public nonisolated let blobs: BlobStore
     private let databasePath: String
     private var db: SQLiteDatabase
-    private var current = CensusState()
-    private var inputs = Inputs()
+    /// The inputs and the census derived from them, once `prepare` has read them.
+    private var derived: (inputs: Inputs, current: CensusState)?
     /// `candidates()` and `changesets()` as last read, until a write changes them.
     private var sortedCandidates: [TreeCandidate]?
     private var decodedChangesets: [Changeset]?
@@ -73,17 +78,42 @@ public actor LocalStore {
         let db = try SQLiteDatabase(path: databasePath)
         try Schema.migrate(db)
         self.db = db
-        self.inputs = try Self.readInputs(db)
-        self.current = Self.derive(inputs)
+    }
+
+    /// Reads what derivation needs and derives the census, once; later calls return at once. Any call that needs the
+    /// census does this first, so calling it is only to have it done, and its errors thrown, when the caller chooses:
+    /// an app opening its store at launch, say, draws its first frame and then prepares the store.
+    public func prepare() throws {
+        guard derived == nil else { return }
+        let inputs = try Self.readInputs(db)
+        let current = Self.derive(inputs)
         // Every write keeps the tables in step, so they need writing again only when what writes them has changed:
-        // with a park's worth of trees that is seconds at launch.
+        // with a park's worth of trees that is seconds.
         if try Self.derivedStamp(db) != Schema.derived {
-            let current = current
             try db.transaction {
                 try Self.materialize(current, replacing: nil, in: db)
                 try Self.stampDerived(db)
             }
         }
+        derived = (inputs, current)
+    }
+
+    /// The census, prepared first if need be. A store whose database cannot be read has an empty one; `prepare` says
+    /// why.
+    private var current: CensusState {
+        get { prepared().current }
+        set { derived = (prepared().inputs, newValue) }
+    }
+
+    /// What the census is derived from, read first if need be.
+    private var inputs: Inputs {
+        get { prepared().inputs }
+        set { derived = (newValue, prepared().current) }
+    }
+
+    private func prepared() -> (inputs: Inputs, current: CensusState) {
+        if derived == nil { try? prepare() }
+        return derived ?? (Inputs(), CensusState())
     }
 
     // MARK: Reading
@@ -397,6 +427,22 @@ public actor LocalStore {
         return stale
     }
 
+    /// Forgets what was pulled for some tiles, their records and their cursors, in one transaction, and re-derives: a
+    /// later pull starts each again with a snapshot. This device's own observations stay in the log and are folded again
+    /// for anything the shared map no longer holds. For a phone that holds more of the shared map than it follows (an
+    /// earlier version pulled every tile in the city).
+    public func forgetShared(_ tiles: Set<S2CellID>) throws {
+        guard !tiles.isEmpty else { return }
+        try write {
+            for tile in tiles {
+                try db.run("DELETE FROM shared WHERE s2_l16_token = ?", [.text(tile.token)])
+                try db.run("DELETE FROM shared_tiles WHERE s2_l16_token = ?", [.text(tile.token)])
+            }
+        } update: { inputs in
+            inputs.shared.removeAll { tiles.contains($0.tile) }
+        }
+    }
+
     /// Updates a changeset's state and approvals (for example after a sync) and re-derives.
     public func updateChangeset(_ changeset: Changeset) throws {
         let exists = try db.query("SELECT 1 FROM changesets WHERE id = ?", [.text(changeset.id.uuidString)]) { _ in 1 }
@@ -425,11 +471,10 @@ public actor LocalStore {
             try Self.stampDerived(db)
             return (inputs, state)
         }
-        self.inputs = inputs
-        current = state
+        derived = (inputs, state)
         sortedCandidates = nil
         decodedChangesets = nil
-        return current
+        return state
     }
 
     /// Deletes everything: database and blobs. For the debug "Reset local data" action.
@@ -445,11 +490,10 @@ public actor LocalStore {
         }
         try Schema.migrate(db)
         try blobs.removeAll()
-        current = CensusState()
-        inputs = Inputs()
+        derived = (Inputs(), CensusState())
         sortedCandidates = nil
         decodedChangesets = nil
-        try Self.materialize(current, replacing: nil, in: db)
+        try Self.materialize(CensusState(), replacing: nil, in: db)
         try Self.stampDerived(db)
     }
 
@@ -461,6 +505,7 @@ public actor LocalStore {
     /// Runs `body`, brings the inputs up to date with what it wrote (`update`), re-derives, and writes the trees and
     /// tags that changed, in one transaction. The inputs and state change only once it commits.
     private func write(_ body: () throws -> Void, update: (inout Inputs) throws -> Void) throws {
+        try prepare()
         var inputs = self.inputs
         let previous = current
         let db = db
@@ -471,8 +516,7 @@ public actor LocalStore {
             try Self.materialize(next, replacing: previous, in: db)
             return next
         }
-        self.inputs = inputs
-        current = next
+        derived = (inputs, next)
     }
 
     /// What wrote the `trees` and `tags` tables last, or nil before any stamp.

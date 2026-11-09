@@ -75,6 +75,10 @@ import Testing
         #expect(model.changesets.map(\.state) == [.pending])
         #expect(model.summary.coverage == 1.0 / 200.0)
         #expect(model.error == nil)
+        // The map draws the trees a player worked on at every zoom; the census by tile counts the change.
+        #expect(model.ownTrees == [tree.id])
+        #expect(model.censusTiles.total.proposed == 1)
+        #expect(model.censusTiles.counts[tree.position.tile]?.proposed == 1)
     }
 
     @Test func placingATagMakesAProposedTagAndAPendingChangeset() async throws {

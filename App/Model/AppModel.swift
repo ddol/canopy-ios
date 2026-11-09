@@ -8,6 +8,7 @@ import CanopySync
 import Foundation
 import Observation
 import SwiftUI
+import os
 
 /// The app's state and actions. Screens read from it and call its methods; it owns the store and the sync
 /// client.
@@ -20,12 +21,12 @@ final class AppModel {
     }
 
     private(set) var phase: Phase = .loading
-    private(set) var census = CensusState() {
-        didSet { censusTiles = CensusTiles(census) }
-    }
-    /// The census's trees by level-16 tile, for the map to draw only some tiles in full without placing every tree
-    /// each time it is drawn.
+    private(set) var census = CensusState()
+    /// The census's trees by level-16 tile, and their counts by status, for the map to draw only some tiles in full and
+    /// shade the rest without looking at every tree each time it is drawn. Made with the census, off the main actor.
     private(set) var censusTiles = CensusTiles(CensusState())
+    /// The trees this player has added, measured or confirmed (on this phone): the map draws them at every zoom.
+    private(set) var ownTrees: Set<UUID> = []
     private(set) var summary = CensusSummary(confirmed: 0, estimated: 0, coverage: 0)
     private(set) var changesets: [Changeset] = []
     private(set) var boundary: [[GeoPoint]] = []
@@ -46,6 +47,8 @@ final class AppModel {
     var treeForms: [String: TreeForm] = [:]
     /// Ring-by-ring profiles fitted over scanned trunks in AR, by the same ids. In memory only.
     var treeProfiles: [String: TreeProfile] = [:]
+    /// How many refreshes have started, so one overtaken by a later one leaves the census by tile to it.
+    @ObservationIgnored private var refreshes = 0
     /// Bookkeeping for syncing on its own (`syncSoon`).
     @ObservationIgnored var pendingSync: Task<Void, Never>?
     /// The server's counts for the tiles round recent map views (GetTileSummaries), so a wide view shades tiles this
@@ -54,13 +57,15 @@ final class AppModel {
     /// When each tile's summary was last asked for, so moving the map back and forth does not ask again at once.
     @ObservationIgnored var summariesAskedAt: [S2CellID: Date] = [:]
     @ObservationIgnored var pendingSummaries: Task<Void, Never>?
-    /// The city's tiles the server holds trees in, from its summaries, for a sync to follow when the map shows the
-    /// whole city (see `summariseCity`).
-    var cityTiles: Set<S2CellID> = []
     /// The tiles whose trees were detected over the whole tile, by this phone (kept across launches) or, from its
     /// summaries, by anyone the server heard from (see AppModel+Detection).
     var detectedTiles: Set<S2CellID> = AppModel.savedDetectedTiles() {
         didSet { if detectedTiles != oldValue { Self.saveDetectedTiles(detectedTiles) } }
+    }
+    /// The tiles the map has drawn in full, kept across launches: a sync keeps the ones it pulled up to date (see
+    /// `followedTiles()`).
+    var visitedTiles: Set<S2CellID> = AppModel.savedVisitedTiles() {
+        didSet { if visitedTiles != oldValue { Self.saveVisitedTiles(visitedTiles) } }
     }
     /// The park being detected in full, site by site (`detectPark`).
     var parkDetection: ParkDetection?
@@ -187,30 +192,58 @@ final class AppModel {
 
     // MARK: Loading
 
-    /// Imports the sample candidates on first launch and loads the current state.
+    /// Reads the store, importing the sample candidates on first launch, and loads the current state. The map is up
+    /// before this starts: with a city's worth of shared trees, reading and deriving them takes seconds, all of it on the
+    /// store's own executor and none on the main actor.
     func load() async {
+        let start = ContinuousClock.now
         do {
             boundary = try ParkFixtures.boundary()
+            try await store.prepare()
+            let prepared = ContinuousClock.now
             if try await store.candidateCount() == 0 {
                 try await store.importCandidates(try ParkFixtures.candidates())
             }
             await refresh()
             await seedServer()
             phase = .ready
+            Self.loadLog.notice(
+                """
+                Ready \(Self.seconds(ContinuousClock.now - start), format: .fixed(precision: 2)) s after load began \
+                (store \(Self.seconds(prepared - start), format: .fixed(precision: 2)) s), \
+                \(self.census.trees.count) trees
+                """)
         } catch {
             phase = .failed(error.localizedDescription)
+            self.error = "Could not read local data: \(error.localizedDescription)"
         }
     }
 
+    static let loadLog = Logger(subsystem: "io.github.ddol.canopy", category: "load")
+
     func refresh() async {
-        census = await store.state()
+        refreshes += 1
+        let refresh = refreshes
+        let state = await store.state()
+        census = state
+        // Placing tens of thousands of trees in their tiles takes a while: off the main actor, so the map keeps moving.
+        // Until it is done the map draws from the tiles of the census before; a refresh that started later brings its
+        // own.
+        let tiles = await Task.detached(priority: .userInitiated) { CensusTiles(state) }.value
+        if refresh == refreshes { censusTiles = tiles }
         summary = await store.summary()
         changesets = (try? await store.changesets()) ?? []
+        ownTrees = Self.trees(touchedBy: player.id, in: changesets)
         followedTiles = Set(((try? await store.sharedTiles()) ?? [:]).keys)
         scanCount = (try? await store.evidenceCount()) ?? 0
         candidateSources = await store.candidateSources()
         surveyedCells = Dictionary(
             ((try? await store.surveyedCells()) ?? []).map { ($0.cell, $0) }, uniquingKeysWith: { _, last in last })
+    }
+
+    /// The trees a player's changesets touch: added, measured, confirmed or rejected by them.
+    nonisolated static func trees(touchedBy player: PlayerID, in changesets: [Changeset]) -> Set<UUID> {
+        Set(changesets.filter { $0.meta.playerID == player }.flatMap { $0.ops.filter { $0.entity == .tree }.map(\.id) })
     }
 
     // MARK: Census actions
@@ -356,8 +389,10 @@ extension AppModel {
                 // Who the server says the player is decides whether the map shows the whole city, so ask first.
                 if serverPlayer == nil { serverPlayer = try? await client.player() }
                 try? await summariseCity(client)
-                try await pullSharedMap(client)
-                try await refreshReviewQueue(client)
+                let followed = try await followedTiles()
+                try await forgetUnfollowed(followed)
+                try await pullSharedMap(client, tiles: followed)
+                try await refreshReviewQueue(client, tiles: followed)
             }
             lastSync = report
             await refresh()

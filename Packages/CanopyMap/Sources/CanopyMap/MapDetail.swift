@@ -110,6 +110,9 @@ public struct TileSummary: Identifiable, Hashable, Sendable {
     public var tags: Int
     /// Whether the player marked the tile surveyed (for a level-13 cell: every tile in it with trees).
     public var surveyed: Bool
+    /// Whether the tile's trees were detected over the whole tile (`AppModel.detectedTiles`; for a level-13 cell: every
+    /// tile in it with trees), so the map marks it apart from tiles detected in part or not at all.
+    public var detectedInFull: Bool
     public var areaHectares: Double
 
     /// Trees per hectare that colour a patch fully: denser woodland than that reads the same.
@@ -117,7 +120,7 @@ public struct TileSummary: Identifiable, Hashable, Sendable {
 
     public init(
         id: S2CellID, corners: [GeoPoint]? = nil, detected: Int = 0, reviewed: Int = 0, tags: Int = 0,
-        surveyed: Bool = false, areaHectares: Double? = nil
+        surveyed: Bool = false, detectedInFull: Bool = false, areaHectares: Double? = nil
     ) {
         self.id = id
         self.corners = corners ?? id.vertices
@@ -125,6 +128,7 @@ public struct TileSummary: Identifiable, Hashable, Sendable {
         self.reviewed = reviewed
         self.tags = tags
         self.surveyed = surveyed
+        self.detectedInFull = detectedInFull
         self.areaHectares = areaHectares ?? Self.area(of: self.corners) / 10_000
     }
 
@@ -150,17 +154,67 @@ public struct TileSummary: Identifiable, Hashable, Sendable {
     }
 }
 
-/// The census's trees by level-16 tile. Placing a point in its tile takes a little trigonometry; the map is drawn
-/// far more often than the census changes, so the app makes this once per census and the map reuses it.
+/// The census's trees by level-16 tile, and how many of each status every tile holds. Placing a point in its tile takes
+/// a little trigonometry, and a city's worth of trees is tens of thousands; the map is drawn far more often than the
+/// census changes, so the app makes this once per census, off the main actor, and the map reuses it: a tile not drawn
+/// in full is shaded from its counts without looking at its trees.
 public struct CensusTiles: Sendable {
     public let trees: [S2CellID: [UUID]]
+    /// Per tile, its trees by the status the map draws them in (`Tree.displayStatus`).
+    public let counts: [S2CellID: StatusCounts]
+    /// The whole census by that status.
+    public let total: StatusCounts
 
     public init(_ state: CensusState) {
         var trees: [S2CellID: [UUID]] = [:]
+        var counts: [S2CellID: StatusCounts] = [:]
+        var total = StatusCounts()
         for tree in state.trees.values {
-            trees[tree.position.tile, default: []].append(tree.id)
+            let tile = tree.position.tile
+            trees[tile, default: []].append(tree.id)
+            counts[tile, default: StatusCounts()][tree.displayStatus] += 1
+            total[tree.displayStatus] += 1
         }
         self.trees = trees
+        self.counts = counts
+        self.total = total
+    }
+}
+
+/// How many trees have each status.
+public struct StatusCounts: Equatable, Sendable {
+    public var detected = 0
+    public var proposed = 0
+    public var confirmed = 0
+    public var verified = 0
+    public var removed = 0
+
+    public init() {}
+
+    public subscript(status: CountStatus) -> Int {
+        get {
+            switch status {
+            case .detected: detected
+            case .proposed: proposed
+            case .confirmed: confirmed
+            case .verified: verified
+            case .removed: removed
+            }
+        }
+        set {
+            switch status {
+            case .detected: detected = newValue
+            case .proposed: proposed = newValue
+            case .confirmed: confirmed = newValue
+            case .verified: verified = newValue
+            case .removed: removed = newValue
+            }
+        }
+    }
+
+    /// The trees with any of `statuses`.
+    public func count(of statuses: Set<CountStatus>) -> Int {
+        statuses.reduce(0) { $0 + self[$1] }
     }
 }
 
