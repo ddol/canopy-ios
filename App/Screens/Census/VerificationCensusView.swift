@@ -52,7 +52,10 @@ struct VerificationCensusView: View {
             } header: {
                 Text(location.geoPoint == nil ? "Trees near the park centre" : "Trees near you")
             } footer: {
-                if location.geoPoint == nil {
+                if model.phase == .loading {
+                    // The census is empty until the store has been read at launch.
+                    Text("Reading the trees on this phone…")
+                } else if location.geoPoint == nil {
                     Text(
                         location.isDenied
                             ? "Location is off, so the list starts from the park centre." : "Waiting for your location…"

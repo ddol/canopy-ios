@@ -94,6 +94,10 @@ Hidden for now (`Features.limbTagging`). To bring it back as an extension:
   before it stay there until that area is loaded again and the server's copy is reconciled.
 - Selecting in AR covers trees only; buildings and street features are drawn but not pickable.
 - The map's level of detail (16 tiles in full, none past 36 in view) is a first guess; tune it on a phone with a full
-  park loaded. Trees people acted on are no longer drawn outside those tiles, only counted in the patches.
+  park loaded. Outside those tiles only the player's own trees are drawn; other players' reviewed trees are only
+  counted in the patches.
+- Every write re-derives the whole census, and each shared record is decoded from JSON twice on the way; with tens of
+  thousands of shared trees that is many seconds (`StoreCostTests`). Keep the shared trees decoded between writes,
+  as the candidates are, and apply a pull's changes to them rather than reading every record again.
 - `serverTiles` is in memory and asked again after two minutes; keep it with the shared tiles, and let a patch show
   its counts (detected, reviewed, tags) when tapped and held.

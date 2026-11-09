@@ -1,7 +1,7 @@
 # Viewing Gerardus buildings in 3D
 
-Set the server in **Me → Settings**, load a site with **Map → Layers → Load vectors in view** (or the **Load vectors
-here** button), and pick **Map → Layers → Gerardus 3D**: the map's one 3D view (the AR view in Census is the other).
+Set the server in **Me → Settings**, load a site with **Map → Layers → Load vectors in view** (or turn on **Show
+vectors** and use the **Load vectors here** button), and pick **Map → Layers → Gerardus 3D**: the map's one 3D view (the AR view in Census is the other).
 A site the server has not prepared is prepared first; nothing stands in for it.
 
 **Buildings** are the ones Gerardus reconstructed from 3DEP inside DataSF's footprints, the `BUILDINGS` layer: each
@@ -14,7 +14,8 @@ configured server (including Tailscale when that is how it is reached).
 ## On the main map
 
 The same vectors can be drawn flat over Apple's map: **Map → Layers → Load vectors in view**, or the **Load vectors here** button that appears when the site at the map centre is not loaded yet. Each load
-adds a site, so panning and loading builds up an area. **Show vectors** turns them off. Outlines, box walls and
+adds a site, so panning and loading builds up an area. Vectors are off by default: the map neither draws nor loads
+them until **Show vectors** turns them on (Load vectors in view turns it on too). Outlines, box walls and
 measured facades, streets, kerbs and street surfaces are drawn from above, and Gerardus's trees as their crowns (a
 ring of `crown_radius_m`, 2 m when the server gives none). Ground is left out. See ARCHITECTURE.md, *Map*.
 
@@ -29,8 +30,8 @@ each stays under it (a twist under about 8° leaves the heading, so pinching doe
 moving up or down together tilt it; the map opens drawing tiles, not every loaded object, until it is close enough;
 double-tap zooms in where tapped and a two-finger tap zooms out; tapping a tree opens its sheet. The ground grid is on
 until **Ground** (in the same menu) turns it off; it is tinted by height, dull green low to pale high over the range of
-the loaded sites, so slopes read without lighting. **Show vectors** hides the buildings, streets and Gerardus's trees.
-It shows only what has been loaded: use **Load vectors in view** (or the **Load vectors here** button) to add the site
+the loaded sites, so slopes read without lighting. The sites are drawn only while **Show vectors** is on; with it off,
+the default, the 3D map draws the census's trees and the shaded tiles. It shows only what has been loaded: use **Load vectors in view** (or the **Load vectors here** button) to add the site
 at the map centre. Sites loaded in AR are on this map too, and a tree reshaped or fitted ring by ring in AR is drawn
 here in that shape. **S2 cells (L13 and L16)** draws the level-16 tiles with trees (green when surveyed) and their
 level-13 cells, with posts at the corners.

@@ -67,8 +67,10 @@ to credit your changes, and to decide whether you may have OpenStreetMap.
   under a random sensor id and capture reference. The server keeps the scan and the registration run.
 - **Syncing** sends your open changesets: the changes you propose, with their S2 cells, your player id and alias,
   and the evidence meshes they reference. It brings back their state and other players' approvals.
-- **Syncing also downloads** the shared map for the tiles you have looked at: the trees and tags there, and other
-  players' open changes for you to review, with those players' aliases. Other phones download your changes, with
+- **Syncing also downloads** the shared map for the tiles you have looked at closely (those the map drew in full):
+  the trees and tags there, and other players' open changes for you to review, with those players' aliases. To shade
+  the rest of the map it asks how many trees the tiles round the view hold (for admins, every tile in the city),
+  which sends those tiles' ids and nothing else. Other phones download your changes, with
   your alias, in the same way.
 - **Reviewing** sends your agreement with another player's change, or a rejection and its reason, under your player
   id.

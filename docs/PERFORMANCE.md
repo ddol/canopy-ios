@@ -47,6 +47,21 @@ logs it (`log stream --predicate 'subsystem == "io.github.ddol.canopy"'`). To pr
 UI automation, which keeps the map's accessibility busy and skews the profile, launch a debug build with
 `-canopy.gerardusURL http://127.0.0.1:50099 -canopy.loadTreesAtLaunch YES` and attach Time Profiler.
 
+**The map with a city's worth of trees.** `canopy-harness serve --shared-trees 40000` gives the stand-in a shared map
+as the live server has after a park-wide detection: 40,000 detected trees over Golden Gate Park's 453 level-16 tiles,
+every tile detected in full, answered by `GetTileSummaries`, `GetTile` and `PullChanges` (`SharedCity`). A debug build
+launched with `-canopy.gerardusURL http://127.0.0.1:50099` syncs with it. The map's own steps are signpost intervals
+(subsystem `io.github.ddol.canopy`, category `map`) for Instruments, and any over 4 ms is logged at debug level with its
+time (`MapTiming`): making the layers, the 3D map applying them, and adding its trees and sites. Three opt-in tests
+time the work with that many trees (results below):
+
+- `CANOPY_CITY_COST=1 swift test --filter CitySyncCostTests` in `Packages/CanopyHarness`: a whole-city sync against the
+  stand-in, pulling every tile as before or asking only for the counts as now, and opening the store it leaves.
+- `CANOPY_STORE_COST=1 swift test --filter StoreCostTests` in `Packages/CanopyStore`: opening and preparing a store
+  holding 40,000 shared trees.
+- `TEST_RUNNER_CANOPY_MAP_COST=1 scripts/test.sh -only-testing:CanopyMapTests/MapLayersCostTests` (CanopyMap builds
+  for iOS only): making the layers, the census by tile, the chips' counts and the 3D map's tree figures.
+
 **Against the real server.** With `CANOPY_GERARDUS_URL` set, `LiveCacheTests` checks on real 3DEP points at Stow Lake
 that kept, nudged and pieced-together loads find the same trees as a download (positions to a millimetre: the
 server's datum transformation uses today's date, so two georeference fits differ by nanometres). It reads only.
@@ -103,6 +118,39 @@ ground, which say whether the site model (and so the ground) has. Over `poor` th
 In the simulator, a Release build loading 571 trees spent 8.0 s of main-thread time before and 2.6 s after: the map
 no longer lays out every tree annotation again on each progress message (30 to 40 % of the main thread during the
 download before, 1 to 2 % after).
+
+### The map with a city's worth of trees
+
+Measured on the same Mac mini, in release builds, while other builds kept it busy (load averages from 7 to over 300),
+so the times are only good side by side: 40,000 detected trees over Golden Gate Park's 453 tiles, as on the live
+server after the park-wide detection.
+
+| A whole-city sync (`CitySyncCostTests`, `lan`) | Before | After |
+|---|---|---|
+| Counts for the city's 12,657 tiles | 4 calls, 11 kB, 0.4 s | the same |
+| Then every tile with trees | 453 calls, 21 MB, 10 s | none |
+| Storing them | 40,317 trees, 37 to 89 s | none |
+
+| Opening a store holding those trees (`StoreCostTests`, `CitySyncCostTests`) | Before | After |
+|---|---|---|
+| On the main thread, before the first frame | all of it | under 2 ms |
+| Reading and deriving | 23 to 73 s, on the main thread | the same, on the store's executor, with the map up |
+
+A phone that pulled the city with an earlier version reads it once more, then forgets the tiles it does not follow at
+its first sync, so later launches read only what it follows. The map's own work is in the table below.
+
+| The map's work with those trees (release; MapLayers and MapDetail built for macOS) | Before | After |
+|---|---|---|
+| Making the layers for the whole park, on every update | 47 ms | 1.2 ms |
+| Making them for a neighbourhood, 2,500 trees in its 16 tiles in full | 109 ms | 9.6 ms |
+| Counting the trees by status for the chips, on every update | 31 ms | none: counted with the tiles |
+| The census by tile, on every change to the census | 23 ms, main thread | 34 ms (with the counts), off it |
+| The 3D map's figures for those 2,500 trees, on every change to them and every selection | 26 ms, main thread | off it; a selection redraws one tree |
+
+Making the layers is cheaper because a tile not drawn in full is shaded from its counts, without looking at its
+trees, and the trees drawn in full are sorted as small entries rather than whole trees. Every update means any change
+the map screen shows, a progress message included, so before this a sync or a load kept the main thread busy between
+frames while the fingers were on the map.
 
 ### What changed
 

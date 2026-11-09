@@ -62,9 +62,7 @@ struct MapKitMap: View {
             ForEach(layers.summaries) { patch in
                 MapPolygon(coordinates: patch.corners.map(CLLocationCoordinate2D.init))
                     .foregroundStyle(Color.canopyBrand.opacity(0.06 + 0.5 * patch.density))
-                    .stroke(
-                        patch.surveyed ? Color.canopyBrand : Color.canopyBrand.opacity(0.25),
-                        lineWidth: patch.surveyed ? 1.5 : 0.5)
+                    .stroke(PatchOutline(patch).color, lineWidth: PatchOutline(patch).width)
             }
             if layers.visibility.vectors {
                 ForEach(Array(layers.detailedLines.enumerated()), id: \.offset) { _, line in
@@ -170,6 +168,23 @@ extension MapKitMap {
                 .stroke(Color.canopyBrand.opacity(0.8), lineWidth: 1)
         case .other:
             MapPolyline(coordinates: coordinates).stroke(Color.canopyLineStrong, lineWidth: 1)
+        }
+    }
+}
+
+/// How a patch is outlined: green where the player marked it surveyed, dark where its trees were detected over the
+/// whole tile, and faintly otherwise.
+struct PatchOutline {
+    var color: Color
+    var width: CGFloat
+
+    init(_ patch: TileSummary) {
+        if patch.surveyed {
+            (color, width) = (.canopyBrand, 1.5)
+        } else if patch.detectedInFull {
+            (color, width) = (.canopyInk.opacity(0.7), 1.25)
+        } else {
+            (color, width) = (.canopyBrand.opacity(0.25), 0.5)
         }
     }
 }

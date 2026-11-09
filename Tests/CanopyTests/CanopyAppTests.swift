@@ -75,6 +75,25 @@ import Testing
         #expect(model.changesets.map(\.state) == [.pending])
         #expect(model.summary.coverage == 1.0 / 200.0)
         #expect(model.error == nil)
+        // The map draws the trees a player worked on at every zoom; the census by tile counts the change.
+        #expect(model.ownTrees == [tree.id])
+        #expect(model.censusTiles.total.proposed == 1)
+        #expect(model.censusTiles.counts[tree.position.tile]?.proposed == 1)
+    }
+
+    /// The map is up before the store is read at launch, and the player may act meanwhile: marking a cell surveyed
+    /// counts what the store holds there, not the census the model has not read yet.
+    @Test func markingACellSurveyedBeforeTheCensusIsReadCountsItsTrees() async throws {
+        let model = try makeModel()
+        try await model.store.importCandidates(try ParkFixtures.candidates())
+        #expect(model.census.trees.isEmpty)
+        let trees = await model.store.state().trees.values
+        let cell = try #require(trees.first).position.tile
+        let held = trees.filter { $0.position.tile == cell }.count
+        await model.markSurveyed(cell)
+        let mark = try #require(try await model.store.surveyedCells().first { $0.cell == cell })
+        #expect(held > 0)
+        #expect(mark.unreviewed == held)
     }
 
     @Test func movingATreeProposesItAtItsNewPlace() async throws {
