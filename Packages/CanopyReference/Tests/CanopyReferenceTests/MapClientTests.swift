@@ -154,6 +154,47 @@ import Testing
         #expect(request.first { $0.number == 3 }?.string == tile.token)
     }
 
+    @Test func onlyTheLastImportCallNamesTheTilesDetectedInFull() async throws {
+        // One tree more than a call takes: two calls.
+        let candidates = (0...GerardusMapClient.importBatch).map { i in
+            TreeCandidate(
+                id: UUID(), location: GeoPoint(latitude: 37.77 + Double(i) * 1e-7, longitude: -122.476),
+                confidence: 0.5, isSynthetic: false, source: "USGS 3DEP")
+        }
+        let other = GeoPoint(latitude: 37.7690, longitude: -122.5000).tile
+        var answer = ProtoWriter()
+        answer.uint(2, 7)
+        let mock = MockTransport()
+        mock.responses[GerardusMapClient.service + "ImportDetectedTrees"] = .success([answer.data])
+        let result = try await GerardusMapClient(transport: mock).importDetectedTrees(
+            candidates, source: "USGS 3DEP", tiles: [tile, other], detector: "test")
+        #expect(result.created == 14)
+        let requests = try mock.sent.map { try fields($0.requests[0]) }
+        #expect(requests.map { $0.filter { $0.number == 1 }.count } == [GerardusMapClient.importBatch, 1])
+        #expect(requests[0].allSatisfy { $0.number != 3 }, "no tile is complete before every tree is in")
+        #expect(Set(requests[1].filter { $0.number == 3 }.map(\.string)) == [tile.token, other.token])
+        #expect(requests.allSatisfy { $0.first { $0.number == 2 }?.string == "USGS 3DEP" })
+
+        // The last call fails: the one call the server took named no tile, so none is marked complete.
+        let flaky = FailingAfter(calls: 1, answer: answer.data)
+        await #expect(throws: GRPCTransportError.self) {
+            try await GerardusMapClient(transport: flaky).importDetectedTrees(
+                candidates, source: "USGS 3DEP", tiles: [tile, other], detector: "test")
+        }
+        let taken = try flaky.taken.map { try fields($0) }
+        #expect(taken.count == 1)
+        #expect(taken.allSatisfy { $0.allSatisfy { $0.number != 3 } })
+
+        // Within one call, it names them.
+        let one = MockTransport()
+        one.responses[GerardusMapClient.service + "ImportDetectedTrees"] = .success([answer.data])
+        _ = try await GerardusMapClient(transport: one).importDetectedTrees(
+            Array(candidates.prefix(3)), source: "USGS 3DEP", tiles: [tile], detector: "test")
+        #expect(
+            try fields(try #require(one.sent.first).requests[0]).filter { $0.number == 3 }.map(\.string) == [tile.token]
+        )
+    }
+
     @Test func theReviewQueueAndSnapshotsCarryWhoAndWhere() async throws {
         var open = ProtoWriter()
         open.message(1) { w in
@@ -207,21 +248,34 @@ import Testing
             s.message(9) { $0.uint(1, 1_761_200_000) }
         }
         answer.message(1) { $0.string(1, "not a token") }
+        // Detected in full with no trees in it (Gerardus TileSummary.detected_at = 10, detector = 11): zero counts.
+        let lake = GeoPoint(latitude: 37.7720, longitude: -122.4750).tile
+        answer.message(1) { s in
+            s.string(1, lake.token)
+            s.message(10) { $0.uint(1, 1_762_600_000) }
+            s.string(11, "Canopy 0.9 TreeDetector, 1 m voxels")
+        }
         let mock = MockTransport()
         mock.responses[GerardusMapClient.service + "GetTileSummaries"] = .success([answer.data])
 
-        let summaries = try await GerardusMapClient(transport: mock).tileSummaries([tile, other, tile])
+        let summaries = try await GerardusMapClient(transport: mock).tileSummaries([tile, other, tile, lake])
         let request = try fields(try #require(mock.sent.first?.requests.first))
-        #expect(Set(request.filter { $0.number == 1 }.map(\.string)) == [tile.token, other.token])
-        #expect(request.count == 2, "each tile once")
-        #expect(summaries.count == 1)
+        #expect(Set(request.filter { $0.number == 1 }.map(\.string)) == [tile.token, other.token, lake.token])
+        #expect(request.count == 3, "each tile once")
+        #expect(summaries.count == 2)
         let counts = try #require(summaries[tile])
         #expect(counts.detected == 12)
         #expect(counts.reviewed == 4)
         #expect(counts.tags == 2)
         #expect(counts.latestSequence == 77)
         #expect(counts.updatedAt == Date(timeIntervalSince1970: 1_761_200_000))
+        #expect(counts.detectedAt == nil, "never detected in full")
+        #expect(counts.detector == nil)
         #expect(summaries[other] == nil, "a tile with nothing in it is left out")
+        let detected = try #require(summaries[lake])
+        #expect(detected.detected + detected.reviewed + detected.tags == 0)
+        #expect(detected.detectedAt == Date(timeIntervalSince1970: 1_762_600_000))
+        #expect(detected.detector == "Canopy 0.9 TreeDetector, 1 m voxels")
     }
 
     @Test func blobsComeDownByTheirHashAndAMissingOneIsNotFound() async throws {
@@ -244,5 +298,37 @@ import Testing
             _ = try await client.blob(BlobRef(rawValue: ref)!)
         }
         #expect(error?.code == GRPCStatusError.notFound)
+    }
+}
+
+/// Answers the first `calls` calls, then fails each one, keeping the requests it answered.
+final class FailingAfter: GRPCTransport, @unchecked Sendable {
+    let calls: Int
+    let answer: Data
+    private(set) var taken: [Data] = []
+    private var count = 0
+    private let lock = NSLock()
+
+    init(calls: Int, answer: Data) {
+        self.calls = calls
+        self.answer = answer
+    }
+
+    func call(_ path: String, requests: [Data]) -> AsyncThrowingStream<Data, any Error> {
+        let answers = lock.withLock { () -> Bool in
+            count += 1
+            guard count <= calls else { return false }
+            taken += requests
+            return true
+        }
+        let answer = answer
+        return AsyncThrowingStream { continuation in
+            if answers {
+                continuation.yield(answer)
+                continuation.finish()
+            } else {
+                continuation.finish(throwing: GRPCTransportError.noResponse)
+            }
+        }
     }
 }
