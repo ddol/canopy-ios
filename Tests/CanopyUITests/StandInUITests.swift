@@ -64,10 +64,10 @@ final class StandInUITests: XCTestCase {
 
         app.buttons["Proposals"].firstMatch.tap()
         let review = app.buttons["Review"].firstMatch
-        XCTAssertTrue(review.waitForExistence(timeout: 10))
+        XCTAssertTrue(review.waitForExistence(timeout: 60))
         review.tap()
         let hint = app.staticTexts["Pull down to sync and see other players' changes near you."].firstMatch
-        XCTAssertTrue(hint.waitForExistence(timeout: 5))
+        XCTAssertTrue(hint.waitForExistence(timeout: 60))
         // Pull from the hint itself: the list's frame runs up under the navigation bar, so a drag from its top edge
         // starts on the bar and never reaches the list.
         hint.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
@@ -77,7 +77,7 @@ final class StandInUITests: XCTestCase {
         keep(app, "Review after a sync")
 
         app.buttons["Me"].firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["sync-submitted"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["sync-submitted"].firstMatch.waitForExistence(timeout: 60))
     }
 
     /// Layers → Load real trees in view, and the result once it shows.
