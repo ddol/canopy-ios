@@ -1,6 +1,10 @@
 import Foundation
 
 /// An immutable piece of evidence: a cropped, colourless mesh stored as a GLB blob.
+///
+/// A scan is identified by its hash, `blob`: the SHA-256 of the GLB bytes, which is also the blob's name on this device
+/// and on a Gerardus server. The GLB writer is deterministic and a scan is encoded once, when it is captured, so two
+/// records with the same hash are the same scan saved twice. A store keeps one record per hash.
 public struct Evidence: Identifiable, Hashable, Codable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case trunkScan
@@ -10,6 +14,7 @@ public struct Evidence: Identifiable, Hashable, Codable, Sendable {
     public static let glbMediaType = "model/gltf-binary"
 
     public var meta: RecordMeta
+    /// The scan's hash: the lower-case hex SHA-256 of the GLB bytes.
     public var blob: BlobRef
     public var byteCount: Int
     public var mediaType: String

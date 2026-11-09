@@ -37,6 +37,8 @@ final class AppModel {
     var mapViewport: MapViewport?
     /// How many scans (evidence meshes) this device has recorded.
     private(set) var scanCount = 0
+    /// The scans being saved, by hash, so Save tapped twice saves a scan once (`saveTrunkMeasurement`).
+    @ObservationIgnored var scansBeingSaved: Set<BlobRef> = []
     /// The tiles pulled from the shared map so far (see AppModel+SharedMap).
     private(set) var followedTiles: Set<S2CellID> = []
     /// The level-16 cells the player has marked as surveyed (see AppModel+Survey).
@@ -285,12 +287,21 @@ enum LocalPlayerID {
 extension AppModel {
     /// Saves a trunk measurement: the GLB blob, its evidence record and the observation. With no target tree,
     /// first adds a new tree at `position`. Returns the measured tree.
+    ///
+    /// A scan is identified by its hash, so saving one that is already saved (Save tapped twice) adds nothing: it
+    /// returns the tree the scan measured. A save of the same scan while one is still running returns nil at once.
     @discardableResult
     func saveTrunkMeasurement(
         dbh: DBH, lean: Lean?, glb: Data, evidenceMesh: (vertices: Int, triangles: Int), cropRadius: Double,
         tree target: Tree?, position: Position
     ) async -> Tree? {
+        let blob = BlobStore.reference(for: glb)
+        guard scansBeingSaved.insert(blob).inserted else { return nil }
+        defer { scansBeingSaved.remove(blob) }
         var tree = target
+        if let saved = try? await store.evidence(hash: blob), let measured = census.trees[saved.subjectID] {
+            tree = measured
+        }
         if tree == nil {
             let added = Tree(
                 meta: RecordMeta(playerID: player.id, chunk: position.chunk), position: position,
@@ -300,7 +311,6 @@ extension AppModel {
         }
         guard let tree else { return nil }
         do {
-            let blob = try store.blobs.put(glb)
             let evidence = Evidence(
                 meta: RecordMeta(playerID: player.id, chunk: tree.position.chunk),
                 blob: blob,
@@ -311,9 +321,11 @@ extension AppModel {
                 vertexCount: evidenceMesh.vertices,
                 triangleCount: evidenceMesh.triangles
             )
-            try await store.addEvidence(evidence, data: glb)
-            await record(.trunkMeasured(treeID: tree.id, dbh: dbh, lean: lean, evidence: blob))
-            return census.trees[tree.id]
+            // The record already stored for this scan, if there is one, says which tree it measured; recording the
+            // measurement again returns the one already recorded.
+            let stored = try await store.addEvidence(evidence, data: glb)
+            await record(.trunkMeasured(treeID: stored.subjectID, dbh: dbh, lean: lean, evidence: blob))
+            return census.trees[stored.subjectID]
         } catch {
             self.error = "Could not save the measurement: \(error.localizedDescription)"
             return nil
