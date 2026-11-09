@@ -315,14 +315,15 @@ them anyway.
 (`AppModel.pullSharedMap`). It follows (`AppModel.followedTiles()`):
 
 - the tiles the map draws in full now (`MapDetail`: at most 16, and none when the map is too wide to draw any);
-- the tiles pulled before where the player has been: drawn in full on the map at some time (`visitedTiles`, kept
-  across launches), or where they recorded something.
+- the tiles pulled before where the player has been: drawn in full on the map lately (`visitedTiles`, the last 256,
+  kept across launches), or where something was recorded on this phone, whoever was signed in.
 
 Every other tile the map shades from the server's summaries. A tile pulled for any other reason (earlier versions
 followed every tile in the city with trees) is forgotten at the next sync (`forgetUnfollowed`, `LocalStore.forgetShared`):
 a store holding a city's worth of pulled trees takes seconds to read at launch and to re-derive at every change. The
-device's own work is in tiles it follows, and stays; a forgotten tile is pulled again, from a snapshot, once the map
-draws it in full. A tile it has never pulled gets a snapshot (`GetTile`); the rest get the ops applied since
+device's own work is in tiles it follows, and stays: the store also keeps any tile holding a shared tree or tag
+this device observed, whatever it is asked to forget, since that record is the tree's only copy here. A forgotten tile
+is pulled again, from a snapshot, once the map draws it in full. A tile it has never pulled gets a snapshot (`GetTile`); the rest get the ops applied since
 their cursor (`PullChanges`). Before pulling, one `GetTileSummaries` asks for the latest sequence of every tile pulled
 before, and only the tiles whose sequence is not the cursor are pulled (`AppModel.tilesToPull`); a server too old to
 answer it (UNIMPLEMENTED) has every tile pulled, as before. If the server's log goes backwards (its database was
@@ -387,8 +388,8 @@ tile) are drawn only there. Every other tile near the view that holds trees is o
 trees per hectare, on a square-root scale that fills at 120 per hectare; with more than 800 tiles in view the patches
 are whole level-13 cells instead. Tapping a patch zooms to where its tile is drawn in full. The counts are the phone's
 own (`CensusTiles`: the census by tile, with each tile's trees counted by status, made once per census change off the
-main actor, so a patch is shaded without looking at its trees); for a tile the phone holds no trees in, they are
-the server's: when the map settles on a wide view, `AppModel.summariseSoon` asks `GetTileSummaries` about the tiles round
+main actor, so a patch is shaded without looking at its trees); for a tile the phone holds no trees in, or has not
+pulled (its trees here are then only the base layer and the phone's own), they are the server's: when the map settles on a wide view, `AppModel.summariseSoon` asks `GetTileSummaries` about the tiles round
 it (at most 4096, nearest first, each again only after two minutes) and keeps the answers in `serverTiles`. That
 needs nothing from the store, so the map is shaded while the store is still being read at launch.
 
@@ -397,7 +398,8 @@ needs nothing from the store, so the map is shaded while the store is still bein
 - **Tiles detected in full** (`AppModel.detectedTiles`) are outlined in dark ink, and surveyed tiles in green. A level-13
   cell is outlined when every tile in it with trees is, and a tile detected in full that holds no trees still gets its
   outline.
-- **The player's own trees** (those their changesets touch: added, measured, confirmed; `AppModel.ownTrees`) are drawn
+- **The player's own trees** (those this phone's changesets touch: added, measured, confirmed, moved, under any
+  player id; `AppModel.ownTrees`) are drawn
   at every zoom, at most 200 nearest the centre outside the tiles drawn in full. Other trees appear only in the tiles
   drawn in full.
 

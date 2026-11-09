@@ -25,7 +25,8 @@ final class AppModel {
     /// The census's trees by level-16 tile, and their counts by status, for the map to draw only some tiles in full and
     /// shade the rest without looking at every tree each time it is drawn. Made with the census, off the main actor.
     private(set) var censusTiles = CensusTiles(CensusState())
-    /// The trees this player has added, measured or confirmed (on this phone): the map draws them at every zoom.
+    /// The trees worked on on this phone (added, measured, confirmed, moved, under any player id): the map draws them
+    /// at every zoom.
     private(set) var ownTrees: Set<UUID> = []
     private(set) var summary = CensusSummary(confirmed: 0, estimated: 0, coverage: 0)
     private(set) var changesets: [Changeset] = []
@@ -62,9 +63,9 @@ final class AppModel {
     var detectedTiles: Set<S2CellID> = AppModel.savedDetectedTiles() {
         didSet { if detectedTiles != oldValue { Self.saveDetectedTiles(detectedTiles) } }
     }
-    /// The tiles the map has drawn in full, kept across launches: a sync keeps the ones it pulled up to date (see
-    /// `followedTiles()`).
-    var visitedTiles: Set<S2CellID> = AppModel.savedVisitedTiles() {
+    /// The tiles the map has drawn in full lately, oldest first and at most `visitedTileLimit`, kept across launches: a
+    /// sync keeps the ones it pulled up to date (see `followedTiles()`).
+    var visitedTiles: [S2CellID] = AppModel.savedVisitedTiles() {
         didSet { if visitedTiles != oldValue { Self.saveVisitedTiles(visitedTiles) } }
     }
     /// The park being detected in full, site by site (`detectPark`).
@@ -233,7 +234,7 @@ final class AppModel {
         if refresh == refreshes { censusTiles = tiles }
         summary = await store.summary()
         changesets = (try? await store.changesets()) ?? []
-        ownTrees = Self.trees(touchedBy: player.id, in: changesets)
+        ownTrees = Self.trees(touchedBy: changesets)
         followedTiles = Set(((try? await store.sharedTiles()) ?? [:]).keys)
         scanCount = (try? await store.evidenceCount()) ?? 0
         candidateSources = await store.candidateSources()
@@ -241,9 +242,11 @@ final class AppModel {
             ((try? await store.surveyedCells()) ?? []).map { ($0.cell, $0) }, uniquingKeysWith: { _, last in last })
     }
 
-    /// The trees a player's changesets touch: added, measured, confirmed or rejected by them.
-    nonisolated static func trees(touchedBy player: PlayerID, in changesets: [Changeset]) -> Set<UUID> {
-        Set(changesets.filter { $0.meta.playerID == player }.flatMap { $0.ops.filter { $0.entity == .tree }.map(\.id) })
+    /// The trees some changesets touch. Every changeset in the store was made on this phone, and all of them count,
+    /// whoever was signed in: work recorded under the local id before a Game Center sign-in (or while it is still
+    /// signing in at launch, when the census is first read) is the same player's.
+    nonisolated static func trees(touchedBy changesets: [Changeset]) -> Set<UUID> {
+        Set(changesets.flatMap { $0.ops.filter { $0.entity == .tree }.map(\.id) })
     }
 
     // MARK: Census actions

@@ -8,19 +8,23 @@ import Foundation
 extension AppModel {
     /// The tiles a sync follows: the tiles the map draws in full now (`MapDetail`: at most 16 level-16 tiles, and only
     /// when the map is close enough to draw any), and the tiles pulled before where the player has been, that is, drawn
-    /// in full on the map at some time (`visitedTiles`) or recorded something in. A tile pulled for some other reason
-    /// (an earlier version followed every tile in the city) is forgotten (`forgetUnfollowed`) and pulled again when the
-    /// map draws it in full. Everything else the map shades from the server's summaries.
+    /// in full on the map lately (`visitedTiles`, the last `visitedTileLimit`) or recorded something in on this phone
+    /// (whoever was signed in). A tile pulled for some other reason (an earlier version followed every tile in the city)
+    /// is forgotten (`forgetUnfollowed`) and pulled again when the map draws it in full. Everything else the map shades
+    /// from the server's summaries.
     func followedTiles() async throws -> Set<S2CellID> {
-        if let viewport = mapViewport { visitedTiles.formUnion(Self.drawnTiles(in: viewport)) }
+        let drawn = mapViewport.map(Self.drawnTiles) ?? []
+        visitedTiles = Self.visiting(drawn, after: visitedTiles)
         let pulled = Set(try await store.sharedTiles().keys)
-        let recorded = Set(changesets.filter { $0.meta.playerID == player.id }.flatMap(\.tiles))
-        return pulled.intersection(visitedTiles.union(recorded)).union(mapViewport.map(Self.drawnTiles) ?? [])
+        // From the store, not `changesets`: that is empty until the store has been read at launch.
+        let recorded = Set(try await store.changesets().flatMap(\.tiles))
+        return pulled.intersection(Set(visitedTiles).union(recorded)).union(drawn)
     }
 
     /// Forgets the pulled tiles a sync does not follow. Earlier versions pulled every tile in the city with trees, tens
     /// of thousands of them after a park-wide detection, and a store holding them takes seconds to read at every launch
-    /// and to re-derive at every change. This device's own work is in tiles it follows, and stays.
+    /// and to re-derive at every change. This device's own work is in tiles it follows, and stays; the store keeps any
+    /// tile holding a shared tree this device worked on in any case (`LocalStore.forgetShared`).
     func forgetUnfollowed(_ followed: Set<S2CellID>) async throws {
         let unfollowed = Set(try await store.sharedTiles().keys).subtracting(followed)
         guard !unfollowed.isEmpty else { return }
@@ -32,15 +36,30 @@ extension AppModel {
         MapDetail(region: viewport).detailed ?? []
     }
 
-    nonisolated static let visitedTilesKey = "canopy.visitedTiles"
+    /// How many of the tiles drawn in full lately a sync keeps following (`visitedTiles`): sixteen views' worth. Every
+    /// tile followed is kept up to date at each sync and asked about for the review queue (a call each), so the
+    /// tiles visited longest ago are let go, as the city's tiles were; they are pulled again when drawn in full.
+    nonisolated static let visitedTileLimit = 256
 
-    nonisolated static func savedVisitedTiles(defaults: UserDefaults = .standard) -> Set<S2CellID> {
-        Set((defaults.stringArray(forKey: visitedTilesKey) ?? []).compactMap(S2CellID.init(token:)))
+    /// `visited` with `tiles` visited now: those move to the end, the most recent, and only the last
+    /// `visitedTileLimit` are kept.
+    nonisolated static func visiting(_ tiles: Set<S2CellID>, after visited: [S2CellID]) -> [S2CellID] {
+        guard !tiles.isEmpty else { return visited }
+        let kept = visited.filter { !tiles.contains($0) } + tiles.sorted()
+        return Array(kept.suffix(visitedTileLimit))
     }
 
-    static func saveVisitedTiles(_ tiles: Set<S2CellID>, defaults: UserDefaults = .standard) {
+    nonisolated static let visitedTilesKey = "canopy.visitedTiles"
+
+    nonisolated static func savedVisitedTiles(defaults: UserDefaults = .standard) -> [S2CellID] {
+        Array(
+            (defaults.stringArray(forKey: visitedTilesKey) ?? []).compactMap(S2CellID.init(token:)).suffix(
+                visitedTileLimit))
+    }
+
+    static func saveVisitedTiles(_ tiles: [S2CellID], defaults: UserDefaults = .standard) {
         guard !isTesting() else { return }
-        defaults.set(tiles.map(\.token).sorted(), forKey: visitedTilesKey)
+        defaults.set(tiles.map(\.token), forKey: visitedTilesKey)
     }
 
     /// Every level-16 tile in the city (`MapViewport.sanFrancisco`, its corners included): the children of the

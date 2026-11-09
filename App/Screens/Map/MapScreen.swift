@@ -119,7 +119,8 @@ struct MapScreen: View {
                 region: viewport ?? Self.startViewport,
                 detectedLimit: detectedLimit, reference: model.mapReference, surveyed: Set(model.surveyedCells.keys),
                 treeForms: model.treeForms, treeProfiles: model.treeProfiles, censusTiles: model.censusTiles,
-                remoteTiles: model.serverTiles, own: model.ownTrees, detectedTiles: model.detectedTiles)
+                remoteTiles: model.serverTiles, pulledTiles: model.followedTiles, own: model.ownTrees,
+                detectedTiles: model.detectedTiles)
         }
     }
 

@@ -205,6 +205,16 @@ import Testing
         let mine = MapLayers(state: CensusState(trees: [local]), region: view, remoteTiles: remote)
         let own = try #require(mine.summaries.first { $0.id == shaded })
         #expect((own.detected, own.reviewed) == (0, 1))
+        // Unless the phone has not pulled the tile: its trees there are only the base layer and its own, so the
+        // server's count, which has everyone's, shades it.
+        let sample = MapLayers(
+            state: CensusState(trees: [local]), region: view, remoteTiles: remote, pulledTiles: [])
+        let counted = try #require(sample.summaries.first { $0.id == shaded })
+        #expect((counted.detected, counted.reviewed) == (40, 2))
+        let pulled = MapLayers(
+            state: CensusState(trees: [local]), region: view, remoteTiles: remote, pulledTiles: [shaded])
+        let held = try #require(pulled.summaries.first { $0.id == shaded })
+        #expect((held.detected, held.reviewed) == (0, 1))
         // Hiding detected trees hides them in the server's counts too.
         let reviewedOnly = MapLayers(
             state: CensusState(), visibility: .init(statuses: [.confirmed]), region: view, remoteTiles: remote)

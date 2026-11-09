@@ -105,4 +105,37 @@ import Testing
         #expect(state.trees[candidate.id]?.displayStatus == .proposed, "this device's work is still folded")
         #expect(try await store.sharedRecords().map(\.id) == [nearby.id])
     }
+
+    /// A shared tree this device worked on (confirmed, measured, moved, tagged) lives only in its tile's records:
+    /// forgetting the tile would take the tree, and the work on it, off the census until the tile was pulled again.
+    /// Whoever recorded it (the local id before a Game Center sign-in, say), its tile is kept.
+    @Test func forgettingKeepsTheTilesOfSharedTreesThisDeviceWorkedOn() async throws {
+        let store = try LocalStore.inMemory()
+        let far = GeoPoint(latitude: 37.7704, longitude: -122.5090)
+        let other = GeoPoint(latitude: 37.7690, longitude: -122.5000)
+        let theirs = TreeCandidate(id: UUID(), location: far, confidence: 1, isSynthetic: false).makeTree()
+        let tagged = TreeCandidate(id: UUID(), location: other, confidence: 1, isSynthetic: false).makeTree()
+        let untouched = TreeCandidate(id: UUID(), location: candidate.location, confidence: 1, isSynthetic: false)
+            .makeTree()
+        try await store.applyShared([
+            .init(tile: far.tile, sequence: 7, content: .snapshot([try record(theirs)])),
+            .init(tile: other.tile, sequence: 2, content: .snapshot([try record(tagged)])),
+            .init(tile: tile, sequence: 3, content: .snapshot([try record(untouched)])),
+        ])
+        try await store.record(.treeConfirmed(treeID: theirs.id), by: PlayerID(rawValue: "local:before-sign-in"))
+        let tag = Tag(
+            meta: RecordMeta(playerID: PlayerID(rawValue: "T:_me"), chunk: tagged.position.chunk),
+            treeID: tagged.id,
+            point: Tag.Point(position: tagged.position, heightAboveGround: Quantity(5, uncertainty: 1)),
+            issue: .hanger, couldHit: .path, sizeClass: .large, urgency: .high, status: .proposed)
+        try await store.record(.tagPlaced(tag), by: PlayerID(rawValue: "T:_me"))
+
+        let forgotten = try await store.forgetShared([far.tile, other.tile, tile])
+        #expect(forgotten == [tile])
+        #expect(try await store.sharedTiles() == [far.tile: 7, other.tile: 2])
+        let state = await store.state()
+        #expect(state.trees[theirs.id]?.displayStatus == .proposed, "the confirmation still has its tree")
+        #expect(state.trees[tagged.id] != nil, "the tag still has its tree")
+        #expect(state.trees[untouched.id] == nil)
+    }
 }

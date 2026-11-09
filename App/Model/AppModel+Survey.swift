@@ -11,6 +11,10 @@ extension AppModel {
 
     /// What the census holds in one cell.
     func cellCensus(_ cell: S2CellID) -> CellCensus {
+        Self.cellCensus(cell, in: census)
+    }
+
+    nonisolated static func cellCensus(_ cell: S2CellID, in census: CensusState) -> CellCensus {
         var result = CellCensus(cell: cell, detected: 0, confirmed: 0, rejected: 0)
         for tree in census.trees.values where tree.position.tile == cell {
             switch tree.effectiveStatus {
@@ -26,9 +30,10 @@ extension AppModel {
         surveyedCells[cell] != nil
     }
 
-    /// Marks a cell as surveyed with what the census holds there now.
+    /// Marks a cell as surveyed with what the census holds there now: the store's census, which waits for the store
+    /// to be read at launch, where `census` is still empty and would mark the cell with nothing in it.
     func markSurveyed(_ cell: S2CellID) async {
-        let counts = cellCensus(cell)
+        let counts = Self.cellCensus(cell, in: await store.state())
         let record = SurveyedCell(
             cell: cell, playerID: player.id, confirmed: counts.confirmed, rejected: counts.rejected,
             unreviewed: counts.detected)

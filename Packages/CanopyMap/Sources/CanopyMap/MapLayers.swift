@@ -233,7 +233,8 @@ public struct MapLayers: Equatable, Sendable {
     /// status (`CensusTiles.counts`) without looking at the trees; tiles in `detectedTiles` are marked as detected in
     /// full. Without a region everything is drawn. `censusTiles` is the census by tile when the caller keeps one; it is
     /// made here otherwise. `remoteTiles` are the server's counts for tiles (GetTileSummaries): a tile this phone holds
-    /// no trees in is shaded from those.
+    /// no trees in is shaded from those, and so is one it holds trees in but has not pulled, when `pulledTiles` (the
+    /// tiles whose shared trees the phone holds) says so: its trees here are only the base layer and the phone's own.
     public init(
         state: CensusState,
         routes: [Route] = [],
@@ -247,6 +248,7 @@ public struct MapLayers: Equatable, Sendable {
         treeProfiles: [String: TreeProfile] = [:],
         censusTiles: CensusTiles? = nil,
         remoteTiles: [S2CellID: TileSummary] = [:],
+        pulledTiles: Set<S2CellID>? = nil,
         own: Set<UUID> = [],
         ownLimit: Int = 200,
         detectedTiles: Set<S2CellID> = []
@@ -266,6 +268,10 @@ public struct MapLayers: Equatable, Sendable {
         }
         func shows(_ tree: Tree) -> Bool {
             tree.displayStatus != .removed && visibility.statuses.contains(tree.displayStatus)
+        }
+        /// Whether a tile is shaded from the server's counts rather than from the trees here.
+        func fromServer(_ tile: S2CellID) -> Bool {
+            remoteTiles[tile] != nil && (index.trees[tile] == nil || pulledTiles.map { !$0.contains(tile) } ?? false)
         }
         let shownStatuses = visibility.statuses.subtracting([.removed])
         let reviewedStatuses = shownStatuses.intersection([.proposed, .confirmed, .verified])
@@ -299,7 +305,7 @@ public struct MapLayers: Equatable, Sendable {
                 }
                 continue
             }
-            guard near(tile) else { continue }
+            guard near(tile), !fromServer(tile) else { continue }
             let detected = shownStatuses.contains(.detected) ? counts.detected : 0
             let reviewed = counts.count(of: reviewedStatuses)
             guard detected + reviewed > 0 else { continue }
@@ -310,10 +316,10 @@ public struct MapLayers: Equatable, Sendable {
             patches[id] = patch
             counted(tile, in: id)
         }
-        // Tiles the server holds trees in that this phone has not pulled: shaded from the server's counts.
+        // Tiles the server holds trees in that this phone holds none of, or has not pulled: shaded from its counts.
         let showsDetected = shownStatuses.contains(.detected)
         let showsReviewed = !reviewedStatuses.isEmpty
-        for (tile, remote) in remoteTiles where index.trees[tile] == nil && !detail.isDetailed(tile) && near(tile) {
+        for (tile, remote) in remoteTiles where fromServer(tile) && !detail.isDetailed(tile) && near(tile) {
             let detected = showsDetected ? remote.detected : 0
             let reviewed = showsReviewed ? remote.reviewed : 0
             guard detected + reviewed > 0 else { continue }

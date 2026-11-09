@@ -431,16 +431,32 @@ public actor LocalStore {
     /// later pull starts each again with a snapshot. This device's own observations stay in the log and are folded again
     /// for anything the shared map no longer holds. For a phone that holds more of the shared map than it follows (an
     /// earlier version pulled every tile in the city).
-    public func forgetShared(_ tiles: Set<S2CellID>) throws {
-        guard !tiles.isEmpty else { return }
+    ///
+    /// A tile holding a shared tree or tag this device observed (confirmed, measured, moved, rejected or tagged, under
+    /// any player id) is kept: the record is the only copy of that tree here, and forgetting it would take the tree and
+    /// the work on it off the census. Deciding that here, in the same step as the forgetting, also covers an observation
+    /// recorded after the caller chose the tiles. Returns the tiles forgotten.
+    @discardableResult
+    public func forgetShared(_ tiles: Set<S2CellID>) throws -> Set<S2CellID> {
+        guard !tiles.isEmpty else { return [] }
+        try prepare()
+        var observed: Set<UUID> = []
+        for observation in inputs.observations {
+            observed.insert(observation.kind.subject.id)
+            if case .tagPlaced(let tag) = observation.kind { observed.insert(tag.treeID) }
+        }
+        let worked = Set(inputs.shared.lazy.filter { observed.contains($0.id) }.map(\.tile))
+        let forgotten = tiles.subtracting(worked)
+        guard !forgotten.isEmpty else { return [] }
         try write {
-            for tile in tiles {
+            for tile in forgotten {
                 try db.run("DELETE FROM shared WHERE s2_l16_token = ?", [.text(tile.token)])
                 try db.run("DELETE FROM shared_tiles WHERE s2_l16_token = ?", [.text(tile.token)])
             }
         } update: { inputs in
-            inputs.shared.removeAll { tiles.contains($0.tile) }
+            inputs.shared.removeAll { forgotten.contains($0.tile) }
         }
+        return forgotten
     }
 
     /// Updates a changeset's state and approvals (for example after a sync) and re-derives.
