@@ -263,4 +263,4 @@ The blob store names each file by its SHA-256 (`blobs/ab/cdef…`), checks the h
 (`put(_:expecting:)`) and on read, and never overwrites.
 
 The debug **Reset local data** action deletes the database files and the blob folder, then recreates an empty
-store.
+store; the app also deletes the scan pictures drawn from the blobs (`ScanPreviewCache`, in Caches).

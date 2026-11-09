@@ -97,6 +97,8 @@ final class AppModel {
     var section: RootView.Section = .map
     /// The tree the Tag screen should start with.
     var tagTarget: UUID?
+    /// The tree the Map screen should centre on and select (`showOnMap`).
+    var mapTarget: UUID?
 
     /// The clients for the Gerardus server in Settings, kept so calls share connections and the reference cache
     /// (see `AppModel+Aerial`).
@@ -110,6 +112,8 @@ final class AppModel {
     let serverSettings: ServerSettings
     /// Flags for checking the data, for admins only.
     let adminSettings: AdminSettings
+    /// Pictures of the evidence meshes for the lists of scans, rendered once each (see AppModel+Scans).
+    let scanPreviews: ScanPreviewCache
     /// Where screens keep their `@AppStorage` choices (such as the base map). Forgotten when the app quits under tests,
     /// so every UI test starts from the defaults.
     let preferences: UserDefaults
@@ -132,7 +136,7 @@ final class AppModel {
     init(
         store: LocalStore, players: PlayerService, server: FakeGerardusClient = FakeGerardusClient(),
         serverSettings: ServerSettings = .volatile(), adminSettings: AdminSettings = .volatile(),
-        preferences: UserDefaults = AppModel.volatilePreferences()
+        preferences: UserDefaults = AppModel.volatilePreferences(), scanPreviews: ScanPreviewCache = .temporary()
     ) {
         self.store = store
         self.players = players
@@ -140,6 +144,7 @@ final class AppModel {
         self.serverSettings = serverSettings
         self.adminSettings = adminSettings
         self.preferences = preferences
+        self.scanPreviews = scanPreviews
     }
 
     static func volatilePreferences() -> UserDefaults {
@@ -165,7 +170,8 @@ final class AppModel {
                 for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             return AppModel(
                 store: try LocalStore(directory: support.appending(path: "Canopy")), players: players,
-                serverSettings: ServerSettings(), adminSettings: .live(), preferences: .standard)
+                serverSettings: ServerSettings(), adminSettings: .live(), preferences: .standard,
+                scanPreviews: (try? ScanPreviewCache.inCaches()) ?? .temporary())
         } catch {
             // Fall back to memory so the app still opens, and say why.
             let model = AppModel(
@@ -395,6 +401,7 @@ extension AppModel {
     func reset() async {
         do {
             try await store.reset()
+            try? await scanPreviews.removeAll()
             server = FakeGerardusClient()
             lastSync = nil
             try await store.importCandidates(try ParkFixtures.candidates())

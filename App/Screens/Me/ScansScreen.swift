@@ -3,7 +3,7 @@ import CanopyModel
 import SwiftUI
 
 /// Every scan this device has recorded, newest first: the colourless meshes kept as evidence for measurements (and
-/// limb tags), each with its tree, what it measured, and Preview and Share.
+/// limb tags), each with a picture of the mesh, its tree, what it measured, Preview and Share, and Show on map.
 struct ScansScreen: View {
     @Environment(AppModel.self) private var model
     @State private var scans: [Evidence] = []
@@ -22,12 +22,23 @@ struct ScansScreen: View {
                 Section {
                     details(scan)
                     EvidenceRow(ref: scan.blob, title: label(scan.kind))
+                    if let tree = tree(of: scan) {
+                        Button("Show on map", systemImage: "map") {
+                            model.showOnMap(tree)
+                        }
+                        .accessibilityIdentifier("scan-show-on-map")
+                    }
                 }
             }
         }
         .navigationTitle("Your scans")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            #if DEBUG || TESTING_TOOLS
+                if UserDefaults.standard.bool(forKey: "canopy.sampleScan"), model.scanCount == 0 {
+                    await model.addSampleScan()
+                }
+            #endif
             scans = (try? await model.store.allEvidence()) ?? []
             loaded = true
         }
@@ -40,9 +51,14 @@ struct ScansScreen: View {
         }
     }
 
+    /// The scan's tree: the one it measured, or the one its limb tag is on.
+    private func tree(of scan: Evidence) -> Tree? {
+        model.tree(scan.subjectID) ?? model.census.tags[scan.subjectID].flatMap { model.tree($0.treeID) }
+    }
+
     @ViewBuilder
     private func details(_ scan: Evidence) -> some View {
-        let tree = model.tree(scan.subjectID) ?? model.census.tags[scan.subjectID].flatMap { model.tree($0.treeID) }
+        let tree = tree(of: scan)
         VStack(alignment: .leading, spacing: Spacing.xxs) {
             Text(tree?.name ?? "A tree no longer on the map").font(.headline)
             Text(scan.meta.createdAt, format: .dateTime.day().month().year().hour().minute())

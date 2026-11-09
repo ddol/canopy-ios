@@ -5,7 +5,8 @@ send, so you can check it against the code.
 
 ## The short version
 
-- **No photos, ever.** The app never stores or uploads camera images or video.
+- **No photos, ever.** The app never stores or uploads camera images or video. The pictures of scans in the app
+  are drawn on your device from the colourless meshes.
 - **Evidence is colourless geometry.** When you measure a trunk or tag a limb, the app keeps a 3D mesh
   (vertex positions and triangles only, no colour or texture), cropped to a small radius around the
   subject. Geometry has no faces or colours, but someone standing right next to the tree would still show up as
@@ -31,6 +32,7 @@ send, so you can check it against the code.
 | Current state | Trees and tags derived from the observations. | Same database |
 | Changesets | The changes you propose for the shared map, with their state (pending, approved, applied, rejected, conflicted). | Same database |
 | Evidence | Cropped, colourless meshes as GLB files, named by their SHA-256 hash: trunk scans (the trunk plus 0.6 m around it, at most 2 m from its centre) and limb scans (1 m around the limb point). | `blobs/` folder in Application Support |
+| Scan pictures | A picture of each mesh for the lists of scans, drawn on the device from its geometry alone (grey shading from a fixed view, no photo), named by the mesh's SHA-256. Never uploaded. | `ScanPreviews/` folder in the app's Caches folder, which iOS may empty; the app draws them again |
 | Local player id | A random `local:<uuid>` used for records made before (or without) Game Center sign-in. | User defaults |
 | Gerardus server address | The address you typed in **Me → Settings** (`canopy.gerardusURL`). | User defaults |
 

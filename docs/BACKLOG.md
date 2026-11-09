@@ -52,7 +52,8 @@ pan only what is new, and kept areas load offline), fits the georeference in a r
 Sync pushes changesets, pulls the shared map for the tiles in view and those followed before, and fills the
 review queue. Loaded trees are saved to the server's trees layer. Still to do:
 
-- **Evidence offline.** Another device's scan is downloaded only when previewed; nothing prefetches it for offline use.
+- **Evidence offline.** Another device's scan is downloaded only when previewed, so its picture is drawn only then;
+  nothing prefetches it for offline use.
 - **Forgetting tiles.** Followed tiles are never dropped, so a sync grows with every area looked at.
 - **Verified identity.** The server trusts the player id header. It should check Game Center's identity signature
   (a server follow-up), and the app should send it.

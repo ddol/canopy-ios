@@ -81,6 +81,7 @@ struct MapScreen: View {
                     TreeSheet(tree: tree)
                         .presentationDetents([.medium, .large])
                 }
+                .onChange(of: model.mapTarget, initial: true) { showMapTarget() }
                 #if DEBUG || TESTING_TOOLS
                     // For profiling a load with Instruments without UI automation: launch with
                     // `-canopy.loadTreesAtLaunch YES` (and a server) to load the trees in view once the app is ready.
@@ -238,6 +239,17 @@ struct MapScreen: View {
     private var coverage: String {
         let fraction = model.summary.coverage
         return format.percent(fraction, fractionDigits: fraction > 0 && fraction < 0.1 ? 1 : 0)
+    }
+
+    /// Another screen asked to show a tree (`AppModel.showOnMap`, such as a scan's Show on map): go to it, draw its
+    /// status if the chips hide it, and select it.
+    private func showMapTarget() {
+        guard let id = model.mapTarget else { return }
+        model.mapTarget = nil
+        guard let tree = model.tree(id) else { return }
+        if tree.displayStatus != .removed { visibility.statuses.insert(tree.displayStatus) }
+        focus = MapFocus(.showing(tree.position.geo))
+        selection = id
     }
 
     private var selectedTree: Binding<Tree?> {
