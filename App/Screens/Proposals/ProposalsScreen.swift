@@ -14,13 +14,38 @@ struct ProposalsScreen: View {
         case history
     }
 
+    /// Which list shows. A list the player picks stays picked. Until they pick one, the tab opens on Review when
+    /// something waits there and on Yours otherwise, each time it appears, and keeps that list while it shows, so
+    /// agreeing with the last change does not switch lists under the player.
+    struct Choice {
+        /// The list the player picked with the control.
+        private var picked: Part?
+        /// The list the tab opened on this time, until the player leaves it.
+        private var opened: Part?
+
+        func part(awaiting: Int) -> Part {
+            picked ?? opened ?? ProposalsScreen.firstPart(awaiting: awaiting)
+        }
+
+        mutating func pick(_ part: Part) {
+            picked = part
+        }
+
+        mutating func appear(awaiting: Int) {
+            opened = part(awaiting: awaiting)
+        }
+
+        mutating func disappear() {
+            opened = nil
+        }
+    }
+
     @Environment(AppModel.self) private var model
-    /// The list the player picked. Until they pick, Review when something waits there, otherwise Yours.
-    @State private var picked: Part?
+    @State private var choice = Choice()
     /// The tree of the proposal the player tapped.
     @State private var shownTree: Tree?
 
-    private var part: Part { picked ?? Self.firstPart(awaiting: model.proposalsAwaitingPlayer) }
+    private var part: Part { choice.part(awaiting: model.proposalsAwaitingPlayer) }
 
     /// The list the tab opens on: Review when other players' changes wait there, otherwise the player's own.
     static func firstPart(awaiting: Int) -> Part {
@@ -47,7 +72,7 @@ struct ProposalsScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Picker("List", selection: Binding(get: { part }, set: { picked = $0 })) {
+                    Picker("List", selection: Binding(get: { part }, set: { choice.pick($0) })) {
                         Text("Review").tag(Part.review)
                         Text("Yours").tag(Part.yours)
                         Text("History").tag(Part.history)
@@ -60,8 +85,11 @@ struct ProposalsScreen: View {
                 await model.sync()
             }
             .onAppear {
-                // Stay on the list the tab opened on, so agreeing with the last change does not jump to Yours.
-                if picked == nil { picked = part }
+                choice.appear(awaiting: model.proposalsAwaitingPlayer)
+            }
+            .onDisappear {
+                // So the tab opens afresh next time: on Review if a sync brought changes to review meanwhile.
+                choice.disappear()
             }
             .sheet(item: $shownTree) { tree in
                 TreeSheet(tree: tree)

@@ -333,8 +333,9 @@ downloaded first (`GetBlob`, `AppModel.evidenceFile`), checked against its hash 
 opened the same way, as a throwaway USDZ in Quick Look. Blobs are uploaded with the changeset that references them.
 
 **The Proposals tab** (`ProposalsScreen`) shows one list at a time, picked with a segmented control: Review, Yours
-and History. It opens on Review when other players' changes wait there and on Yours otherwise, then stays on the
-list the player picks. Its badge is `AppModel.proposalsAwaitingPlayer`: the review queue's length with a server set,
+and History. Each time it appears it opens on Review when other players' changes wait there and on Yours otherwise,
+and keeps that list while it shows, so agreeing with the last change does not switch lists; a list the player picks
+stays picked (`ProposalsScreen.Choice`). Its badge is `AppModel.proposalsAwaitingPlayer`: the review queue's length with a server set,
 and zero without one. The player's own proposals wait on other players, so they are not counted. Pulling a list down
 syncs. Each list is a SwiftUI `List`, which builds only the rows on screen, so a long history costs what is shown.
 

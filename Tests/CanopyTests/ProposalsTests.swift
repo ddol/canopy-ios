@@ -70,4 +70,24 @@ import Testing
         #expect(ProposalsScreen.firstPart(awaiting: 0) == .yours)
         #expect(ProposalsScreen.firstPart(awaiting: 3) == .review)
     }
+
+    @Test func theTabOpensAfreshEachTimeUntilThePlayerPicksAList() {
+        var choice = ProposalsScreen.Choice()
+        // Opened before the first sync: nothing waits, so Yours.
+        choice.appear(awaiting: 0)
+        #expect(choice.part(awaiting: 0) == .yours)
+        // A sync brings changes to review while the tab shows: the list does not change under the player, but the
+        // badge counts them, so the tab opens on them next time.
+        #expect(choice.part(awaiting: 2) == .yours)
+        choice.disappear()
+        choice.appear(awaiting: 2)
+        #expect(choice.part(awaiting: 2) == .review)
+        // Agreeing with the last one leaves the player on Review.
+        #expect(choice.part(awaiting: 0) == .review)
+        // A list the player picks stays picked.
+        choice.pick(.history)
+        choice.disappear()
+        choice.appear(awaiting: 2)
+        #expect(choice.part(awaiting: 2) == .history)
+    }
 }
