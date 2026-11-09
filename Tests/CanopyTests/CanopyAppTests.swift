@@ -98,6 +98,39 @@ import Testing
         #expect(try await model.store.evidence(about: tag.id).first?.kind == .limbScan)
     }
 
+    @Test func savingAScanTwiceKeepsOneScanAndOneTree() async throws {
+        let model = try makeModel()
+        await model.load()
+        let other = try #require(model.census.trees.values.first)
+        let glb = Data("trunk glb".utf8)
+        let dbh = DBH(diameter: Quantity(0.4, uncertainty: 0.01), method: .lidarCircleFit)
+        func save(_ target: Tree? = nil) async -> Tree? {
+            await model.saveTrunkMeasurement(
+                dbh: dbh, lean: nil, glb: glb, evidenceMesh: (3, 1), cropRadius: 1.5, tree: target,
+                position: other.position)
+        }
+
+        // Save as a new tree tapped twice: the second tap does nothing while the first saves.
+        async let first = save()
+        async let second = save()
+        let saved = Set(await [first, second].compactMap { $0?.id })
+        #expect(saved.count == 1)
+        let tree = try #require(saved.first)
+        #expect(model.census.trees.count == 201)
+        #expect(model.scanCount == 1)
+        #expect(model.changesets.count == 2, "the new tree and its measurement")
+
+        // Saving it again later, even for another tree, links to the tree it measured.
+        #expect(await save()?.id == tree)
+        #expect(await save(other)?.id == tree)
+        #expect(model.census.trees.count == 201)
+        #expect(model.scanCount == 1)
+        #expect(model.changesets.count == 2)
+        #expect(model.tree(tree)?.evidenceRefs == [BlobStore.reference(for: glb)])
+        #expect(model.tree(other.id)?.evidenceRefs == [])
+        #expect(model.error == nil)
+    }
+
     @Test func syncSubmitsAndASimulatedTrustedApprovalAppliesTheChange() async throws {
         let model = try makeModel()
         await model.load()
