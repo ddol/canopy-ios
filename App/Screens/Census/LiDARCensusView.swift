@@ -263,7 +263,7 @@ struct LiDARCensusView: View {
             nearby = []
             return
         }
-        nearby = model.census.trees(near: here, within: 60, limit: 20)
+        nearby = model.census.trees(near: here, within: 60, limit: 20, tiles: model.censusTiles)
     }
 
     /// A tree chosen from the card's list becomes the target, leaving any move of another where it was.
@@ -904,7 +904,7 @@ struct LiDARCensusView: View {
         var items: [WireframeItem] = []
         // Detections in a surveyed cell were looked over and left: drawn faint and thin.
         var surveyed: [WireframeItem] = []
-        for (tree, _) in model.census.trees(near: here, within: 120, limit: 400) {
+        for (tree, _) in model.census.trees(near: here, within: 120, limit: 400, tiles: model.censusTiles) {
             guard let base = arGroundPoint(tree.position.geo, sites: sites, arGround: arGround) else { continue }
             let id = ARTreeSelection.censusPrefix + tree.id.uuidString
             var item = SiteWireframes.treeItem(
