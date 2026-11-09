@@ -60,8 +60,8 @@ final class AppModel {
     /// When each tile's summary was last asked for, so moving the map back and forth does not ask again at once.
     @ObservationIgnored var summariesAskedAt: [S2CellID: Date] = [:]
     @ObservationIgnored var pendingSummaries: Task<Void, Never>?
-    /// The tiles whose trees were detected over the whole tile, by this phone (kept across launches) or, from its
-    /// summaries, by anyone the server heard from (see AppModel+Detection).
+    /// The tiles whose trees were detected over the whole tile, by this phone and saved to the server (kept across
+    /// launches) or, from its summaries, by anyone the server heard from (see AppModel+Detection).
     var detectedTiles: Set<S2CellID> = AppModel.savedDetectedTiles() {
         didSet { if detectedTiles != oldValue { Self.saveDetectedTiles(detectedTiles) } }
     }

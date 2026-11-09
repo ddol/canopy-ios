@@ -63,6 +63,9 @@ struct TreeFitPanel: View {
     }
 
     @State private var mode = Mode.shape
+    /// How each confirmed ring was set before, so taking the confirmation back restores it. Kept here, not in the
+    /// rings editor, which is made afresh each time Rings is picked.
+    @State private var beforeConfirming: [TreeSection.ID: TreeSection.Source] = [:]
 
     var body: some View {
         VStack(spacing: Spacing.xs) {
@@ -78,8 +81,8 @@ struct TreeFitPanel: View {
                 TreeFormSliders(form: Binding(get: { fitting.shape }, set: { fitting.reshape($0) }))
             case .rings:
                 TreeSectionEditor(
-                    profile: $fitting.profile, selected: $selectedSection, onSnap: onSnap, isAligning: isAligning,
-                    alignStatus: alignStatus, onAlign: onAlign)
+                    profile: $fitting.profile, selected: $selectedSection, beforeConfirming: $beforeConfirming,
+                    onSnap: onSnap, isAligning: isAligning, alignStatus: alignStatus, onAlign: onAlign)
             }
             HStack(spacing: Spacing.s) {
                 Button("Back", systemImage: "chevron.backward", action: onBack)
@@ -115,12 +118,14 @@ struct TreeFitPanel: View {
 struct TreeSectionEditor: View {
     @Binding var profile: TreeProfile
     @Binding var selected: TreeSection.ID?
+    /// How each confirmed ring was set before, so taking the confirmation back restores it. Held by the caller: this
+    /// view's own state would be lost each time the panel switches to Shape and back, and a ring set by eye or from
+    /// the camera, which has a centre of its own, would then come back as fitted to the scan.
+    @Binding var beforeConfirming: [TreeSection.ID: TreeSection.Source]
     var onSnap: () -> Void
     var isAligning = false
     var alignStatus: String?
     var onAlign: () -> Void = {}
-    /// How each confirmed ring was set before, so taking the confirmation back restores it.
-    @State private var beforeConfirming: [TreeSection.ID: TreeSection.Source] = [:]
     private let format = QuantityFormat()
 
     private var section: TreeSection? { selected.flatMap { profile.section($0) } }
