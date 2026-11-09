@@ -93,6 +93,14 @@ public struct CensusState: Hashable, Sendable {
             update(tree: id) { tree in
                 tree.countStatus = .removed
             }
+        case .treeMoved(let id, let position):
+            update(tree: id) { tree in
+                tree.position = position
+                tree.meta.chunk = position.chunk
+                if tree.countStatus != .verified {
+                    tree.countStatus = .confirmed
+                }
+            }
         case .trunkMeasured(let id, let dbh, let lean, let evidence):
             update(tree: id) { tree in
                 tree.dbh = dbh
@@ -117,6 +125,18 @@ public struct CensusState: Hashable, Sendable {
         var copy = self
         copy.apply(observation)
         return copy
+    }
+
+    /// A tree other than `id`, not removed, that stands in the S2 L22 cell (`TreeName.level`, about 2 m across) of
+    /// `point`. Gerardus keeps one tree per L22 cell: a change that puts a second tree in one conflicts when it is
+    /// applied.
+    public func tree(standingAt point: GeoPoint, except id: UUID? = nil) -> Tree? {
+        let cell = S2CellID(point, level: TreeName.level)
+        let chunk = cell.chunk
+        return trees.values.first { tree in
+            tree.id != id && tree.meta.chunk == chunk && tree.effectiveStatus != .removed
+                && S2CellID(tree.position.geo, level: TreeName.level) == cell
+        }
     }
 
     private mutating func update(tree id: UUID, _ change: (inout Tree) -> Void) {

@@ -4,9 +4,11 @@ import CanopyMap
 import CanopyModel
 import CanopyReference
 import SwiftUI
+import simd
 
 /// Census with LiDAR: the AR view with the reconstructed mesh, Gerardus's site drawn as wireframes round the player
-/// (trees, buildings, streets) with the census's own trees, the target tree, and the census actions.
+/// (trees, buildings, streets) with the census's own trees, the selected tree with a compass to find it, and the
+/// census actions: once the selected tree is in view, Not a tree and Move; Scan trunk at any time.
 struct LiDARCensusView: View {
     @Environment(AppModel.self) private var model
     @State private var capture = CaptureSession()
@@ -33,18 +35,35 @@ struct LiDARCensusView: View {
     @State private var loadingVectors = false
     /// The tree picked by tapping; the shapes the player adjusts live on the model, shared with the map.
     @State private var selection: ARTreeSelection?
+    /// Census trees near the player that are not removed, nearest first, kept between fixes.
+    @State private var nearby: [(Tree, Double)] = []
+    /// Where each pickable tree is drawn in AR: census trees, and Gerardus's.
+    @State private var drawnCensus: [String: DrawnTree] = [:]
+    @State private var drawnSite: [String: DrawnTree] = [:]
+    /// Follows the selected tree from the camera for its card, the compass and whether it is in view.
+    @State private var tracker = TreeTracker()
+    /// The selected tree while it is being moved to its true spot.
+    @State private var move: TreeMove?
     private let format = QuantityFormat()
 
     var body: some View {
-        watching(scene)
+        following(watching(scene))
             .onAppear {
                 capture.start()
-                location.start()
+                location.start(heading: true)
+                refreshNearby()
             }
             .onDisappear {
+                endMove()
                 capture.stopAligning()
                 capture.pause()
                 location.stop()
+            }
+            .task {
+                while !Task.isCancelled {
+                    tracker.sample(capture: capture, location: location)
+                    try? await Task.sleep(for: .seconds(TreeTracker.interval))
+                }
             }
             .confirmationDialog(
                 "Register with aerial LiDAR?", isPresented: $confirmingRegistration, titleVisibility: .visible
@@ -80,7 +99,10 @@ struct LiDARCensusView: View {
                 .ignoresSafeArea()
             Reticle()
             VStack(spacing: Spacing.s) {
-                targetCard
+                SelectedTreeCard(
+                    focus: focus, tracker: tracker,
+                    placeholder: location.geoPoint == nil ? "Waiting for GPS…" : "No tree within 60 m",
+                    choices: nearby, onChoose: choose)
                 overlayStatusRow
                 if let notice {
                     HStack(spacing: Spacing.xs) {
@@ -93,7 +115,13 @@ struct LiDARCensusView: View {
                     .accessibilityIdentifier("census-notice")
                 }
                 Spacer()
-                if let scan = capture.scan, fit == nil, selection == nil {
+                if let focus, showsCompass {
+                    HStack {
+                        Spacer()
+                        TreeCompassView(tracker: tracker, title: focus.title)
+                    }
+                }
+                if let scan = capture.scan, fit == nil {
                     ScanProgressCard(progress: scan.progress)
                 }
                 bottomPanel
@@ -102,7 +130,8 @@ struct LiDARCensusView: View {
         }
     }
 
-    /// The fit sliders while a scanned trunk is being fitted, the selected tree's panel, else the census actions.
+    /// The fit sliders while a scanned trunk is being fitted, the scan's buttons while one runs, moving the selected
+    /// tree, the tapped tree's panel, else the census actions.
     @ViewBuilder
     private var bottomPanel: some View {
         if fit != nil {
@@ -110,13 +139,30 @@ struct LiDARCensusView: View {
                 fitting: fitFittingBinding, selectedSection: fitSectionBinding, onSnap: snapSelectedSection,
                 isAligning: capture.isAligning, alignStatus: alignStatus, onAlign: toggleAlignment,
                 onMoveHere: moveTreeHere, onBack: stopFitting, onMeasurement: showMeasurement)
+        } else if capture.scan != nil {
+            scanControls
+        } else if let move {
+            MovePanel(
+                name: move.name, offset: moveOffset(move), onReticle: moveToReticle, onCancel: endMove,
+                onPlace: { Task { await placeMovedTree() } })
         } else if let selection {
             SelectedTreePanel(
                 selection: selection, form: selectedFormBinding, isAdjusted: model.treeForms[selection.id] != nil,
-                onReset: resetSelectedForm, onScan: startScan, onDone: deselect)
+                canEdit: canEditFocus, onReset: resetSelectedForm, onScan: startScan, onDone: deselect,
+                onNotATree: rejectFocus, onMove: startMove)
         } else {
             controls
         }
+    }
+
+    /// The compass shows while there is a selected tree out of view and nothing else is going on.
+    private var showsCompass: Bool {
+        !tracker.inView && capture.scan == nil && fit == nil && move == nil
+    }
+
+    /// Whether Not a tree and Move apply: the selected tree is a census tree, and it is in view.
+    private var canEditFocus: Bool {
+        focus?.tree != nil && tracker.inView
     }
 
     /// What the whole overlay is drawn from: the loaded sites, the placement and the layers. The adjusted shapes are
@@ -138,6 +184,7 @@ struct LiDARCensusView: View {
             .onChange(of: location.geoPoint) {
                 placeSession()
                 autoLoadVectors()
+                refreshNearby()
             }
             .onChange(of: capture.lastTap) {
                 if let tap = capture.lastTap { handleTap(at: tap.point) }
@@ -152,53 +199,71 @@ struct LiDARCensusView: View {
             }
     }
 
-    // MARK: Target
-
-    private var nearby: [(Tree, Double)] {
-        guard let here = location.geoPoint else { return [] }
-        return model.census.trees(near: here, within: 60, limit: 8, tiles: model.censusTiles)
+    /// What follows the selected tree: the tracker's targets, its highlight, the trees near by and dragging it.
+    private func following(_ view: some View) -> some View {
+        view
+            .onChange(of: trackerTargets, initial: true) {
+                tracker.follow(trackerTargets.focus, nearby: trackerTargets.nearby)
+            }
+            .onChange(of: focus?.id, initial: true) { capture.highlightWireframe(id: focus?.id) }
+            .onChange(of: nearbyInputs) { refreshNearby() }
+            .onChange(of: capture.lastDrag) {
+                if let drag = capture.lastDrag { dragTree(drag) }
+            }
     }
 
+    // MARK: The selected tree
+
+    /// The census tree being moved, else the one chosen from the list, else the nearest one. A move holds on to its
+    /// tree, so walking to its true spot does not make another tree the nearest under it.
     private var target: Tree? {
-        model.tree(targetID) ?? nearby.first?.0
+        model.tree(move?.treeID ?? targetID).flatMap { $0.effectiveStatus == .removed ? nil : $0 } ?? nearby.first?.0
     }
 
-    private var targetCard: some View {
-        HStack(spacing: Spacing.s) {
-            if let target {
-                StatusBadge(target.displayStatus.presentation)
-                if let here = location.geoPoint {
-                    let distance = LocalFrame(origin: here).enu(of: target.position.geo).horizontalDistance
-                    Text(format.length(distance, fractionDigits: 0))
-                        .font(CanopyFont.mono(.subheadline))
-                }
-                if let dbh = target.dbh {
-                    Text("DBH " + format.length(dbh.diameter.value, uncertainty: dbh.diameter.uncertainty))
-                        .font(CanopyFont.mono(.subheadline))
-                }
-            } else {
-                Label(location.geoPoint == nil ? "Waiting for GPS…" : "No tree within 60 m", systemImage: "location")
-                    .font(.subheadline)
-            }
-            Spacer()
-            Menu {
-                ForEach(nearby, id: \.0.id) { tree, distance in
-                    Button {
-                        targetID = tree.id
-                    } label: {
-                        Label(
-                            "\(tree.displayStatus.presentation.label), \(format.length(distance, fractionDigits: 0))",
-                            systemImage: tree.displayStatus.presentation.systemImage)
-                    }
-                }
-            } label: {
-                Label("Change tree", systemImage: "arrow.triangle.2.circlepath")
-                    .labelStyle(.iconOnly)
-            }
-            .disabled(nearby.isEmpty)
+    /// The tree the census actions are about: the tapped one, else the target.
+    private var focus: FocusTree? {
+        if let selection {
+            let tree = selection.censusID.flatMap { model.tree($0) }
+            return FocusTree(
+                id: selection.id, title: tree?.name ?? selection.title, status: tree?.displayStatus ?? selection.status,
+                tree: tree, geo: tree?.position.geo ?? selection.geo, source: .tapped, dbh: tree?.dbh)
         }
-        .padding(Spacing.s)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.large))
+        guard let target else { return nil }
+        return FocusTree(
+            id: ARTreeSelection.censusPrefix + target.id.uuidString, title: target.name, status: target.displayStatus,
+            tree: target, geo: target.position.geo, source: targetID == target.id ? .chosen : .nearest,
+            dbh: target.dbh)
+    }
+
+    /// The selected tree and the trees near by, as drawn in AR or on the map, for the tracker.
+    private var trackerTargets: TrackerTargets {
+        func target(_ id: String, geo: GeoPoint?) -> TreeTracker.Target {
+            let drawn = drawnCensus[id] ?? drawnSite[id]
+            return TreeTracker.Target(id: id, world: drawn?.base, geo: geo, height: drawn?.height ?? 8)
+        }
+        return TrackerTargets(
+            focus: focus.map { target($0.id, geo: $0.geo) },
+            nearby: nearby.map { target(ARTreeSelection.censusPrefix + $0.0.id.uuidString, geo: $0.0.position.geo) })
+    }
+
+    /// What changes the trees near by besides the fix: trees arriving, and every change the player records.
+    private var nearbyInputs: [Int] {
+        [model.census.trees.count, model.changesets.count]
+    }
+
+    private func refreshNearby() {
+        guard let here = location.geoPoint else {
+            nearby = []
+            return
+        }
+        nearby = model.census.trees(near: here, within: 60, limit: 20, tiles: model.censusTiles)
+    }
+
+    /// A tree chosen from the card's list becomes the target, leaving any move of another where it was.
+    private func choose(_ tree: Tree) {
+        if move?.treeID != tree.id { endMove() }
+        deselect()
+        targetID = tree.id
     }
 
     /// Which wireframes are drawn, and loading the site here.
@@ -239,6 +304,7 @@ struct LiDARCensusView: View {
                     rebuildOverlay()
                 }
                 .disabled(registered != nil || location.geoPoint == nil)
+                registrationControl
                 Text(overlayStatus)
             }
         } label: {
@@ -319,93 +385,67 @@ struct LiDARCensusView: View {
 
     // MARK: Actions
 
+    /// Not a tree and Move once the selected tree is in view, New tree here, and Scan trunk.
     private var controls: some View {
         VStack(spacing: Spacing.s) {
-            if capture.scan == nil {
-                HStack(spacing: Spacing.s) {
-                    Button("Confirm tree", systemImage: "checkmark.circle") {
-                        guard let target else { return }
-                        Task { await model.confirm(target) }
-                    }
-                    .buttonStyle(.canopyPrimary)
-                    .disabled(target?.effectiveStatus != .detected)
-
-                    Button("Not a tree", systemImage: "xmark.circle") {
-                        guard let target else { return }
-                        Task { await model.reject(target) }
-                    }
-                    .buttonStyle(.canopySecondary)
-                    .disabled(target?.effectiveStatus != .detected)
-
-                    Button("New tree here", systemImage: "plus.circle") {
-                        Task { await addTreeAtReticle() }
-                    }
-                    .buttonStyle(.canopySecondary)
-                }
-                .labelStyle(.titleAndIcon)
-                .font(.footnote)
-
-                Button {
-                    startScan()
-                } label: {
-                    Label("Scan trunk", systemImage: "record.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.canopySurvey)
-
-                registrationControl
-            } else {
-                HStack(spacing: Spacing.s) {
-                    Button("Cancel", systemImage: "xmark") {
-                        capture.cancelScan()
-                        notice = nil
-                    }
-                    .buttonStyle(.canopySecondary)
-
-                    Button {
-                        Task { await finishScan() }
-                    } label: {
-                        Label(isMeasuring ? "Measuring…" : "Finish scan", systemImage: "checkmark.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.canopySurvey)
-                    .disabled(isMeasuring)
-                }
-            }
+            TreeActionsRow(
+                canEdit: canEditFocus, onNotATree: rejectFocus, onMove: startMove,
+                onNewTree: { Task { await addTreeAtReticle() } })
+            ScanHeroButton(action: startScan)
         }
     }
 
+    private var scanControls: some View {
+        HStack(spacing: Spacing.s) {
+            Button("Cancel", systemImage: "xmark") {
+                capture.cancelScan()
+                notice = nil
+            }
+            .buttonStyle(.canopySecondary)
+
+            Button {
+                Task { await finishScan() }
+            } label: {
+                Label(isMeasuring ? "Measuring…" : "Finish scan", systemImage: "checkmark.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.canopySurvey)
+            .disabled(isMeasuring)
+        }
+    }
+
+    /// Register with 3DEP, in the overlay menu: matching the mesh to aerial LiDAR, or how well it matched.
     @ViewBuilder
     private var registrationControl: some View {
         if let registered {
-            HStack {
-                StatusBadge("Registered to 3DEP", systemImage: "scope", tone: .ok)
-                Text("±" + QuantityFormat.thinSpace + format.length(registered.sigma, fractionDigits: 2))
-                    .font(CanopyFont.mono(.footnote))
-                Spacer()
-            }
-            .accessibilityElement(children: .combine)
+            Label(
+                "Registered to 3DEP ±" + QuantityFormat.thinSpace + format.length(registered.sigma, fractionDigits: 2),
+                systemImage: "checkmark.seal")
         } else {
-            Button {
+            Button(isRegistering ? "Registering…" : "Register with 3DEP", systemImage: "scope") {
                 confirmingRegistration = true
-            } label: {
-                Label(isRegistering ? "Registering…" : "Register with 3DEP", systemImage: "scope")
-                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.canopySecondary)
-            .font(.footnote)
             .disabled(isRegistering)
         }
     }
 
-    /// Where an AR world point is on the map: from the 3DEP registration when there is one, else GPS.
-    private func position(of point: SIMD3<Float>, camera: SIMD3<Float>, device: GeoPoint) -> Position {
+    /// Where an AR world point is on the map as the overlay draws it: through the 3DEP registration when there is
+    /// one, else through the session origin; nil before the session is placed.
+    private func placedPosition(ofARKit point: SIMD3<Float>) -> Position? {
         if let registered {
             return registered.position(ofARKit: point)
         }
-        return GeoReference.position(
-            of: point, camera: camera, device: device, horizontalAccuracy: location.accuracy ?? 10,
-            northAligned: capture.isNorthAligned)
+        guard let sessionOrigin, sessionOriginAccuracy.isFinite else { return nil }
+        return GeoReference.position(ofARKit: point, origin: sessionOrigin, accuracy: sessionOriginAccuracy)
+    }
+
+    /// Where an AR world point is on the map: as the overlay draws it once the session is placed, so a tree added or
+    /// moved stays where it was put, else from the GPS fix and the point's offset from the camera.
+    private func position(of point: SIMD3<Float>, camera: SIMD3<Float>, device: GeoPoint) -> Position {
+        placedPosition(ofARKit: point)
+            ?? GeoReference.position(
+                of: point, camera: camera, device: device, horizontalAccuracy: location.accuracy ?? 10,
+                northAligned: capture.isNorthAligned)
     }
 
     private func register() async {
@@ -770,6 +810,7 @@ struct LiDARCensusView: View {
                 let name = "site-" + layer.rawValue
                 guard overlayLayers.contains(layer), !sites.isEmpty else {
                     capture.hideWireframes(named: name)
+                    if layer == .trees { drawnSite = [:] }
                     continue
                 }
                 // Neighbouring sites overlap; a feature is drawn once, from the first site that has it.
@@ -788,6 +829,7 @@ struct LiDARCensusView: View {
                     WireframeLayer(
                         name: name, items: items, color: Self.color(of: layer),
                         lineWidth: layer == .trees ? 0.015 : 0.02))
+                if layer == .trees { drawnSite = DrawnTree.byID(items) }
             }
         }
         if parts.contains(.census) { rebuildCensusTrees(sites: sites) }
@@ -845,6 +887,7 @@ struct LiDARCensusView: View {
         guard showsCensusTrees, let here = location.geoPoint ?? sessionOrigin else {
             capture.hideWireframes(named: name)
             capture.hideWireframes(named: name + "-surveyed")
+            drawnCensus = [:]
             return
         }
         let arGround = arGroundAtOrigin
@@ -875,6 +918,7 @@ struct LiDARCensusView: View {
             WireframeLayer(
                 name: name + "-surveyed", items: surveyed, color: Self.censusColor * SIMD4(1, 1, 1, 0.35),
                 lineWidth: 0.008))
+        drawnCensus = DrawnTree.byID(items + surveyed)
     }
 
     /// What the census knows of a tree's shape: its DBH and height when measured, a middling tree otherwise.
@@ -902,7 +946,7 @@ struct LiDARCensusView: View {
     // MARK: Selecting trees
 
     private func handleTap(at point: CGPoint) {
-        guard fit == nil, let id = capture.pickWireframe(at: point) else { return }
+        guard fit == nil, move == nil, let id = capture.pickWireframe(at: point) else { return }
         select(id)
     }
 
@@ -916,11 +960,13 @@ struct LiDARCensusView: View {
             if let height = tree.height {
                 parts.append("height " + format.length(height.height.value, fractionDigits: 1))
             }
+            let measured =
+                parts.isEmpty ? "No measurements yet; the shape is a guess." : parts.joined(separator: " · ")
             selection = ARTreeSelection(
-                id: id, title: tree.localName ?? tree.species ?? "Census tree",
-                detail: parts.isEmpty ? "No measurements yet; the shape is a guess." : parts.joined(separator: " · "),
-                status: tree.displayStatus, baseForm: Self.censusForm(tree))
-        } else if let tree = gerardusTree(id) {
+                id: id, title: tree.name, detail: tree.species.map { $0 + " · " + measured } ?? measured,
+                status: tree.displayStatus, baseForm: Self.censusForm(tree), geo: tree.position.geo)
+        } else if let found = gerardusTree(id) {
+            let (tree, georeference) = found
             var parts: [String] = []
             parts.append(
                 tree.measured.contains("dbh_m")
@@ -932,15 +978,13 @@ struct LiDARCensusView: View {
             selection = ARTreeSelection(
                 id: id, title: tree.commonName ?? tree.species ?? "Gerardus tree",
                 detail: parts.joined(separator: " · "),
-                status: nil, baseForm: tree.form)
-        } else {
-            return
+                status: nil, baseForm: tree.form,
+                geo: georeference.geo(x: Double(tree.base.x), y: Double(tree.base.y)))
         }
-        capture.highlightWireframe(id: id)
     }
 
+    /// Back to the target; its wireframe is highlighted instead (`following`).
     private func deselect() {
-        capture.highlightWireframe(id: nil)
         selection = nil
     }
 
@@ -962,15 +1006,156 @@ struct LiDARCensusView: View {
         model.treeForms[selection.id] = nil
     }
 
-    private func gerardusTree(_ id: String) -> GerardusTree? {
+    /// One of Gerardus's trees by its feature id, with the georeference of the site it came from.
+    private func gerardusTree(_ id: String) -> (GerardusTree, SiteGeoreference)? {
         for loaded in model.loadedVectors.values {
             if let feature = loaded.vectors.features.first(where: { $0.layer == .trees && $0.line.featureID == id }),
                 let tree = GerardusTree(feature.line)
             {
-                return tree
+                return (tree, loaded.georeference)
             }
         }
         return nil
+    }
+
+    // MARK: Not a tree and Move
+
+    /// Not a tree: the selected census tree is proposed removed, and the next nearest becomes the target.
+    private func rejectFocus() {
+        guard let tree = focus?.tree else { return }
+        Task {
+            await model.reject(tree)
+            if selection?.censusID == tree.id { deselect() }
+            if targetID == tree.id { targetID = nil }
+            notice = "Marked \(tree.name) as not a tree. Shared when you sync."
+            rebuildOverlay([.census])
+        }
+    }
+
+    /// Starts moving the selected census tree: it stands at the trunk under the reticle, if there is one, else where
+    /// it is drawn, until Place here.
+    private func startMove() {
+        guard let focus, let tree = focus.tree, let drawn = drawnCensus[focus.id] else {
+            notice = "Wait until the tree is drawn in AR, then try again."
+            return
+        }
+        let profile = model.treeProfiles[focus.id]
+        let form = profile?.form ?? model.treeForms[focus.id] ?? Self.censusForm(tree)
+        var move = TreeMove(
+            treeID: tree.id, name: tree.name, from: drawn.base, base: drawn.base, form: form, profile: profile,
+            lean: tree.lean)
+        if let base = reticleTrunkBase(radius: move.radius) { move.base = base }
+        self.move = move
+        capture.acceptsDrags = true
+        showMove(move)
+        notice = nil
+    }
+
+    /// Stands the tree being moved at the trunk under the reticle.
+    private func moveToReticle() {
+        guard var move else { return }
+        guard let base = reticleTrunkBase(radius: move.radius) else {
+            notice = "Point the centre of the screen at the foot of the tree, within 25 m."
+            return
+        }
+        move.base = base
+        self.move = move
+        showMove(move)
+        notice = nil
+    }
+
+    /// The trunk's base under the reticle: on the ground, behind the near side of the trunk the ray met.
+    private func reticleTrunkBase(radius: Float) -> SIMD3<Float>? {
+        guard let hit = capture.raycastCenter(maxDistance: 25) else { return nil }
+        let ground = capture.groundHeight(under: hit.position) ?? hit.position.y
+        return Compass.trunkBase(hit: hit.position, camera: hit.cameraPosition, ground: ground, radius: radius)
+    }
+
+    /// Moves the tree being moved to the ground under a finger: the mesh where the finger points (behind a trunk's
+    /// near side), else the level of the tree's base. The ground is looked up again when the finger lifts.
+    private func dragTree(_ drag: CaptureSession.Drag) {
+        guard var move else { return }
+        var base: SIMD3<Float>?
+        if let hit = capture.raycast(at: drag.point, maxDistance: 40) {
+            base = Compass.trunkBase(
+                hit: hit.position, camera: hit.cameraPosition, ground: move.base.y, radius: move.radius)
+        } else if let ray = capture.ray(through: drag.point) {
+            base = Compass.ground(rayFrom: ray.origin, direction: ray.direction, height: move.base.y)
+        }
+        guard var base else { return }
+        if drag.ended, let ground = capture.groundHeight(under: base + SIMD3(0, 1, 0)) {
+            base.y = ground
+        }
+        move.base = base
+        self.move = move
+        showMove(move)
+    }
+
+    /// Draws the tree being moved where it stands now, with a line on the ground back to where it was drawn.
+    private func showMove(_ move: TreeMove) {
+        if let profile = move.profile {
+            capture.showTree(profile, lean: move.lean, at: move.base)
+        } else {
+            capture.showTree(move.form, lean: move.lean, at: move.base)
+        }
+        let lift = SIMD3<Float>(0, 0.05, 0)
+        capture.showWireframes(
+            WireframeLayer(
+                name: Self.moveLineLayer,
+                items: [
+                    WireframeItem(
+                        id: Self.moveLineLayer,
+                        segments: [Wireframe.Segment(from: move.from + lift, to: move.base + lift)])
+                ],
+                color: CaptureSession.highlightColor, lineWidth: 0.02, throughWalls: true))
+    }
+
+    static let moveLineLayer = "move-line"
+
+    /// Stops moving the tree, leaving it where it was.
+    private func endMove() {
+        capture.acceptsDrags = false
+        guard move != nil else { return }
+        capture.hideTree()
+        capture.hideWireframes(named: Self.moveLineLayer)
+        move = nil
+    }
+
+    /// "1.8 m NE of where it was drawn".
+    private func moveOffset(_ move: TreeMove) -> String {
+        let offset = Compass.offset(from: move.from, to: move.base)
+        let distance = simd_length(offset)
+        guard distance >= 0.05, let bearing = Compass.bearing(of: offset) else { return "Where it was drawn" }
+        return format.length(distance, fractionDigits: 1) + " " + Compass.point(of: bearing) + " of where it was drawn"
+    }
+
+    /// Records the tree at its new spot, placed on the map as a new tree is, and draws it there.
+    private func placeMovedTree() async {
+        guard let move, let tree = model.tree(move.treeID) else { return endMove() }
+        let placed =
+            placedPosition(ofARKit: move.base)
+            ?? location.geoPoint.flatMap { device in
+                capture.cameraPosition.map { position(of: move.base, camera: $0, device: device) }
+            }
+        guard let position = placed else {
+            notice = "Waiting for GPS and AR tracking."
+            return
+        }
+        // The shared map keeps one tree to each L22 cell, about 2 m across: a move into one another tree holds would
+        // conflict when it is applied, and the tree would jump back.
+        if let other = model.census.tree(standingAt: position.geo, except: tree.id) {
+            notice =
+                other.name + " already stands there, and the map keeps one tree to every 2 m square. If they are the "
+                + "same tree, cancel and mark this one Not a tree."
+            return
+        }
+        let distance = simd_length(Compass.offset(from: move.from, to: move.base))
+        endMove()
+        await model.move(tree, to: position)
+        notice =
+            "Moved " + move.name + " " + format.length(distance, fractionDigits: 1)
+            + ", which also says it is a tree. Shared when you sync."
+        rebuildOverlay([.census])
     }
 }
 
@@ -1072,6 +1257,46 @@ struct TreeFit {
 
     /// The four-slider shape the rings sum to.
     var form: TreeForm { profile.form }
+}
+
+/// Where a pickable tree is drawn in AR: its trunk base and its height, from its pick box.
+struct DrawnTree: Equatable {
+    var base: SIMD3<Float>
+    var height: Float
+
+    init(_ box: PickBox) {
+        base = box.centre - SIMD3(0, box.size.y / 2, 0)
+        height = box.size.y
+    }
+
+    /// The trees among a layer's items, by id.
+    static func byID(_ items: [WireframeItem]) -> [String: DrawnTree] {
+        Dictionary(
+            items.compactMap { item in item.pickBox.map { (item.id, DrawnTree($0)) } }, uniquingKeysWith: { a, _ in a })
+    }
+}
+
+/// The selected tree and the trees near by, for the tracker, compared as one.
+struct TrackerTargets: Equatable {
+    var focus: TreeTracker.Target?
+    var nearby: [TreeTracker.Target]
+}
+
+/// A census tree being moved to its true spot in AR.
+struct TreeMove {
+    var treeID: UUID
+    var name: String
+    /// Where it was drawn, AR world.
+    var from: SIMD3<Float>
+    /// Where it stands now.
+    var base: SIMD3<Float>
+    var form: TreeForm
+    /// Its rings, when they were fitted after a scan.
+    var profile: TreeProfile?
+    var lean: Lean?
+
+    /// The trunk's radius, for finding its centre behind the side the reticle meets.
+    var radius: Float { Float(form.trunkDiameter / 2) }
 }
 
 /// A crosshair at the centre of the AR view.

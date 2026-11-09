@@ -77,6 +77,22 @@ import Testing
         #expect(model.error == nil)
     }
 
+    @Test func movingATreeProposesItAtItsNewPlace() async throws {
+        let model = try makeModel()
+        await model.load()
+        let tree = try #require(model.census.trees.values.first)
+        let moved = LocalFrame(origin: tree.position.geo).geoPoint(of: ENU(east: 2, north: -1.5, up: 0)).point
+        await model.move(tree, to: Position(geo: moved, covariance: .isotropic(horizontal: 3, vertical: 3)))
+        let after = try #require(model.tree(tree.id))
+        #expect(LocalFrame(origin: moved).enu(of: after.position.geo).horizontalDistance < 0.001)
+        #expect(after.displayStatus == .proposed)
+        let changeset = try #require(model.changesets.last)
+        #expect(changeset.state == .pending)
+        #expect(changeset.ops.first?.fields["position"] != nil)
+        #expect(ChangesetSummary.describe(changeset) == "Move tree")
+        #expect(model.error == nil)
+    }
+
     @Test func placingATagMakesAProposedTagAndAPendingChangeset() async throws {
         let model = try makeModel()
         await model.load()

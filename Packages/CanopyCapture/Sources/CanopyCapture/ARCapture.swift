@@ -86,6 +86,10 @@
             overlayAnchor.addChild(overlay)
             view.scene.addAnchor(overlayAnchor)
             view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap)))
+            pan.addTarget(self, action: #selector(handlePan))
+            pan.maximumNumberOfTouches = 1
+            pan.isEnabled = false
+            view.addGestureRecognizer(pan)
         }
 
         /// Starts the session, or resumes it with the mesh and any scan it already has.
@@ -115,6 +119,25 @@
             guard let frame = view.session.currentFrame, case .normal = frame.camera.trackingState else { return nil }
             let t = frame.camera.transform.columns.3
             return SIMD3(t.x, t.y, t.z)
+        }
+
+        /// The camera's pose in world coordinates, if tracking.
+        public var cameraTransform: simd_float4x4? {
+            guard let frame = view.session.currentFrame, case .normal = frame.camera.trackingState else { return nil }
+            return frame.camera.transform
+        }
+
+        /// Where a world point is in the view, in points; nil when it is not in front of the camera.
+        public func project(_ point: SIMD3<Float>) -> CGPoint? {
+            view.project(point)
+        }
+
+        /// The view's bounds, the frame `project` answers in.
+        public var viewBounds: CGRect { view.bounds }
+
+        /// The ray from the camera through a point in the view, in world coordinates.
+        public func ray(through point: CGPoint) -> (origin: SIMD3<Float>, direction: SIMD3<Float>)? {
+            view.ray(through: point)
         }
 
         /// Casts a ray through a point in the view against the reconstructed mesh.
@@ -300,6 +323,36 @@
 
         @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
             lastTap = Tap(point: gesture.location(in: view), sequence: (lastTap?.sequence ?? 0) + 1)
+        }
+
+        /// A one-finger drag in the view, while `acceptsDrags` is on. Each step is a new value.
+        public struct Drag: Equatable, Sendable {
+            public var point: CGPoint
+            public var sequence: Int
+            /// The finger has lifted (or the drag was cancelled).
+            public var ended: Bool
+        }
+
+        /// The last step of a drag in the view, for moving a tree with a finger.
+        public private(set) var lastDrag: Drag?
+
+        /// Whether drags in the view are reported in `lastDrag`: only while a tree is being moved, so taps pick
+        /// wireframes as before.
+        @ObservationIgnored public var acceptsDrags = false {
+            didSet { pan.isEnabled = acceptsDrags }
+        }
+
+        @ObservationIgnored private let pan = UIPanGestureRecognizer()
+
+        @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+            switch gesture.state {
+            case .began, .changed, .ended, .cancelled:
+                lastDrag = Drag(
+                    point: gesture.location(in: view), sequence: (lastDrag?.sequence ?? 0) + 1,
+                    ended: gesture.state == .ended || gesture.state == .cancelled)
+            default:
+                break
+            }
         }
 
         static let pickGroup = CollisionGroup(rawValue: 1 << 8)
