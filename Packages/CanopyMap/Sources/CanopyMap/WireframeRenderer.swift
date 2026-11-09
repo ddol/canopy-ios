@@ -131,7 +131,13 @@ struct WireframeMap: UIViewRepresentable {
         let view = SCNView()
         let coordinator = context.coordinator
         view.backgroundColor = CanopyColor.surface100.uiColor
-        view.antialiasingMode = .multisampling4X
+        #if targetEnvironment(simulator)
+            // The simulator draws with the Mac's GPU, which on an Intel Mac is small and shared: draw less there.
+            view.antialiasingMode = .none
+            view.preferredFramesPerSecond = 30
+        #else
+            view.antialiasingMode = .multisampling4X
+        #endif
         view.allowsCameraControl = false
         view.scene = coordinator.scene
         view.pointOfView = coordinator.camera
