@@ -71,7 +71,9 @@ everything on the simulator.
   launch takes half a second with that many candidates rather than eight; bump `Schema.derivation` when derivation
   changes what the tables hold.
 - **Evidence is immutable and content-addressed.** A trunk or limb scan is cropped, written as GLB, stored
-  under its SHA-256 and referenced by hash from observations and changesets.
+  under its SHA-256 and referenced by hash from observations and changesets. The hash identifies the scan: the store
+  keeps one record per hash, and saving, importing or recording a scan it already has links to what is there (see
+  [DATA-MODEL.md](DATA-MODEL.md), *One record per scan*).
 - **Sync goes through one boundary.** `GerardusClient` is the whole contract with a Gerardus server: upload
   blobs, submit changesets, read their state, and pull applied changes per L16 tile. With a server set in Settings,
   `GerardusMapClient` speaks the server's map service (see *Shared census*). Without one, `FakeGerardusClient`
@@ -361,7 +363,9 @@ own.
 **Evidence from other devices.** A tree's evidence refs name the meshes behind its measurements. The tree sheet's
 **Evidence** section previews each one: a mesh on this device opens straight away; one recorded on another device is
 downloaded first (`GetBlob`, `AppModel.evidenceFile`), checked against its hash and kept in the blob store, then
-opened the same way, as a throwaway USDZ in Quick Look. Blobs are uploaded with the changeset that references them.
+opened the same way, as a throwaway USDZ in Quick Look. Blobs are uploaded with the changeset that references them,
+each once a sync however many changesets name it. Gerardus keeps blobs by the same hash, inserted once (`UploadBlob`
+answers `already_stored` for bytes it has), so a scan is one blob there too.
 
 **Your proposals.** Me → **Your proposals** lists the player's open changesets, and History the closed ones. Each
 row gives the trees, what it changes, its state, and what it still needs in words (`ProposalStatus`).
@@ -379,8 +383,8 @@ Other cases have their own wording:
 Tapping a row opens its tree. The tree sheet gives the same line for its open proposal.
 
 **Your scans.** Me → **Your scans** lists every evidence mesh this device recorded, newest first
-(`LocalStore.allEvidence`), with its tree, date, DBH, mesh size and crop radius, and Preview and Share. Scans
-uploaded for registration are not kept on the phone.
+(`LocalStore.allEvidence`), one row per scan (by hash), with its tree, date, DBH, mesh size and crop radius, and Preview
+and Share. Scans uploaded for registration are not kept on the phone.
 
 **Reviewing.** The review queue (Me → **Review**) lists other players' open changesets in the followed tiles
 (`ListOpenChangesets`), leaving out the player's own changes and ones they have already agreed with. **Agree**

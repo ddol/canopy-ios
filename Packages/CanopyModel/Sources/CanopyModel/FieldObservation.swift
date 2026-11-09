@@ -40,6 +40,16 @@ public struct FieldObservation: Identifiable, Hashable, Codable, Sendable {
             case .tagPlaced(let tag): (.tag, tag.id)
             }
         }
+
+        /// The scan the observation records, if it records one: a trunk measurement's mesh, or a tag's limb mesh. A
+        /// scan is named by its hash (the SHA-256 of its GLB bytes), and one scan is recorded once.
+        public var scan: BlobRef? {
+            switch self {
+            case .trunkMeasured(_, _, _, let evidence): evidence
+            case .tagPlaced(let tag): tag.evidenceRef
+            case .treeConfirmed, .treeAdded, .treeRejected: nil
+            }
+        }
     }
 
     public var meta: RecordMeta
