@@ -7,13 +7,18 @@ public enum LocalStoreError: Error, Equatable {
     case unknownChangeset(UUID)
 }
 
-/// The app's local data: an append-only observation log, the changesets that share it, immutable evidence,
-/// the aerial base layer, the shared map pulled from a Gerardus server, and current-state tables derived from all of
-/// those.
+/// The app's local data: an append-only observation log, the changesets that share it, immutable evidence (one
+/// record per scan, by hash), the aerial base layer, the shared map pulled from a Gerardus server, and current-state
+/// tables derived from all of those.
 ///
 /// Every write re-derives the current state (`CensusState.derive`) and brings the `trees` and `tags` tables up to
 /// date in the same transaction, so the tables always match the log. Opening a store re-derives too, and rewrites
 /// those tables only when the schema or the derivation has changed since they were written (`Schema.derived`).
+///
+/// Opening a store only opens the database: reading what derivation needs and deriving waits for `prepare()`, or for
+/// the first call that needs the census, and runs on the store's own executor. With a city's worth of shared trees that
+/// takes seconds, which an app opening its store at launch would otherwise spend on the main thread before its first
+/// frame.
 ///
 /// What derivation reads (the candidates, the shared map, the log and the changesets' states) is kept in memory as it
 /// is in the database, so a write decodes only what it adds, and only the rows of trees and tags that changed are
@@ -22,8 +27,8 @@ public actor LocalStore {
     public nonisolated let blobs: BlobStore
     private let databasePath: String
     private var db: SQLiteDatabase
-    private var current = CensusState()
-    private var inputs = Inputs()
+    /// The inputs and the census derived from them, once `prepare` has read them.
+    private var derived: (inputs: Inputs, current: CensusState)?
     /// `candidates()` and `changesets()` as last read, until a write changes them.
     private var sortedCandidates: [TreeCandidate]?
     private var decodedChangesets: [Changeset]?
@@ -73,17 +78,42 @@ public actor LocalStore {
         let db = try SQLiteDatabase(path: databasePath)
         try Schema.migrate(db)
         self.db = db
-        self.inputs = try Self.readInputs(db)
-        self.current = Self.derive(inputs)
+    }
+
+    /// Reads what derivation needs and derives the census, once; later calls return at once. Any call that needs the
+    /// census does this first, so calling it is only to have it done, and its errors thrown, when the caller chooses:
+    /// an app opening its store at launch, say, draws its first frame and then prepares the store.
+    public func prepare() throws {
+        guard derived == nil else { return }
+        let inputs = try Self.readInputs(db)
+        let current = Self.derive(inputs)
         // Every write keeps the tables in step, so they need writing again only when what writes them has changed:
-        // with a park's worth of trees that is seconds at launch.
+        // with a park's worth of trees that is seconds.
         if try Self.derivedStamp(db) != Schema.derived {
-            let current = current
             try db.transaction {
                 try Self.materialize(current, replacing: nil, in: db)
                 try Self.stampDerived(db)
             }
         }
+        derived = (inputs, current)
+    }
+
+    /// The census, prepared first if need be. A store whose database cannot be read has an empty one; `prepare` says
+    /// why.
+    private var current: CensusState {
+        get { prepared().current }
+        set { derived = (prepared().inputs, newValue) }
+    }
+
+    /// What the census is derived from, read first if need be.
+    private var inputs: Inputs {
+        get { prepared().inputs }
+        set { derived = (newValue, prepared().current) }
+    }
+
+    private func prepared() -> (inputs: Inputs, current: CensusState) {
+        if derived == nil { try? prepare() }
+        return derived ?? (Inputs(), CensusState())
     }
 
     // MARK: Reading
@@ -109,7 +139,7 @@ public actor LocalStore {
         return states.map { states in all.filter { states.contains($0.state) } } ?? all
     }
 
-    /// Every evidence record on this device (this device's scans), newest first.
+    /// Every evidence record on this device (this device's scans), newest first: one per scan.
     public func allEvidence() throws -> [Evidence] {
         try db.query("SELECT payload FROM evidence ORDER BY created_at DESC, rowid DESC") { row in
             try CanopyJSON.decoder.decode(Evidence.self, from: Data(row.string(0).utf8))
@@ -123,6 +153,13 @@ public actor LocalStore {
         ) { row in
             try CanopyJSON.decoder.decode(Evidence.self, from: Data(row.string(0).utf8))
         }
+    }
+
+    /// The record of the scan with this hash (the SHA-256 of its GLB bytes), if this device has one.
+    public func evidence(hash: BlobRef) throws -> Evidence? {
+        try db.query("SELECT payload FROM evidence WHERE blob = ?", [.text(hash.rawValue)]) { row in
+            try CanopyJSON.decoder.decode(Evidence.self, from: Data(row.string(0).utf8))
+        }.first
     }
 
     /// The aerial base layer, by id.
@@ -222,12 +259,19 @@ public actor LocalStore {
     }
 
     /// Records an observation and the changeset that shares it, in one transaction.
+    ///
+    /// Recording a scan (`FieldObservation.Kind.scan`) that an observation in the log already records adds nothing
+    /// while that observation stands (its changeset is open or applied): it and its changeset are returned instead, so
+    /// saving one scan twice is one measurement. A scan whose changeset was rejected or conflicted can be recorded again.
     @discardableResult
     public func record(
         _ kind: FieldObservation.Kind, by player: PlayerID, at date: Date = .now
     ) throws
         -> (observation: FieldObservation, changeset: Changeset)
     {
+        if let scan = kind.scan, let recorded = try recorded(scan) {
+            return recorded
+        }
         let subject = kind.subject
         let chunk: S2CellID
         switch kind {
@@ -261,20 +305,17 @@ public actor LocalStore {
         return (observation, changeset)
     }
 
-    /// Stores an evidence mesh and its record. The data must hash to `evidence.blob`.
-    public func addEvidence(_ evidence: Evidence, data: Data) throws {
+    /// Stores a scan: its mesh and its evidence record. The data must hash to `evidence.blob`.
+    ///
+    /// A scan is identified by its hash, so saving or importing one this device already has adds no record: the one
+    /// already stored is returned, and callers link to it (its `subjectID` is the tree or tag the scan is about).
+    /// Otherwise the new record is returned.
+    @discardableResult
+    public func addEvidence(_ evidence: Evidence, data: Data) throws -> Evidence {
         try blobs.put(data, expecting: evidence.blob)
-        try db.run(
-            """
-            INSERT INTO evidence (id, created_at, player_id, s2_l19_token, blob, subject_id, kind, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                .text(evidence.id.uuidString), .integer(Self.milliseconds(evidence.meta.createdAt)),
-                .text(evidence.meta.playerID.rawValue), .text(evidence.meta.chunk.token), .text(evidence.blob.rawValue),
-                .text(evidence.subjectID.uuidString), .text(evidence.kind.rawValue), .text(try Self.json(evidence)),
-            ]
-        )
+        if let stored = try self.evidence(hash: evidence.blob) { return stored }
+        try Self.insert(evidence, in: db)
+        return evidence
     }
 
     // MARK: The shared map
@@ -317,6 +358,41 @@ public actor LocalStore {
     /// Takes a cell's mark away.
     public func clearSurveyed(_ cell: S2CellID) throws {
         try db.run("DELETE FROM surveyed_cells WHERE s2_l16_token = ?", [.text(cell.token)])
+    }
+
+    // MARK: Scan alignments
+
+    /// Saves a tree's rings as aligned against one of its scans, replacing what was saved for that scan and tree
+    /// before. The record is the app's own (CanopyCapture's `ScanAlignment`, which the store does not depend on), kept
+    /// as JSON by the scan's blob and the tree: a scan saved twice as a new tree is listed by both trees, and each
+    /// keeps its own. On the device only, until the server has a record for them.
+    public func saveScanAlignment(
+        _ alignment: some Encodable & Sendable, scan: BlobRef, subject: UUID, savedAt: Date = .now
+    ) throws {
+        try db.run(
+            "INSERT OR REPLACE INTO scan_alignments (blob, subject_id, saved_at, payload) VALUES (?, ?, ?, ?)",
+            [
+                .text(scan.rawValue), .text(subject.uuidString), .integer(Self.milliseconds(savedAt)),
+                .text(try Self.json(alignment)),
+            ])
+    }
+
+    /// What was saved for one scan of a tree, if anything.
+    public func scanAlignment<T: Decodable & Sendable>(_ type: T.Type, scan: BlobRef, subject: UUID) throws -> T? {
+        try db.query(
+            "SELECT payload FROM scan_alignments WHERE blob = ? AND subject_id = ?",
+            [.text(scan.rawValue), .text(subject.uuidString)]
+        ) { row in
+            try CanopyJSON.decoder.decode(T.self, from: Data(row.string(0).utf8))
+        }.first
+    }
+
+    /// Every saved alignment this version can read, oldest first, so the latest for a tree comes last. A row it
+    /// cannot read (from a later version, say) is left out rather than failing the rest.
+    public func scanAlignments<T: Decodable & Sendable>(_ type: T.Type) throws -> [T] {
+        try db.query("SELECT payload FROM scan_alignments ORDER BY saved_at, rowid") { row in
+            try? CanopyJSON.decoder.decode(T.self, from: Data(row.string(0).utf8))
+        }.compactMap { $0 }
     }
 
     /// The tiles pulled from the shared map, and the sequence to pull each from next.
@@ -397,6 +473,38 @@ public actor LocalStore {
         return stale
     }
 
+    /// Forgets what was pulled for some tiles, their records and their cursors, in one transaction, and re-derives: a
+    /// later pull starts each again with a snapshot. This device's own observations stay in the log and are folded again
+    /// for anything the shared map no longer holds. For a phone that holds more of the shared map than it follows (an
+    /// earlier version pulled every tile in the city).
+    ///
+    /// A tile holding a shared tree or tag this device observed (confirmed, measured, moved, rejected or tagged, under
+    /// any player id) is kept: the record is the only copy of that tree here, and forgetting it would take the tree and
+    /// the work on it off the census. Deciding that here, in the same step as the forgetting, also covers an observation
+    /// recorded after the caller chose the tiles. Returns the tiles forgotten.
+    @discardableResult
+    public func forgetShared(_ tiles: Set<S2CellID>) throws -> Set<S2CellID> {
+        guard !tiles.isEmpty else { return [] }
+        try prepare()
+        var observed: Set<UUID> = []
+        for observation in inputs.observations {
+            observed.insert(observation.kind.subject.id)
+            if case .tagPlaced(let tag) = observation.kind { observed.insert(tag.treeID) }
+        }
+        let worked = Set(inputs.shared.lazy.filter { observed.contains($0.id) }.map(\.tile))
+        let forgotten = tiles.subtracting(worked)
+        guard !forgotten.isEmpty else { return [] }
+        try write {
+            for tile in forgotten {
+                try db.run("DELETE FROM shared WHERE s2_l16_token = ?", [.text(tile.token)])
+                try db.run("DELETE FROM shared_tiles WHERE s2_l16_token = ?", [.text(tile.token)])
+            }
+        } update: { inputs in
+            inputs.shared.removeAll { forgotten.contains($0.tile) }
+        }
+        return forgotten
+    }
+
     /// Updates a changeset's state and approvals (for example after a sync) and re-derives.
     public func updateChangeset(_ changeset: Changeset) throws {
         let exists = try db.query("SELECT 1 FROM changesets WHERE id = ?", [.text(changeset.id.uuidString)]) { _ in 1 }
@@ -425,11 +533,10 @@ public actor LocalStore {
             try Self.stampDerived(db)
             return (inputs, state)
         }
-        self.inputs = inputs
-        current = state
+        derived = (inputs, state)
         sortedCandidates = nil
         decodedChangesets = nil
-        return current
+        return state
     }
 
     /// Deletes everything: database and blobs. For the debug "Reset local data" action.
@@ -445,11 +552,10 @@ public actor LocalStore {
         }
         try Schema.migrate(db)
         try blobs.removeAll()
-        current = CensusState()
-        inputs = Inputs()
+        derived = (Inputs(), CensusState())
         sortedCandidates = nil
         decodedChangesets = nil
-        try Self.materialize(current, replacing: nil, in: db)
+        try Self.materialize(CensusState(), replacing: nil, in: db)
         try Self.stampDerived(db)
     }
 
@@ -461,6 +567,7 @@ public actor LocalStore {
     /// Runs `body`, brings the inputs up to date with what it wrote (`update`), re-derives, and writes the trees and
     /// tags that changed, in one transaction. The inputs and state change only once it commits.
     private func write(_ body: () throws -> Void, update: (inout Inputs) throws -> Void) throws {
+        try prepare()
         var inputs = self.inputs
         let previous = current
         let db = db
@@ -471,8 +578,20 @@ public actor LocalStore {
             try Self.materialize(next, replacing: previous, in: db)
             return next
         }
-        self.inputs = inputs
-        current = next
+        derived = (inputs, next)
+    }
+
+    /// The first observation in the log that records `scan` and still stands (its changeset is open or applied), with
+    /// its changeset.
+    private func recorded(_ scan: BlobRef) throws -> (observation: FieldObservation, changeset: Changeset)? {
+        for observation in inputs.observations where observation.kind.scan == scan {
+            guard let id = observation.changesetID, let state = inputs.changesetStates[id],
+                state.isOpen || state == .applied,
+                let changeset = try changesets().first(where: { $0.id == id })
+            else { continue }
+            return (observation, changeset)
+        }
+        return nil
     }
 
     /// What wrote the `trees` and `tags` tables last, or nil before any stamp.
@@ -590,7 +709,7 @@ public actor LocalStore {
         }
     }
 
-    private static func insert(_ observation: FieldObservation, in db: SQLiteDatabase) throws {
+    static func insert(_ observation: FieldObservation, in db: SQLiteDatabase) throws {
         try db.run(
             """
             INSERT INTO observations (id, created_at, player_id, s2_l19_token, version, kind, subject_id, changeset_id, payload)
@@ -606,7 +725,21 @@ public actor LocalStore {
         )
     }
 
-    private static func insert(_ changeset: Changeset, in db: SQLiteDatabase) throws {
+    static func insert(_ evidence: Evidence, in db: SQLiteDatabase) throws {
+        try db.run(
+            """
+            INSERT INTO evidence (id, created_at, player_id, s2_l19_token, blob, subject_id, kind, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                .text(evidence.id.uuidString), .integer(milliseconds(evidence.meta.createdAt)),
+                .text(evidence.meta.playerID.rawValue), .text(evidence.meta.chunk.token), .text(evidence.blob.rawValue),
+                .text(evidence.subjectID.uuidString), .text(evidence.kind.rawValue), .text(try json(evidence)),
+            ]
+        )
+    }
+
+    static func insert(_ changeset: Changeset, in db: SQLiteDatabase) throws {
         try db.run(
             """
             INSERT INTO changesets (id, created_at, player_id, s2_l19_token, state, s2_l16_tokens, payload, updated_at)
@@ -756,6 +889,38 @@ enum Schema {
             s2_l16_token TEXT PRIMARY KEY,
             payload TEXT NOT NULL
         );
+        """,
+        // 6: one evidence record per scan. A scan is identified by its hash, the SHA-256 of its GLB bytes (`blob`), so
+        // records with the same blob are one scan saved more than once (Save tapped twice): the first record is kept,
+        // the others go, and no second record can be added. Observations, trees, tags and changesets name scans by
+        // hash, so they all still point at the one kept. The observations themselves are append-only and stay.
+        // Numbering each scan's records in one pass keeps this quick with thousands of scans: it runs at launch, on
+        // the main thread, and a query comparing every record with every other took seconds there.
+        """
+        DROP TRIGGER evidence_no_delete;
+        DELETE FROM evidence WHERE rowid IN (
+            SELECT duplicate FROM (
+                SELECT rowid AS duplicate,
+                    row_number() OVER (PARTITION BY blob ORDER BY created_at, rowid) AS position
+                FROM evidence
+            )
+            WHERE position > 1
+        );
+        CREATE TRIGGER evidence_no_delete BEFORE DELETE ON evidence
+            BEGIN SELECT RAISE(ABORT, 'evidence is immutable'); END;
+        CREATE UNIQUE INDEX evidence_blob ON evidence (blob);
+        """,
+        // 7: a tree's rings as aligned against one of its scans, by the scan's blob and the tree (a scan saved twice
+        // as a new tree before 6 is listed by both trees). On the device only.
+        """
+        CREATE TABLE scan_alignments (
+            blob TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            saved_at INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (blob, subject_id)
+        );
+        CREATE INDEX scan_alignments_subject ON scan_alignments (subject_id);
         """,
     ]
 

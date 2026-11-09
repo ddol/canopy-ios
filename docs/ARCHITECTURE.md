@@ -36,8 +36,8 @@ where the store, capture, sync and players meet.
 |---|---|---|
 | `CanopyModel` | iOS, macOS | Value types (`Tree`, `Tag`, `Route`, `FieldObservation`, `Changeset`, `Evidence`, `Player`, `CountStatus`), `S2CellID`, positions and local frames, `CensusState` derivation, `ChangesetBuilder`, `CensusSummary`, GeoJSON reading |
 | `CanopyDesign` | iOS | Colour, type, spacing and radius tokens; `StatusBadge`, `SummaryBar`, button styles; `QuantityFormat` |
-| `CanopyStore` | iOS, macOS | `LocalStore` (SQLite: append-only log, changesets, evidence, derived tables) and `BlobStore` (SHA-256 named files) |
-| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR, wireframe layers and picking), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, `TreeForm` / `WireframeTree`, `ARSiteFrame` / `SiteWireframes` (Gerardus sites in AR; uses CanopyReference), `Compass` (the selected tree's distance, bearing and compass), Quick Look previews |
+| `CanopyStore` | iOS, macOS | `LocalStore` (SQLite: append-only log, changesets, evidence, derived tables, scan alignments) and `BlobStore` (SHA-256 named files) |
+| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR, wireframe layers and picking), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, `TreeForm` / `WireframeTree`, `ScanAlignment` / `SavedScan` (rings against a saved scan), `ARSiteFrame` / `SiteWireframes` (Gerardus sites in AR; uses CanopyReference), `Compass` (the selected tree's distance, bearing and compass), Quick Look previews |
 | `CanopyMap` | iOS | `MapLayers`, the `MapRenderer` protocol, `MapKitRenderer`, status presentation (word, icon, tone) |
 | `CanopySync` | iOS, macOS | `GerardusClient` protocol, `FakeGerardusClient`, `SyncCoordinator`; `GerardusEndpoint` and `GerardusStatusClient` for a real server's status page |
 | `CanopyPlayers` | iOS | `PlayerService` (Game Center sign-in, alias, trusted flag) |
@@ -66,12 +66,19 @@ everything on the simulator.
   ones (see [DATA-MODEL.md](DATA-MODEL.md)). Rejected changesets drop their observations from the fold.
 - **Writes cost what they change.** What derivation reads is kept in memory as it is in the database, updated from
   each write once its transaction commits, and only the candidate, tree and tag rows that changed are written. With a
-  park's worth of candidates (30,000) a tap takes about a tenth of a second rather than seconds. Opening a store
+  park's worth of candidates (30,000) a tap takes about a tenth of a second rather than seconds. Preparing a store
   rewrites the derived tables only when the schema or `Schema.derivation` has changed since they were written, so
-  launch takes half a second with that many candidates rather than eight; bump `Schema.derivation` when derivation
+  it takes half a second with that many candidates rather than eight; bump `Schema.derivation` when derivation
   changes what the tables hold.
+- **Launch does not wait for the store.** Opening a store only opens the database. Reading what derivation needs and
+  deriving the census wait for `LocalStore.prepare()` (or the first call that needs the census), on the store's own
+  executor. `AppModel.load` calls it once the map is up, and the census by tile (`CensusTiles`) is made off the main
+  actor too. Before, a store holding a city's worth of pulled trees kept the screen white for about 25 s in the
+  simulator.
 - **Evidence is immutable and content-addressed.** A trunk or limb scan is cropped, written as GLB, stored
-  under its SHA-256 and referenced by hash from observations and changesets.
+  under its SHA-256 and referenced by hash from observations and changesets. The hash identifies the scan: the store
+  keeps one record per hash, and saving, importing or recording a scan it already has links to what is there (see
+  [DATA-MODEL.md](DATA-MODEL.md), *One record per scan*).
 - **Sync goes through one boundary.** `GerardusClient` is the whole contract with a Gerardus server: upload
   blobs, submit changesets, read their state, and pull applied changes per L16 tile. With a server set in Settings,
   `GerardusMapClient` speaks the server's map service (see *Shared census*). Without one, `FakeGerardusClient`
@@ -131,7 +138,8 @@ in AR is drawn there afterwards. Before the session is placed it is the current 
 After **Finish scan** a wireframe tree (`TreeForm`, `WireframeTree`: the Mac visualiser's trunk line and crown
 rings, with the trunk's diameter) stands on the measured trunk base, and four sliders (trunk diameter, height,
 foliage height, foliage width) fit it to the real tree by eye before the measurement sheet; the fitted figures are
-shown there, not yet saved.
+shown there. Saving the measurement keeps the rings with the scan (see *Aligning against a saved scan*); the four-slider
+shape stays in memory.
 
 **Rings a metre apart.** The fitted tree is a stack of rings (`TreeProfile`).
 
@@ -154,9 +162,43 @@ shown there, not yet saved.
 - **One viewpoint or many.** From one viewpoint the prior holds the ring's distance and the edges set its width and
   place across the view. Walking round fixes the centre too.
 - **After aligning.** Aligned rings are marked `camera`. In AR they are drawn blue, beside lime for scan-fitted and
-  green for confirmed rings. A ring moved by hand, confirmed or taken out stops being aligned.
+  green for confirmed rings. A ring moved by hand, snapped to the scan, confirmed or taken out stops being aligned.
 - **Tests.** The geometry is tested against rendered synthetic images of upright and leaning trunks
   (`RingAlignmentTests`, `TrunkStepsTests`).
+
+**Aligning against a saved scan.** The fitted rings are kept with the scan they were fitted over, and can be corrected
+against it later with no AR session and no camera.
+
+- **Kept.** Saving a measurement saves a `ScanAlignment`: the profile, and the ground's height in the evidence mesh's
+  frame. The store keeps it as JSON in `scan_alignments`, by the evidence blob's hash and the tree (CanopyStore does
+  not depend on CanopyCapture, so the record is the app's). At launch the latest for each tree goes into
+  `AppModel.treeProfiles`, so AR and the 3D map draw the tree in its rings. On the phone only.
+- **Opened.** **Align rings with the scan**, under each trunk scan in the tree sheet's Evidence section and in Me →
+  Your scans, opens `ScanAlignmentScreen` full screen. The GLB is read back (`GLB.File.mesh`, `SavedScan`), downloaded
+  first when another device recorded it.
+- **The frame.** The evidence mesh's frame is the AR session's moved to the trunk: x east, y up, z south, with the
+  origin on the trunk's axis at the height the scan started. The profile stands on (0, ground, 0), as it did in AR. A
+  scan with no saved ground finds it again from the mesh's near-horizontal triangles, as a scan without classified
+  floor does.
+- **Drawn.** SceneKit draws the scan as shaded triangles with their edges. Over them go the profile's rings, coloured
+  as in AR (the picked one orange), and the DBH on record in white, 1.37 m up on the trunk's axis (the evidence is
+  cropped round the DBH circle's centre). Gerardus's nearest tree within 15 m of the census tree, from the loaded sites
+  (`GerardusTree.near`), stands where the two map positions put it. Lines are drawn faintly through the mesh too.
+- **The view.** SceneKit's turntable camera orbits the trunk's axis at breast height: drag to turn, pinch to zoom, two
+  fingers to slide. The 3D map's `CameraRig` is not used: it keeps the ground under a finger from 12 m up, which suits
+  a park, not a metre of trunk.
+- **Rings.** Tap near a ring (within a finger's width of its outline on screen) or pick it from the menu.
+  - Change its height and diameter, or move its centre with arrows that follow the view.
+  - **Snap to scan** fits a circle through the mesh's slices at its height (`TrunkCapture.ring(through:)`: the same
+    fit and limits as AR uses where the depth points do not reach).
+  - **Looks right** confirms it; rings can be added or taken out, and every trunk ring snapped at once.
+  - A scan with nothing fitted yet starts from the tree's known shape with its trunk rings snapped.
+- **Gerardus's tree.** **Move onto trunk** puts its base on the trunk's; arrows nudge it. How far it moved is how far
+  the census tree's map position is out by Gerardus's (`VectorTreePlacement.correction`). **Save** keeps the placement
+  and the corrected position with the rings. The census keeps the tree where it was: no observation moves a tree yet.
+- **Tests.** `ScanAlignmentTests` reads back a scan measured through `TrunkScan.analyse`, snaps rings to its slices
+  and checks the correction; `ScanAlignmentStoreTests` the table; `ScanAlignmentModelTests` the rings coming back at
+  launch; `ScanAlignmentUITests` takes a synthetic scan (`-canopy.seedScan`) through the screen.
 
 **Site overlay.** The same view draws the loaded Gerardus sites round the player as wireframe layers
 (`SiteWireframes`: trees, buildings, streets) and the census's trees, through `CaptureSession.showWireframes`.
@@ -257,19 +299,22 @@ already acted on (and dropping a new one within 2.5 m of such a kept one).
 On a site with 26 million points this takes under 2 s including download; the dense groves are somewhat over-split,
 which players correct with Not a tree. The Map tab's Layers menu has **Load real trees in view**, and the map shows
 the data's credits, behind a **Data** tag that twirls open, while real trees are loaded. From a zoomed-out map the
-load covers only the site at the middle, so the map then moves to it.
+load covers only the site at the middle, so the map then moves to it. The result says what changed (the sample it
+replaced, or trees new or gone since the area was last loaded); debug and TestFlight builds add how long each step
+took, which is also logged. Reducing the data further is on the [backlog](BACKLOG.md);
+[PERFORMANCE.md](PERFORMANCE.md) has the measurements.
 
 **Tiles detected in full.** S2 cells are the unit of what is loaded, stored and drawn: a site is an L16 tile and its
 8 neighbours, the shared map is per L16 tile, and a load detects whole tiles. The tiles detected in full are kept in
-`AppModel.detectedTiles`, on the phone across launches and, from a server that records them, from its tile summaries
-(`TileSummary.detected_at`, Gerardus PR "tile detections"). **Layers → Detect every park tile in full** (admins) runs
+`AppModel.detectedTiles`: on the phone across launches, once the server has a load's trees (or there were none),
+and, from a server that records them, from its tile summaries (`TileSummary.detected_at`, Gerardus PR "tile
+detections"). **Layers → Detect every park tile in full** (admins) runs
 the series of loads that fills the park: `detectPark` takes the park's L16 tiles (`parkTiles`, the tiles with any of a
 25 m grid of points inside its boundary) less those detected in full, and loads a whole site at a time, each the one
 round the first tile still to do that covers most tiles still to do, preferring a site the server has prepared
 (`nextSite`). Each site's trees are stored on the phone and sent with `ImportDetectedTrees` for its 9 tiles. About
-three dozen sites cover the park's few hundred tiles. The result says what changed (the sample it replaced, or trees new or gone since the
-area was last loaded); debug and TestFlight builds add how long each step took, which is also logged. Reducing the
-data further is on the [backlog](BACKLOG.md); [PERFORMANCE.md](PERFORMANCE.md) has the measurements.
+fifty sites cover the park's 354 tiles. A site that fails is skipped with all its tiles, which the next run tries
+again; three failures in a row stop the run.
 
 **Kept on the phone.** `ReferenceCache` (in Caches, one folder per server, 250 MB, least recently used first)
 keeps every reference stream as it arrived, under the site's `bundle_id` (which changes whenever an input changes)
@@ -335,17 +380,29 @@ on the id, which it does not verify yet. A changeset's author must be the caller
 `ImportDetectedTrees`, naming the 9 tiles it detected in full. The server applies them at once as detected trees, skipping ids it already has and L22 cells
 that are already occupied. This has to happen before anyone confirms them, because a change to a tree the server
 has never seen comes back conflicted. Candidates found with OpenStreetMap stay on the phone, and the server refuses
-them anyway.
+them anyway. More than 20,000 trees go in several calls, and only the last names the tiles: the server marks a tile
+complete when a call names it, so a call failing part way leaves none of them marked complete with only some of their
+trees.
 
 **Pulling the shared map.** After pushing, sync brings this device's copy of the shared map up to date
-(`AppModel.pullSharedMap`). It follows every tile pulled before, plus the tiles in view when the map shows at most
-400 m from centre to corner. A tile it has never pulled gets a snapshot (`GetTile`); the rest get the ops applied since
+(`AppModel.pullSharedMap`). It follows (`AppModel.followedTiles()`):
+
+- the tiles the map draws in full now (`MapDetail`: at most 16, and none when the map is too wide to draw any);
+- the tiles pulled before where the player has been: drawn in full on the map lately (`visitedTiles`, the last 256,
+  kept across launches), or where something was recorded on this phone, whoever was signed in.
+
+Every other tile the map shades from the server's summaries. A tile pulled for any other reason (earlier versions
+followed every tile in the city with trees) is forgotten at the next sync (`forgetUnfollowed`, `LocalStore.forgetShared`):
+a store holding a city's worth of pulled trees takes seconds to read at launch and to re-derive at every change. The
+device's own work is in tiles it follows, and stays: the store also keeps any tile holding a shared tree or tag
+this device observed, whatever it is asked to forget, since that record is the tree's only copy here. A forgotten tile
+is pulled again, from a snapshot, once the map draws it in full. A tile it has never pulled gets a snapshot (`GetTile`); the rest get the ops applied since
 their cursor (`PullChanges`). Before pulling, one `GetTileSummaries` asks for the latest sequence of every tile pulled
 before, and only the tiles whose sequence is not the cursor are pulled (`AppModel.tilesToPull`); a server too old to
 answer it (UNIMPLEMENTED) has every tile pulled, as before. If the server's log goes backwards (its database was
 replaced), or an update names a tree the device has never seen, the tile gets a fresh snapshot. Tiles are asked about
-four at a time (as are their open changesets for the review queue), so a sync takes a few round trips rather than two
-per tile.
+four at a time (as are their open changesets for the review queue, for the followed tiles only), so a sync takes a few
+round trips rather than two per tile.
 
 Everything lands in one store transaction (`LocalStore.applyShared`), in the `shared` and `shared_tiles` tables.
 Derivation then starts from the shared map, so the server's trees and tags win over the aerial candidates and other
@@ -353,7 +410,7 @@ players' trees appear. This device's applied observations are folded only for en
 so nothing is counted twice, and its open proposals still show on top as `proposedStatus`.
 
 **Syncing on its own.** With a server set, the app syncs without being asked (`AppModel.syncSoon`): a couple of
-seconds after each change, three seconds after the map settles on tiles not pulled yet (within the 400 m limit), right
+seconds after each change, three seconds after the map settles drawing tiles in full that are not pulled yet, right
 after a load of real trees, and when the app comes to the front. Requests in a row become one sync, one sync runs at a
 time, and a request during a sync runs once more after it. **Sync now** still works. Under tests nothing syncs on its
 own.
@@ -361,7 +418,9 @@ own.
 **Evidence from other devices.** A tree's evidence refs name the meshes behind its measurements. The tree sheet's
 **Evidence** section previews each one: a mesh on this device opens straight away; one recorded on another device is
 downloaded first (`GetBlob`, `AppModel.evidenceFile`), checked against its hash and kept in the blob store, then
-opened the same way, as a throwaway USDZ in Quick Look. Blobs are uploaded with the changeset that references them.
+opened the same way, as a throwaway USDZ in Quick Look. Blobs are uploaded with the changeset that references them,
+each once a sync however many changesets name it. Gerardus keeps blobs by the same hash, inserted once (`UploadBlob`
+answers `already_stored` for bytes it has), so a scan is one blob there too.
 
 **Your proposals.** Me → **Your proposals** lists the player's open changesets, and History the closed ones. Each
 row gives the trees, what it changes, its state, and what it still needs in words (`ProposalStatus`).
@@ -379,8 +438,8 @@ Other cases have their own wording:
 Tapping a row opens its tree. The tree sheet gives the same line for its open proposal.
 
 **Your scans.** Me → **Your scans** lists every evidence mesh this device recorded, newest first
-(`LocalStore.allEvidence`), with its tree, date, DBH, mesh size and crop radius, and Preview and Share. Scans
-uploaded for registration are not kept on the phone.
+(`LocalStore.allEvidence`), one row per scan (by hash), with its tree, date, DBH, mesh size and crop radius, Preview
+and Share, and **Align rings with the scan** (see *Capture*). Scans uploaded for registration are not kept on the phone.
 
 **Reviewing.** The review queue (Me → **Review**) lists other players' open changesets in the followed tiles
 (`ListOpenChangesets`), leaving out the player's own changes and ones they have already agreed with. **Agree**
@@ -403,16 +462,30 @@ once more than 36 are in view. Trees, tags, vector lines (by the tile each start
 tile) are drawn only there. Every other tile near the view that holds trees is one patch (`TileSummary`) shaded by
 trees per hectare, on a square-root scale that fills at 120 per hectare; with more than 800 tiles in view the patches
 are whole level-13 cells instead. Tapping a patch zooms to where its tile is drawn in full. The counts are the phone's
-own (`CensusTiles`, the census by tile, made once per census change); for a tile the phone holds no trees in, they are
-the server's: when the map settles on a wide view, `AppModel.summariseSoon` asks `GetTileSummaries` about the tiles round
-it (at most 4096, nearest first, each again only after two minutes) and keeps the answers in `serverTiles`.
+own (`CensusTiles`: the census by tile, with each tile's trees counted by status, made once per census change off the
+main actor, so a patch is shaded without looking at its trees); for a tile the phone holds no trees in, or has not
+pulled (its trees here are then only the base layer and the phone's own), they are the server's: when the map settles on a wide view, `AppModel.summariseSoon` asks `GetTileSummaries` about the tiles round
+it (at most 4096, nearest first, each again only after two minutes) and keeps the answers in `serverTiles`. That
+needs nothing from the store, so the map is shaded while the store is still being read at launch.
+
+- **Zoomed out** (no tile drawn in full) the map is patches: no vectors, no detected trees, nothing per tree but the
+  player's own (below).
+- **Tiles detected in full** (`AppModel.detectedTiles`) are outlined in dark ink, and surveyed tiles in green. A level-13
+  cell is outlined when every tile in it with trees is, and a tile detected in full that holds no trees still gets its
+  outline.
+- **The player's own trees** (those this phone's changesets touch: added, measured, confirmed, moved, under any
+  player id; `AppModel.ownTrees`) are drawn
+  at every zoom, at most 200 nearest the centre outside the tiles drawn in full. Other trees appear only in the tiles
+  drawn in full.
 
 **The whole city.** For admins (`AppModel.isAdmin`: listed in the build, an admin on the server, or a debug build) the
 map shows all of San Francisco unless **Whole city on the map** is turned off (`AdminSettings.wholeCity`). Each sync
 first asks `GetTileSummaries` about every L16 tile in the city (`AppModel.wholeCity`: the children of the L13 cells over
-`MapViewport.sanFrancisco`, about fourteen thousand, four calls, at most every five minutes), shades them from the
-answers, and follows every tile the server holds standing trees in (`cityTiles`), so `pullSharedMap` brings them to
-the phone wherever the map has been. Other players get the same once it is limited to an area they choose.
+`MapViewport.sanFrancisco`, about fourteen thousand, four calls, at most every five minutes), and shades them from the
+answers, marking those detected in full. It pulls none of them: a tile's trees come to the phone only when the map
+draws it in full or the player has been there (see *Pulling the shared map*), so a park-wide detection on the server
+(tens of thousands of trees) costs the phone those four calls. Other players get the same once it is limited to an area
+they choose.
 
 
 - `MapKitRenderer` draws on Apple's map with MapKit for SwiftUI. Each tree is a view, so detected trees in the tiles
@@ -424,15 +497,18 @@ the phone wherever the map has been. Other players get the same once it is limit
   grid, the buildings Gerardus reconstructed as wall surfaces and roof planes, never DataSF's boxes over them
   (`SiteBuildings`, shared with AR), streets and kerbs, Gerardus's trees as trunk and crown rings), one node per site added and taken
   away as the detail changes, with the census's trees as the same figure in their status colour, from their DBH and
-  height when measured, batched into one mesh per colour. Every loaded site's ground still places points, so heights do
-  not change with the detail. `SiteToScene` composes each site's
+  height when measured, batched into one mesh per colour (rings of 8 sides rather than 16 for detected trees when more
+  than 400 are drawn). Each site's geometry and the trees' figures are made off the main actor and added when they
+  arrive, so a gesture after the detail changes is not held up; selecting a tree redraws only its highlight, drawn over
+  the rest. The sites are drawn only while **Show vectors** is on. Every loaded site's ground still places points, so
+  heights do not change with the detail. `SiteToScene` composes each site's
   georeference with the scene's local frame as one affine map. The camera (`CameraRig`) moves as Apple's map does,
   through one gesture that follows one or two fingers (`MapTouchGesture`): the ground point under a dragging finger,
   or between two, stays under it (each step solves for the camera target that puts it there); two fingers moving up
   or down together, keeping their spacing, tilt instead (`TwoFingerIntent`); a drag glides on when let go;
   double-tap zooms in about the tap and a two-finger tap zooms out. A tap selects the tree whose trunk, projected to
-  the screen, is within a finger's width, or zooms to the patch under it. **Ground** and **Show vectors** hide the
-  sites' ground and their buildings, streets and trees.
+  the screen, is within a finger's width, or zooms to the patch under it. **Show vectors** draws the sites at all, and
+  **Ground** hides their ground.
   The ground is tinted by height over the loaded sites' range (per-vertex colours), and an older server's extruded
   building parts get a lid (`VectorGeometry.lid`). The camera reports its viewport like the other renderer, so loading
   in view and following tiles work the same.
@@ -440,9 +516,12 @@ the phone wherever the map has been. Other players get the same once it is limit
   their 64 level-16 sites the server has prepared, and `prepareCell` to prepare the rest or rebuild them all, one
   site at a time with the same patience for a building server as a vector load.
 
-**Vectors on the main map.** Layers → **Load vectors in view** (or the **Load vectors here** button, which shows
-when the vectors are on, the map is within about 600 m from centre to corner, and the site at the centre is not loaded
-yet) reads the public vector layers of the site at the map centre with #17's `VectorReference.load`, preparing the
+**Vectors on the main map.** Gerardus's vectors (buildings, streets, Gerardus's trees, and the outlines from a load of
+real trees) are off by default: neither renderer draws them, and the map loads none, until **Show vectors** is turned on
+(`MapLayers.Visibility.vectors`, which drops the reference from the layers while off). Sites the AR view loads are
+kept, ready for when they are shown. Layers → **Load vectors in view** (which turns them on), or the **Load vectors
+here** button (which shows when the vectors are on, the map is within about 600 m from centre to corner, and the site
+at the centre is not loaded yet) reads the public vector layers of the site at the map centre with #17's `VectorReference.load`, preparing the
 site first if needed. It converts them from the site frame to the map with `SiteGeoreference`, and keeps them per site
 (`AppModel.vectorAreas`), so panning and loading builds up an area.
 
@@ -453,10 +532,14 @@ site first if needed. It converts them from the site frame to the map with `Site
 - kerbs;
 - street use as surfaces.
 
-Gerardus's trees (the `TREES` layer, `GerardusTree`) are drawn as their crown rings. Ground and sensor arrows are left out. Both renderers draw them; on Apple's map **Show vectors** turns them
-off. The canopy height grid from the aerial points is kept with the loaded area but drawn by neither renderer now: SwiftUI's MapKit has no image overlays, and the wireframe map has no flat raster yet. Everything loaded lives in memory, merged once into `AppModel.mapReference`.
+Gerardus's trees (the `TREES` layer, `GerardusTree`) are drawn as their crown rings. Ground and sensor arrows are left out. Both renderers draw them while **Show vectors**
+is on. The canopy height grid from the aerial points is kept with the loaded area but drawn by neither renderer now: SwiftUI's MapKit has no image overlays, and the wireframe map has no flat raster yet. Everything loaded lives in memory, merged once into `AppModel.mapReference`.
 
 A screen moves the map with a `MapFocus` request (a region with its own id), which both renderers follow.
+
+The map's own steps on the main thread (making the layers, the 3D map applying them, adding its trees and sites) are
+signpost intervals (`MapTiming`), and any over 4 ms is logged at debug level; [PERFORMANCE.md](PERFORMANCE.md) has the
+measurements with a city's worth of trees.
 
 A MapLibre Native renderer with offline PMTiles (a Milestone 1 issue) can implement the same protocol without
 changing the screens.

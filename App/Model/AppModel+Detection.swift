@@ -86,7 +86,8 @@ extension AppModel {
     private func detect(_ tiles: Set<S2CellID>, client: AlignClient, progress: ParkDetection) async {
         let format = QuantityFormat()
         var remaining = tiles.subtracting(detectedTiles)
-        progress.update(detected: tiles.count - remaining.count)
+        // Only the tiles detected in full count, not those of sites that failed and were skipped.
+        progress.update(detected: tiles.intersection(detectedTiles).count)
         aerial = .working("Finding the sites the server has prepared…")
         var prepared: [S2CellID: Set<S2CellID>] = [:]
         for site in (try? await client.listSites()) ?? [] {
@@ -97,9 +98,9 @@ extension AppModel {
         while !Task.isCancelled, let next = Self.nextSite(for: remaining, prepared: prepared) {
             let site = next.site
             aerial = .working(
-                "Detecting the park tile by tile: \(format.count(tiles.count - remaining.count)) of "
-                    + "\(format.count(tiles.count)) done, \(format.count(progress.trees)) trees. Now the site round "
-                    + "\(site.familyDisplay)…")
+                "Detecting the park tile by tile: \(format.count(progress.detected)) of "
+                    + "\(format.count(tiles.count)) detected in full, \(format.count(progress.trees)) trees. Now the "
+                    + "site round \(site.familyDisplay)…")
             do {
                 if prepared[site] == nil {
                     try await Self.prepare(site, refresh: false, client: client)
@@ -107,6 +108,9 @@ extension AppModel {
                 let result = try await loadWholeSite(site, client: client)
                 _ = try await store.replaceCandidates(where: { result.covers($0) }, with: result.candidates)
                 _ = try await importDetected(result)
+                let credits = UserDefaults.standard.stringArray(forKey: Self.attributionKey) ?? []
+                UserDefaults.standard.set(
+                    credits + result.attribution.filter { !credits.contains($0) }, forKey: Self.attributionKey)
                 detectedTiles.formUnion(result.tiles)
                 remaining.subtract(result.tiles)
                 remaining.remove(next.first)
@@ -116,13 +120,17 @@ extension AppModel {
             } catch is CancellationError {
                 break
             } catch {
-                // That tile cannot be done from here; carry on with the rest, unless the server has stopped answering.
+                // Stopping cancels the load under way, which fails as the network's own error.
+                if Task.isCancelled { break }
+                // That site cannot be done from here: leave its tiles for another run and carry on with the rest,
+                // unless the server has stopped answering.
+                Self.skip(site, remaining: &remaining, prepared: &prepared)
                 remaining.remove(next.first)
                 progress.ended(site, trees: 0, error: error)
                 failuresInARow += 1
                 if failuresInARow >= 3 { break }
             }
-            progress.update(detected: tiles.count - remaining.count)
+            progress.update(detected: tiles.intersection(detectedTiles).count)
         }
         syncSoon(after: .zero)
         var message =
@@ -183,6 +191,16 @@ extension AppModel {
         let candidates = block(around: first).sorted()
         guard let best = candidates.max(by: { score($0) < score($1) }) else { return nil }
         return (best, first)
+    }
+
+    /// The tiles still to do once loading `site` failed: less all of its tiles, and it no longer counts as prepared, so
+    /// the next pick is another site. Only the tile that chose it would be taken off otherwise, and the same site,
+    /// still covering the most of the rest, would be picked again and fail again: three times, and the run stopped.
+    nonisolated static func skip(
+        _ site: S2CellID, remaining: inout Set<S2CellID>, prepared: inout [S2CellID: Set<S2CellID>]
+    ) {
+        remaining.subtract(block(around: site))
+        if let covers = prepared.removeValue(forKey: site) { remaining.subtract(covers) }
     }
 
     /// A level-16 tile and the 8 round it, as a Gerardus site covers them: the tiles under the tile's centre reflected

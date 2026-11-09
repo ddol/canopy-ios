@@ -12,6 +12,7 @@ setvbuf(stdout, nil, _IOLBF, 0)
 
 let usage = """
     usage: canopy-harness serve [--port 50099] [--profile loopback|lan|cellular|poor] [--any-interface] [--unprepared]
+                             [--shared-trees 40000]
            canopy-harness bench [--profiles loopback,lan,cellular,poor] [--out report.json] [--compare base.json]
                                 [--loads-only | --work-only] [--no-cache] [--gzip]
            canopy-harness volume
@@ -57,10 +58,13 @@ switch command {
 case "serve":
     let site = SyntheticSite()
     let align = StandInAlign(site: site, prepared: !flag("--unprepared"), preparation: .seconds(8), anywhere: true)
+    // A shared map with trees across Golden Gate Park already, for measuring the app with a city's worth.
+    let city = option("--shared-trees").flatMap(Int.init).map { SharedCity(count: $0) }
     let server = StandInServer(
-        align: align, map: StandInMap(), profile: profile(named: option("--profile") ?? "loopback"))
+        align: align, map: StandInMap(city: city), profile: profile(named: option("--profile") ?? "loopback"))
     try await server.start(port: UInt16(option("--port") ?? "50099") ?? 50099, anyInterface: flag("--any-interface"))
     print("Serving \(site.token) (\(site.trees.count) trees, \(site.points.count) points) at \(server.url)")
+    if let city { print("Shared map: \(city.count) detected trees over \(city.tiles.count) tiles of Golden Gate Park") }
     print("Link: \(server.profile). Set it in Canopy → Me → Settings. Every tile has a synthetic site. Ctrl-C stops.")
     while true {
         try await Task.sleep(for: .seconds(30))

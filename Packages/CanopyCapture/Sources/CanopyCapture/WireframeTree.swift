@@ -83,11 +83,7 @@ public enum WireframeTree {
         let ringCount = max(8, Int((Float(ringSegments) * detail).rounded()))
         let uprightCount = max(4, Int((Float(uprights) * detail).rounded()))
         func centre(_ section: TreeSection) -> SIMD3<Float> {
-            let h = Float(section.height)
-            if let offset = section.offset {
-                return base + SIMD3(Float(offset.x), h, Float(offset.y))
-            }
-            return base + SIMD3(tilt.x * h, h, tilt.z * h)
+            Self.centre(of: section, tilt: tilt, at: base)
         }
         var figure = Figure(trunk: [], crown: [])
         for part in TreeSection.Part.allCases {
@@ -159,6 +155,19 @@ public enum WireframeTree {
         crown += Wireframe.ring(centre: top, radius: crownRadius, count: ringCount)
         crown += uprights(from: crownBase, to: top, radius: crownRadius, count: uprightCount)
         return Figure(trunk: trunk, crown: crown)
+    }
+
+    /// Where a ring of a profile standing at `base` is centred: at its own fitted centre, or on the leaning axis.
+    public static func centre(of ring: TreeSection, lean: Lean? = nil, at base: SIMD3<Float> = .zero) -> SIMD3<Float> {
+        centre(of: ring, tilt: tilt(lean), at: base)
+    }
+
+    static func centre(of section: TreeSection, tilt: SIMD3<Float>, at base: SIMD3<Float>) -> SIMD3<Float> {
+        let h = Float(section.height)
+        if let offset = section.offset {
+            return base + SIMD3(Float(offset.x), h, Float(offset.y))
+        }
+        return base + SIMD3(tilt.x * h, h, tilt.z * h)
     }
 
     /// The horizontal offset per metre of height of a leaning trunk, in the ARKit frame (+x east, −z north)

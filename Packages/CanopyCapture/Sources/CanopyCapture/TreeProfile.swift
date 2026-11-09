@@ -38,7 +38,8 @@ public struct TreeSection: Equatable, Sendable, Codable, Identifiable {
     public var radius: Double
     public var source: Source
     /// Where the ring's centre is, horizontally, from the trunk's base (ARKit x and z, in metres) when it was
-    /// fitted to the scan; nil puts the ring on the leaning axis.
+    /// fitted to the scan or aligned to the camera, or predicted from the rings below (`TrunkSteps.predicted`, set by
+    /// eye); nil puts the ring on the leaning axis. So a centre of its own does not mean the scan fitted the ring.
     public var offset: SIMD2<Double>?
     /// Standard uncertainty of the radius when it was fitted.
     public var radiusUncertainty: Double?
@@ -56,7 +57,7 @@ public struct TreeSection: Equatable, Sendable, Codable, Identifiable {
         self.radiusUncertainty = radiusUncertainty
     }
 
-    /// Whether the ring stays when the shape sliders redraw the rest: a snapped or confirmed ring does.
+    /// Whether the ring stays when the shape sliders redraw the rest: a snapped, aligned or confirmed ring does.
     public var isKept: Bool { source != .eye }
 
     public var diameter: Double { radius * 2 }

@@ -75,6 +75,25 @@ import Testing
         #expect(model.changesets.map(\.state) == [.pending])
         #expect(model.summary.coverage == 1.0 / 200.0)
         #expect(model.error == nil)
+        // The map draws the trees a player worked on at every zoom; the census by tile counts the change.
+        #expect(model.ownTrees == [tree.id])
+        #expect(model.censusTiles.total.proposed == 1)
+        #expect(model.censusTiles.counts[tree.position.tile]?.proposed == 1)
+    }
+
+    /// The map is up before the store is read at launch, and the player may act meanwhile: marking a cell surveyed
+    /// counts what the store holds there, not the census the model has not read yet.
+    @Test func markingACellSurveyedBeforeTheCensusIsReadCountsItsTrees() async throws {
+        let model = try makeModel()
+        try await model.store.importCandidates(try ParkFixtures.candidates())
+        #expect(model.census.trees.isEmpty)
+        let trees = await model.store.state().trees.values
+        let cell = try #require(trees.first).position.tile
+        let held = trees.filter { $0.position.tile == cell }.count
+        await model.markSurveyed(cell)
+        let mark = try #require(try await model.store.surveyedCells().first { $0.cell == cell })
+        #expect(held > 0)
+        #expect(mark.unreviewed == held)
     }
 
     @Test func movingATreeProposesItAtItsNewPlace() async throws {
@@ -112,6 +131,65 @@ import Testing
         #expect(changeset.ops.map(\.entity) == [.tag])
         #expect(changeset.ops.first?.fields["evidenceRef"] == .string(tag.evidenceRef!.rawValue))
         #expect(try await model.store.evidence(about: tag.id).first?.kind == .limbScan)
+    }
+
+    @Test func savingAScanTwiceKeepsOneScanAndOneTree() async throws {
+        let model = try makeModel()
+        await model.load()
+        let other = try #require(model.census.trees.values.first)
+        let glb = Data("trunk glb".utf8)
+        let dbh = DBH(diameter: Quantity(0.4, uncertainty: 0.01), method: .lidarCircleFit)
+        func save(_ target: Tree? = nil) async -> Tree? {
+            await model.saveTrunkMeasurement(
+                dbh: dbh, lean: nil, glb: glb, evidenceMesh: (3, 1), cropRadius: 1.5, tree: target,
+                position: other.position)
+        }
+
+        // Save as a new tree tapped twice: the second tap does nothing while the first saves.
+        async let first = save()
+        async let second = save()
+        let saved = Set(await [first, second].compactMap { $0?.id })
+        #expect(saved.count == 1)
+        let tree = try #require(saved.first)
+        #expect(model.census.trees.count == 201)
+        #expect(model.scanCount == 1)
+        #expect(model.changesets.count == 2, "the new tree and its measurement")
+
+        // Saving it again later, even for another tree, links to the tree it measured.
+        #expect(await save()?.id == tree)
+        #expect(await save(other)?.id == tree)
+        #expect(model.census.trees.count == 201)
+        #expect(model.scanCount == 1)
+        #expect(model.changesets.count == 2)
+        #expect(model.tree(tree)?.evidenceRefs == [BlobStore.reference(for: glb)])
+        #expect(model.tree(other.id)?.evidenceRefs == [])
+        #expect(model.error == nil)
+    }
+
+    @Test func placingATagWithOneLimbScanTwiceKeepsOneScanAndOneTag() async throws {
+        let model = try makeModel()
+        await model.load()
+        let tree = try #require(model.census.trees.values.first)
+        let limb = AppModel.LimbEvidence(glb: Data("limb glb".utf8), vertexCount: 3, triangleCount: 1, cropRadius: 1)
+        func place() async -> CanopyModel.Tag? {
+            await model.placeTag(
+                on: tree, point: Tag.Point(position: tree.position, heightAboveGround: Quantity(6, uncertainty: 1)),
+                issue: .hanger, couldHit: .path, sizeClass: .large, urgency: .high, evidence: limb)
+        }
+
+        // Save tapped twice: the second tap does nothing while the first saves.
+        async let first = place()
+        async let second = place()
+        let placed = Set(await [first, second].compactMap { $0?.id })
+        #expect(placed.count == 1)
+        let tag = try #require(placed.first)
+
+        // Saving it again later returns the tag the scan is about.
+        #expect(await place()?.id == tag)
+        #expect(model.tags(on: tree).map(\.id) == [tag])
+        #expect(model.scanCount == 1)
+        #expect(model.changesets.count == 1)
+        #expect(model.error == nil)
     }
 
     @Test func syncSubmitsAndASimulatedTrustedApprovalAppliesTheChange() async throws {
