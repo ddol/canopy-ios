@@ -16,6 +16,9 @@ enum ChangesetSummary {
                 let value = QuantityFormat().length(dbh.diameter.value, uncertainty: dbh.diameter.uncertainty)
                 return "Measure trunk, DBH \(value)"
             }
+            if op.fields["position"] != nil {
+                return "Move tree"
+            }
             switch op.fields["countStatus"]?.stringValue {
             case "confirmed": return "Confirm tree"
             case "removed": return "Not a tree"

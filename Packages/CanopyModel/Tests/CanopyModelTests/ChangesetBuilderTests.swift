@@ -54,6 +54,43 @@ import Testing
         #expect(changeset.tiles == [Sample.windmill.tile])
     }
 
+    @Test func movingATreeUpdatesItsPositionAndChunkAndConfirmsIt() throws {
+        let tree = Sample.detectedTree()
+        // 3 m east and 2 m north of where it was detected.
+        let moved = LocalFrame(origin: tree.position.geo).geoPoint(of: ENU(east: 3, north: 2, up: 0)).point
+        let position = Position(geo: moved, covariance: .isotropic(horizontal: 4, vertical: 4))
+        let changeset = try ChangesetBuilder.changeset(
+            for: Sample.observation(.treeMoved(treeID: tree.id, position: position)),
+            in: CensusState(trees: [tree]),
+            author: Sample.player
+        )
+        let op = try #require(changeset.ops.first)
+        #expect(op.op == .update)
+        #expect(op.baseVersion == 1)
+        #expect(op.fields["countStatus"] == "confirmed")
+        #expect(op.fields["position"] == (try JSONValue(encoding: position)))
+        // A few metres stays in its L19 chunk (about 15 m across), so the chunk is not part of the change.
+        #expect(moved.chunk == tree.position.chunk)
+        #expect(op.fields["s2_l19_token"] == nil)
+        #expect(changeset.tiles == [tree.position.tile])
+    }
+
+    @Test func movingATreeAcrossATileEdgeTouchesBothTiles() throws {
+        let tree = Sample.detectedTree()
+        // Far enough to be in another L16 tile (about 150 m across).
+        let far = LocalFrame(origin: tree.position.geo).geoPoint(of: ENU(east: 400, north: 0, up: 0)).point
+        #expect(far.tile != tree.position.tile)
+        let changeset = try ChangesetBuilder.changeset(
+            for: Sample.observation(
+                .treeMoved(
+                    treeID: tree.id, position: Position(geo: far, covariance: .isotropic(horizontal: 4, vertical: 4)))),
+            in: CensusState(trees: [tree]),
+            author: Sample.player
+        )
+        #expect(changeset.tiles == [tree.position.tile, far.tile].sorted())
+        #expect(changeset.ops.first?.fields["s2_l19_token"] == .string(far.chunk.token))
+    }
+
     @Test func measurementUpdatesDBHLeanEvidenceAndVerifies() throws {
         let tree = Sample.detectedTree()
         let lean = Lean(angle: Quantity(4.5, uncertainty: 0.5))
