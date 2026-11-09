@@ -64,7 +64,9 @@ scripts/test.sh
 ```
 
 which is `xcodebuild test -project Canopy.xcodeproj -scheme Canopy -destination 'id=<simulator>'`, with a stand-in
-Gerardus server started for the UI test that loads real trees. The packages that do not need UIKit
+Gerardus server started for the UI test that loads real trees. It runs one simulator at a time: it waits for any other
+run, shuts down other booted simulators and shuts its own down after, because several at once crashed the Mac mini's
+Intel graphics driver (see [AGENTS.md](AGENTS.md)). The packages that do not need UIKit
 (`CanopyModel`, `CanopyStore`, `CanopySync`, `CanopyReference`, `CanopyHarness`, `CanopyCapture`'s geometry) also
 build on macOS, so `swift test` inside one of them is the quickest loop.
 
