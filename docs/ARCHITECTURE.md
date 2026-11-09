@@ -307,7 +307,9 @@ on the id, which it does not verify yet. A changeset's author must be the caller
 `ImportDetectedTrees`, naming the 9 tiles it detected in full. The server applies them at once as detected trees, skipping ids it already has and L22 cells
 that are already occupied. This has to happen before anyone confirms them, because a change to a tree the server
 has never seen comes back conflicted. Candidates found with OpenStreetMap stay on the phone, and the server refuses
-them anyway.
+them anyway. More than 20,000 trees go in several calls, and only the last names the tiles: the server marks a tile
+complete when a call names it, so a call failing part way leaves none of them marked complete with only some of their
+trees.
 
 **Pulling the shared map.** After pushing, sync brings this device's copy of the shared map up to date
 (`AppModel.pullSharedMap`). It follows every tile pulled before, plus the tiles in view when the map shows at most
