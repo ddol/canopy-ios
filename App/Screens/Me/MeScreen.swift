@@ -5,23 +5,19 @@ import CanopyPlayers
 import CanopyReference
 import SwiftUI
 
-/// The player, their pending changes, sync, and (in debug builds) data tools.
+/// The player, their scans, sync, and (in debug builds) data tools. Their proposals and the review queue are in the
+/// Proposals tab.
 struct MeScreen: View {
     @Environment(AppModel.self) private var model
     @State private var confirmingReset = false
-    /// The tree of the proposal the player tapped.
-    @State private var shownTree: Tree?
     private let format = QuantityFormat()
 
     var body: some View {
         NavigationStack {
             List {
                 playerSection
-                pendingSection
                 scansSection
-                reviewSection
                 syncSection
-                historySection
                 #if DEBUG || TESTING_TOOLS
                     debugSection
                 #endif
@@ -37,10 +33,6 @@ struct MeScreen: View {
                         Label("Settings", systemImage: "gearshape")
                     }
                 }
-            }
-            .sheet(item: $shownTree) { tree in
-                TreeSheet(tree: tree)
-                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: signInPresented) {
                 if let controller = model.players.signInViewController {
@@ -120,56 +112,6 @@ struct MeScreen: View {
         }
     }
 
-    private var open: [Changeset] {
-        model.changesets.filter(\.state.isOpen).reversed()
-    }
-
-    private var closed: [Changeset] {
-        model.changesets.filter { !$0.state.isOpen }.reversed()
-    }
-
-    private var pendingSection: some View {
-        Section {
-            if open.isEmpty {
-                Text("Nothing waiting. Confirm, measure or add a tree to propose a change.")
-                    .foregroundStyle(Color.canopyInkMuted)
-            }
-            ForEach(open) { changeset in
-                proposal(changeset)
-            }
-        } header: {
-            Text("Your proposals (\(open.count))")
-        } footer: {
-            Text("A change reaches the shared map when a second player agrees and at least one of you is trusted.")
-        }
-    }
-
-    @ViewBuilder
-    private var reviewSection: some View {
-        if model.mapClient != nil {
-            Section {
-                if model.reviewQueue.isEmpty {
-                    Text(
-                        model.lastSync == nil
-                            ? "Sync to see other players' changes near you."
-                            : "Nothing waiting near you."
-                    )
-                    .foregroundStyle(Color.canopyInkMuted)
-                }
-                ForEach(model.reviewQueue, id: \.changeset.id) { item in
-                    ReviewRow(item: item, canReject: model.serverPlayer?.isTrusted == true)
-                }
-            } header: {
-                Text("Review (\(model.reviewQueue.count))")
-            } footer: {
-                Text(
-                    "Agree when you have seen the change on the ground. It reaches the shared map when two players agree "
-                        + "and one of them is trusted."
-                        + (model.serverPlayer?.isTrusted == true ? " As a trusted player you can also reject it." : ""))
-            }
-        }
-    }
-
     private var syncSection: some View {
         Section {
             Button {
@@ -224,35 +166,9 @@ struct MeScreen: View {
         }
     }
 
-    /// A proposal row; tapping it opens its tree.
-    private func proposal(_ changeset: Changeset) -> some View {
-        Button {
-            shownTree = changeset.ops.lazy.compactMap { model.tree($0.id) }.first
-        } label: {
-            ProposalRow(changeset: changeset)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("changeset-row")
-    }
-
-    @ViewBuilder
-    private var historySection: some View {
-        if !closed.isEmpty {
-            Section("History") {
-                ForEach(closed) { changeset in
-                    proposal(changeset)
-                }
-            }
-        }
-    }
-
     #if DEBUG || TESTING_TOOLS
         private var debugSection: some View {
             Section {
-                Button("Simulate trusted approval", systemImage: "checkmark.shield") {
-                    Task { await model.simulateTrustedApproval() }
-                }
-                .disabled(open.isEmpty || model.mapClient != nil)
                 Button("Reset local data", systemImage: "trash", role: .destructive) {
                     confirmingReset = true
                 }
@@ -261,9 +177,7 @@ struct MeScreen: View {
             } header: {
                 Text("Debug")
             } footer: {
-                Text(
-                    "A simulated trusted ranger approves every pending change on the simulated server, when no "
-                        + "server is set.")
+                Text("Simulate trusted approval is under Proposals → Yours.")
             }
         }
     #endif
@@ -277,65 +191,6 @@ struct MeScreen: View {
             Text("Open source under the Apache License 2.0. Tree candidates in this build are synthetic.")
                 .font(.footnote)
                 .foregroundStyle(Color.canopyInkMuted)
-        }
-    }
-}
-
-/// Another player's open change: what it does, to which tree, who proposed it, and Agree (or Reject, for trusted
-/// players).
-struct ReviewRow: View {
-    let item: GerardusMapClient.OpenChangeset
-    let canReject: Bool
-    @Environment(AppModel.self) private var model
-    @State private var rejecting = false
-    @State private var reason = ""
-
-    private var subjects: String {
-        Set(item.changeset.ops.map(\.id)).compactMap { model.tree($0)?.name }.sorted().joined(separator: ", ")
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
-            Text(ChangesetSummary.describe(item.changeset))
-                .font(.body.weight(.semibold))
-            if !subjects.isEmpty {
-                Text(subjects).font(.subheadline)
-            }
-            HStack(spacing: Spacing.xs) {
-                Text(item.authorAlias.isEmpty ? "A player" : item.authorAlias)
-                if item.authorTrusted {
-                    Image(systemName: "checkmark.shield").accessibilityLabel("trusted")
-                }
-                Text("·")
-                Text(item.changeset.meta.createdAt, style: .relative)
-            }
-            .font(.caption)
-            .foregroundStyle(Color.canopyInkMuted)
-            HStack(spacing: Spacing.s) {
-                Button("Agree", systemImage: "hand.thumbsup") {
-                    Task { await model.review(item, approve: true) }
-                }
-                .buttonStyle(.canopyPrimary)
-                .accessibilityIdentifier("review-agree")
-                if canReject {
-                    Button("Reject", systemImage: "hand.thumbsdown") { rejecting = true }
-                        .buttonStyle(.canopySecondary)
-                }
-            }
-        }
-        .padding(.vertical, Spacing.xxs)
-        .accessibilityIdentifier("review-row")
-        .alert("Reject this change?", isPresented: $rejecting) {
-            TextField("Why", text: $reason)
-            Button("Reject", role: .destructive) {
-                let reason = reason.trimmingCharacters(in: .whitespaces)
-                Task {
-                    await model.review(item, approve: false, reason: reason.isEmpty ? "Not seen on the ground" : reason)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("A rejected change never reaches the shared map. Say what you saw.")
         }
     }
 }

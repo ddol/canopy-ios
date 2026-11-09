@@ -18,7 +18,7 @@ final class LaunchTests: XCTestCase {
     func testEveryTabIsReachable() {
         let app = launch()
         waitForMap(app)
-        for name in ["Map", "Census", "Me"] {
+        for name in ["Map", "Census", "Proposals", "Me"] {
             let tab = app.buttons[name].firstMatch
             XCTAssertTrue(tab.waitForExistence(timeout: 10), "missing tab \(name)")
             tab.tap()
@@ -125,35 +125,47 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
-    func testMeListsPendingChangesAndTheSimulatedApprovalAppliesThem() {
+    func testProposalsListsPendingChangesAndTheSimulatedApprovalAppliesThem() {
         let app = launch()
         app.buttons["Census"].firstMatch.tap()
         let confirm = app.buttons["Confirm tree"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 10))
         confirm.tap()
 
-        app.buttons["Me"].firstMatch.tap()
+        // Nothing waits for review with no server, so the tab opens on the player's own proposals.
+        app.buttons["Proposals"].firstMatch.tap()
         let row = app.buttons["changeset-row"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         XCTAssertTrue(row.label.contains("Confirm tree"), row.label)
         XCTAssertTrue(row.label.contains("Pending"), row.label)
         // What it still needs, in words.
         XCTAssertTrue(row.label.contains("simulated server"), row.label)
-        XCTAssertTrue(app.buttons["scans-link"].firstMatch.waitForExistence(timeout: 10))
-
-        app.buttons["Sync now"].firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["sync-submitted"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(text(app, "Your proposals (1)").exists)
 
+        // Me keeps sync and the scans, and no longer lists proposals.
+        app.buttons["Me"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["scans-link"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["changeset-row"].exists)
+        app.buttons["Sync now"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["sync-submitted"].firstMatch.waitForExistence(timeout: 10))
+
+        app.buttons["Proposals"].firstMatch.tap()
+        XCTAssertTrue(text(app, "Your proposals (1)").waitForExistence(timeout: 10))
         let approve = app.buttons["Simulate trusted approval"].firstMatch
         scroll(app, toReveal: approve)
         approve.tap()
-        let applied = app.staticTexts["On the map"].firstMatch
-        scroll(app, toReveal: applied)
-        XCTAssertTrue(applied.waitForExistence(timeout: 10))
-        app.swipeDown()
-        app.swipeDown()
         XCTAssertTrue(text(app, "Your proposals (0)").waitForExistence(timeout: 10))
+
+        app.buttons["History"].firstMatch.tap()
+        XCTAssertTrue(text(app, "History (1)").waitForExistence(timeout: 10))
+        let applied = app.buttons["changeset-row"].firstMatch
+        XCTAssertTrue(applied.waitForExistence(timeout: 10))
+        XCTAssertTrue(applied.label.contains("On the map"), applied.label)
+
+        // With no server, Review says where other players' changes come from.
+        app.buttons["Review"].firstMatch.tap()
+        XCTAssertTrue(text(app, "Review (0)").waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["changeset-row"].exists)
     }
 
     @MainActor
