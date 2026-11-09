@@ -151,7 +151,7 @@ shown there, not yet saved.
 - **One viewpoint or many.** From one viewpoint the prior holds the ring's distance and the edges set its width and
   place across the view. Walking round fixes the centre too.
 - **After aligning.** Aligned rings are marked `camera`. In AR they are drawn blue, beside lime for scan-fitted and
-  green for confirmed rings. A ring moved by hand, confirmed or taken out stops being aligned.
+  green for confirmed rings. A ring moved by hand, snapped to the scan, confirmed or taken out stops being aligned.
 - **Tests.** The geometry is tested against rendered synthetic images of upright and leaning trunks
   (`RingAlignmentTests`, `TrunkStepsTests`).
 
@@ -227,19 +227,22 @@ already acted on (and dropping a new one within 2.5 m of such a kept one).
 On a site with 26 million points this takes under 2 s including download; the dense groves are somewhat over-split,
 which players correct with Not a tree. The Map tab's Layers menu has **Load real trees in view**, and the map shows
 the data's credits, behind a **Data** tag that twirls open, while real trees are loaded. From a zoomed-out map the
-load covers only the site at the middle, so the map then moves to it.
+load covers only the site at the middle, so the map then moves to it. The result says what changed (the sample it
+replaced, or trees new or gone since the area was last loaded); debug and TestFlight builds add how long each step
+took, which is also logged. Reducing the data further is on the [backlog](BACKLOG.md);
+[PERFORMANCE.md](PERFORMANCE.md) has the measurements.
 
 **Tiles detected in full.** S2 cells are the unit of what is loaded, stored and drawn: a site is an L16 tile and its
 8 neighbours, the shared map is per L16 tile, and a load detects whole tiles. The tiles detected in full are kept in
-`AppModel.detectedTiles`, on the phone across launches and, from a server that records them, from its tile summaries
-(`TileSummary.detected_at`, Gerardus PR "tile detections"). **Layers → Detect every park tile in full** (admins) runs
+`AppModel.detectedTiles`: on the phone across launches, once the server has a load's trees (or there were none),
+and, from a server that records them, from its tile summaries (`TileSummary.detected_at`, Gerardus PR "tile
+detections"). **Layers → Detect every park tile in full** (admins) runs
 the series of loads that fills the park: `detectPark` takes the park's L16 tiles (`parkTiles`, the tiles with any of a
 25 m grid of points inside its boundary) less those detected in full, and loads a whole site at a time, each the one
 round the first tile still to do that covers most tiles still to do, preferring a site the server has prepared
 (`nextSite`). Each site's trees are stored on the phone and sent with `ImportDetectedTrees` for its 9 tiles. About
-three dozen sites cover the park's few hundred tiles. The result says what changed (the sample it replaced, or trees new or gone since the
-area was last loaded); debug and TestFlight builds add how long each step took, which is also logged. Reducing the
-data further is on the [backlog](BACKLOG.md); [PERFORMANCE.md](PERFORMANCE.md) has the measurements.
+fifty sites cover the park's 354 tiles. A site that fails is skipped with all its tiles, which the next run tries
+again; three failures in a row stop the run.
 
 **Kept on the phone.** `ReferenceCache` (in Caches, one folder per server, 250 MB, least recently used first)
 keeps every reference stream as it arrived, under the site's `bundle_id` (which changes whenever an input changes)

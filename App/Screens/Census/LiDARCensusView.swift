@@ -563,6 +563,8 @@ struct LiDARCensusView: View {
         guard var fit, let id = fit.selectedSection, let section = fit.profile.section(id) else { return }
         do {
             fit.profile[id] = try fit.capture.snapping(section)
+            // Fitted to the scan now: the camera no longer sets it.
+            capture.stopAligning(ring: id)
             self.fit = fit
             showFit(fit)
             notice =
@@ -614,7 +616,8 @@ struct LiDARCensusView: View {
         showFit(fit)
     }
 
-    /// Stops aligning the rings the player moved by hand, confirmed or took out.
+    /// Stops aligning the rings the player moved by hand, confirmed or took out. (Snapping one to the scan stops it in
+    /// `snapSelectedSection`.)
     private func stopAligningEdited(from old: TreeProfile, to new: TreeProfile) {
         for id in capture.aligningRings {
             guard let ring = new.section(id) else {

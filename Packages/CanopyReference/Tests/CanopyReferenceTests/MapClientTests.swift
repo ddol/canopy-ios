@@ -207,21 +207,34 @@ import Testing
             s.message(9) { $0.uint(1, 1_761_200_000) }
         }
         answer.message(1) { $0.string(1, "not a token") }
+        // Detected in full with no trees in it (Gerardus TileSummary.detected_at = 10, detector = 11): zero counts.
+        let lake = GeoPoint(latitude: 37.7720, longitude: -122.4750).tile
+        answer.message(1) { s in
+            s.string(1, lake.token)
+            s.message(10) { $0.uint(1, 1_762_600_000) }
+            s.string(11, "Canopy 0.9 TreeDetector, 1 m voxels")
+        }
         let mock = MockTransport()
         mock.responses[GerardusMapClient.service + "GetTileSummaries"] = .success([answer.data])
 
-        let summaries = try await GerardusMapClient(transport: mock).tileSummaries([tile, other, tile])
+        let summaries = try await GerardusMapClient(transport: mock).tileSummaries([tile, other, tile, lake])
         let request = try fields(try #require(mock.sent.first?.requests.first))
-        #expect(Set(request.filter { $0.number == 1 }.map(\.string)) == [tile.token, other.token])
-        #expect(request.count == 2, "each tile once")
-        #expect(summaries.count == 1)
+        #expect(Set(request.filter { $0.number == 1 }.map(\.string)) == [tile.token, other.token, lake.token])
+        #expect(request.count == 3, "each tile once")
+        #expect(summaries.count == 2)
         let counts = try #require(summaries[tile])
         #expect(counts.detected == 12)
         #expect(counts.reviewed == 4)
         #expect(counts.tags == 2)
         #expect(counts.latestSequence == 77)
         #expect(counts.updatedAt == Date(timeIntervalSince1970: 1_761_200_000))
+        #expect(counts.detectedAt == nil, "never detected in full")
+        #expect(counts.detector == nil)
         #expect(summaries[other] == nil, "a tile with nothing in it is left out")
+        let detected = try #require(summaries[lake])
+        #expect(detected.detected + detected.reviewed + detected.tags == 0)
+        #expect(detected.detectedAt == Date(timeIntervalSince1970: 1_762_600_000))
+        #expect(detected.detector == "Canopy 0.9 TreeDetector, 1 m voxels")
     }
 
     @Test func blobsComeDownByTheirHashAndAMissingOneIsNotFound() async throws {
