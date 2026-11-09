@@ -8,8 +8,12 @@ import Observation
 final class LocationProvider {
     private(set) var location: CLLocation?
     private(set) var isDenied = false
+    /// The compass's true heading, degrees clockwise from north, while asked for; nil without a compass or a fix.
+    private(set) var heading: Double?
     private var updates: Task<Void, Never>?
     private var session: CLServiceSession?
+    @ObservationIgnored private var headingManager: CLLocationManager?
+    @ObservationIgnored private let headingDelegate = HeadingDelegate()
 
     var geoPoint: GeoPoint? {
         location.map { GeoPoint(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude) }
@@ -20,7 +24,16 @@ final class LocationProvider {
         location.map { max($0.horizontalAccuracy, 0) }
     }
 
-    func start() {
+    /// Starts location updates and, with `heading`, the compass too.
+    func start(heading wantsHeading: Bool = false) {
+        if wantsHeading, headingManager == nil, CLLocationManager.headingAvailable() {
+            let manager = CLLocationManager()
+            headingDelegate.onHeading = { [weak self] heading in self?.heading = heading }
+            manager.delegate = headingDelegate
+            manager.headingFilter = 2
+            manager.startUpdatingHeading()
+            headingManager = manager
+        }
         guard updates == nil else { return }
         session = CLServiceSession(authorization: .whenInUse)
         updates = Task { [weak self] in
@@ -39,10 +52,25 @@ final class LocationProvider {
     }
 
     func stop() {
+        headingManager?.stopUpdatingHeading()
+        headingManager = nil
+        heading = nil
         updates?.cancel()
         updates = nil
         session?.invalidate()
         session = nil
+    }
+}
+
+/// Passes compass headings on from Core Location, which calls back on the main thread it was started from.
+private final class HeadingDelegate: NSObject, CLLocationManagerDelegate {
+    /// The true heading, or nil while it is not valid.
+    var onHeading: (Double?) -> Void = { _ in }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        let heading =
+            newHeading.trueHeading >= 0 && newHeading.headingAccuracy >= 0 ? newHeading.trueHeading : nil
+        MainActor.assumeIsolated { onHeading(heading) }
     }
 }
 

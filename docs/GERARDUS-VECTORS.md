@@ -58,22 +58,39 @@ On a LiDAR phone the Census view draws the loaded sites round the player as wire
 draws them: trees as a brown trunk to the crown's base with green rings of the crown's radius at its base and top
 (plus rings of `dbh_m` on the trunk), buildings as the outlines of their box walls, wall surfaces, roof planes and
 measured facades, streets and kerbs as lines. The census's own trees are drawn the same way in a darker green, from
-their DBH and height when measured. The layers are toggled from the **Wireframes** menu in the target card.
+their DBH and height when measured. The layers are toggled from the overlay menu at the top right, which also holds
+**Load vectors here**, **Re-place overlay from GPS** and **Register with 3DEP**.
 
 The site under the player is asked for on arrival (prepared first when the server has not seen it, which can take a
 minute or two), and again for each new tile walked into, so an area builds up as the player moves; **Load vectors
 here** asks again. Neighbouring sites overlap, and a feature is drawn once.
 
-Where the site lands in the AR world comes from the 3DEP registration when there is one (**Register with 3DEP**),
-exact to its sigma. Before that it comes from the GPS fix: the session origin's position from the best fix so far
+Where the site lands in the AR world comes from the 3DEP registration when there is one (**Register with 3DEP**, in
+the overlay menu), exact to its sigma. Before that it comes from the GPS fix: the session origin's position from the best fix so far
 and the camera's offset then, the site's georeference for the horizontal, and the ground under the origin (the
 LiDAR mesh's floor against the site's ground grid) for the vertical. That is GPS metres out, which is what
 eyeballing a wireframe against the real tree is for; **Re-place overlay from GPS** takes the current fix again.
 
-Tapping a tree selects it: its panel shows what is known (DBH, height, the Street Tree List or an observed crown),
-with sliders for trunk diameter, height, foliage height and width that reshape its wireframe on the spot. A census
-tree picked this way becomes the target for Confirm, Not a tree and Scan trunk. Adjustments live in the view for the
-session; nothing is written to Gerardus. The trunk scan's own fitted tree starts from the selected tree's shape.
+The selected tree is the one tapped, else the census tree chosen from the card's list, else the nearest. Its card at
+the top names it with its status, distance and bearing (from the camera once the overlay is placed, by GPS before),
+and its wireframe is drawn in orange. While it is out of view, a small top-down compass in the corner shows the player
+at the centre facing up, the tree as an orange marker with its distance (an arrow on the rim when it is further than
+the compass reaches) and the census trees near by, faint. Once it comes into view the card is outlined in orange and
+the compass gives way to two buttons for a census tree:
+
+- **Not a tree** (✕) proposes it removed, and the next nearest tree becomes the target.
+- **Move** for one drawn a little off: its wireframe stands at the trunk under the reticle (or where it was drawn),
+  **To reticle** moves it there again, and dragging a finger across the view moves it under the finger. A line on the
+  ground runs back to where it was. **Place here** proposes the new position, placed as a new tree is, and counts as
+  confirming it.
+
+**Scan trunk** is the main button at all times, and measures the target. New tree here is the small button beside
+Not a tree and Move.
+
+Tapping a tree also opens its panel with what is known (DBH, height, the Street Tree List or an observed crown), and
+sliders for trunk diameter, height, foliage height and width that reshape its wireframe on the spot. A census tree
+picked this way becomes the target. Adjustments live in the view for the session; nothing is written to Gerardus. The
+trunk scan's own fitted tree starts from the selected tree's shape.
 
 After a trunk scan the fitted tree is a stack of rings (cross-sections) from the ground up, not two cylinders.
 **Shape** moves them all with the four sliders; **Rings** picks one ring (orange in AR) to move up or down, widen or

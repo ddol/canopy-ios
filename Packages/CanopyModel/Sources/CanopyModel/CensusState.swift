@@ -93,6 +93,14 @@ public struct CensusState: Hashable, Sendable {
             update(tree: id) { tree in
                 tree.countStatus = .removed
             }
+        case .treeMoved(let id, let position):
+            update(tree: id) { tree in
+                tree.position = position
+                tree.meta.chunk = position.chunk
+                if tree.countStatus != .verified {
+                    tree.countStatus = .confirmed
+                }
+            }
         case .trunkMeasured(let id, let dbh, let lean, let evidence):
             update(tree: id) { tree in
                 tree.dbh = dbh

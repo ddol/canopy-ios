@@ -46,6 +46,44 @@ import Testing
         }
     }
 
+    @Test func aPendingMoveShowsTheTreeAtItsNewPlaceAsProposed() throws {
+        let moved = LocalFrame(origin: tree.position.geo).geoPoint(of: ENU(east: -2, north: 1.5, up: 0)).point
+        let position = Position(geo: moved, covariance: .isotropic(horizontal: 3, vertical: 3))
+        let observation = Sample.observation(.treeMoved(treeID: tree.id, position: position))
+        let state = CensusState.derive(
+            base: [tree], observations: [observation], changesetStates: [observation.changesetID!: .pending])
+        let derived = try #require(state.trees[tree.id])
+        #expect(derived.position == position)
+        #expect(derived.meta.chunk == moved.chunk)
+        #expect(derived.countStatus == .detected)
+        #expect(derived.proposedStatus == .confirmed)
+        #expect(derived.displayStatus == .proposed)
+    }
+
+    @Test func movingAVerifiedTreeKeepsItVerified() throws {
+        var verified = tree
+        verified.countStatus = .verified
+        let observation = Sample.observation(
+            .treeMoved(
+                treeID: tree.id,
+                position: Position(geo: Sample.windmill, covariance: .isotropic(horizontal: 1, vertical: 1))
+            ))
+        let state = CensusState(trees: [verified]).applying(observation)
+        #expect(state.trees[tree.id]?.countStatus == .verified)
+        #expect(state.trees[tree.id]?.position.geo == Sample.windmill)
+    }
+
+    @Test func aMoveSurvivesBeingStoredAsJSON() throws {
+        let kind = FieldObservation.Kind.treeMoved(
+            treeID: tree.id,
+            position: Position(geo: Sample.windmill, covariance: .isotropic(horizontal: 2, vertical: 2)))
+        let decoded = try CanopyJSON.decoder.decode(
+            FieldObservation.Kind.self, from: CanopyJSON.encoder.encode(kind))
+        #expect(decoded == kind)
+        #expect(kind.name == "treeMoved")
+        #expect(kind.subject.id == tree.id)
+    }
+
     @Test func measurementIsVisibleAtOnceAndVerifiesWhenApplied() throws {
         let confirm = Sample.observation(.treeConfirmed(treeID: tree.id))
         let measure = Sample.observation(
