@@ -176,6 +176,48 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
+    func testAScanShowsAPictureOfItsMeshAndGoesToItsTreeOnTheMap() {
+        // The simulator cannot scan, so Your scans records a synthetic one on the first fixture tree.
+        let app = launch(["-canopy.sampleScan", "YES"])
+        waitForMap(app)
+        // A screen left open over the map, which the Map tab keeps while Me is shown.
+        app.buttons["Layers"].firstMatch.tap()
+        let surveyed = app.buttons["Surveyed cells (L16)"].firstMatch
+        XCTAssertTrue(surveyed.waitForExistence(timeout: 10))
+        surveyed.tap()
+        XCTAssertTrue(app.navigationBars["Surveyed cells"].firstMatch.waitForExistence(timeout: 10))
+        app.buttons["Me"].firstMatch.tap()
+        let scans = app.buttons["scans-link"].firstMatch
+        scroll(app, toReveal: scans)
+        XCTAssertTrue(scans.waitForExistence(timeout: 10))
+        scans.tap()
+
+        // The picture is drawn from the mesh, off the main thread.
+        let picture = app.buttons["scan-preview"].firstMatch
+        XCTAssertTrue(picture.waitForExistence(timeout: 30))
+        let drawn = expectation(for: NSPredicate(format: "value == 'Drawn'"), evaluatedWith: picture)
+        wait(for: [drawn], timeout: 60)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Your scans"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        // Show on map goes to the Map tab and opens the tree's sheet, with the scan as its evidence.
+        app.buttons["scan-show-on-map"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Done"].firstMatch.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["Map"].firstMatch.isSelected)
+        XCTAssertTrue(app.staticTexts["Evidence scans"].firstMatch.exists)
+        let onMap = XCTAttachment(screenshot: app.screenshot())
+        onMap.name = "Show on map"
+        onMap.lifetime = .keepAlways
+        add(onMap)
+        // Under the sheet is the map, not the screen that was open over it.
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(app.otherElements["summary-bar"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.navigationBars["Surveyed cells"].firstMatch.exists)
+    }
+
+    @MainActor
     func testSettingsChecksTheServerAddressAndTestsTheConnection() {
         let app = launch()
         app.buttons["Me"].firstMatch.tap()

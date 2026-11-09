@@ -37,7 +37,7 @@ where the store, capture, sync and players meet.
 | `CanopyModel` | iOS, macOS | Value types (`Tree`, `Tag`, `Route`, `FieldObservation`, `Changeset`, `Evidence`, `Player`, `CountStatus`), `S2CellID`, positions and local frames, `CensusState` derivation, `ChangesetBuilder`, `CensusSummary`, GeoJSON reading |
 | `CanopyDesign` | iOS | Colour, type, spacing and radius tokens; `StatusBadge`, `SummaryBar`, button styles; `QuantityFormat` |
 | `CanopyStore` | iOS, macOS | `LocalStore` (SQLite: append-only log, changesets, evidence, derived tables, scan alignments) and `BlobStore` (SHA-256 named files) |
-| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR, wireframe layers and picking), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, `TreeForm` / `WireframeTree`, `ScanAlignment` / `SavedScan` (rings against a saved scan), `ARSiteFrame` / `SiteWireframes` (Gerardus sites in AR; uses CanopyReference), `Compass` (the selected tree's distance, bearing and compass), Quick Look previews |
+| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR, wireframe layers and picking), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, `TreeForm` / `WireframeTree`, `ScanAlignment` / `SavedScan` (rings against a saved scan), `ARSiteFrame` / `SiteWireframes` (Gerardus sites in AR; uses CanopyReference), `Compass` (the selected tree's distance, bearing and compass), Quick Look previews, `ScanPreview` and `ScanPreviewCache` (pictures of scans) |
 | `CanopyMap` | iOS | `MapLayers`, the `MapRenderer` protocol, `MapKitRenderer`, status presentation (word, icon, tone) |
 | `CanopySync` | iOS, macOS | `GerardusClient` protocol, `FakeGerardusClient`, `SyncCoordinator`; `GerardusEndpoint` and `GerardusStatusClient` for a real server's status page |
 | `CanopyPlayers` | iOS | `PlayerService` (Game Center sign-in, alias, trusted flag) |
@@ -416,11 +416,12 @@ time, and a request during a sync runs once more after it. **Sync now** still wo
 own.
 
 **Evidence from other devices.** A tree's evidence refs name the meshes behind its measurements. The tree sheet's
-**Evidence** section previews each one: a mesh on this device opens straight away; one recorded on another device is
-downloaded first (`GetBlob`, `AppModel.evidenceFile`), checked against its hash and kept in the blob store, then
-opened the same way, as a throwaway USDZ in Quick Look. Blobs are uploaded with the changeset that references them,
-each once a sync however many changesets name it. Gerardus keeps blobs by the same hash, inserted once (`UploadBlob`
-answers `already_stored` for bytes it has), so a scan is one blob there too.
+**Evidence** section shows each one with its picture (see *Your scans*) and previews it: a mesh on this device opens
+straight away; one recorded on another device is downloaded first (`GetBlob`, `AppModel.evidenceFile`), checked
+against its hash and kept in the blob store, then opened the same way, as a throwaway USDZ in Quick Look. Until then
+its row shows a placeholder; once it is downloaded, its picture is drawn. Blobs are uploaded with the changeset that
+references them, each once a sync however many changesets name it. Gerardus keeps blobs by the same hash, inserted
+once (`UploadBlob` answers `already_stored` for bytes it has), so a scan is one blob there too.
 
 **The Proposals tab** (`ProposalsScreen`) shows one list at a time, picked with a segmented control: Review, Yours
 and History. Each time it appears it opens on Review when other players' changes wait there and on Yours otherwise,
@@ -446,8 +447,30 @@ Other cases have their own wording:
 Tapping a row opens its tree. The tree sheet gives the same line for its open proposal.
 
 **Your scans.** Me → **Your scans** lists every evidence mesh this device recorded, newest first
-(`LocalStore.allEvidence`), one row per scan (by hash), with its tree, date, DBH, mesh size and crop radius, Preview
-and Share, and **Align rings with the scan** (see *Capture*). Scans uploaded for registration are not kept on the phone.
+(`LocalStore.allEvidence`), one row per scan (by hash), with a picture of the mesh, its tree, date, DBH, mesh size and
+crop radius, Preview and Share, **Show on map**, and **Align rings with the scan** (see *Capture*). Scans uploaded for
+registration are not kept on the phone.
+
+- **The picture** (`ScanPreview`) is the colourless mesh drawn in grey, never a photo. SceneKit renders it offscreen,
+  256 pixels square on a clear background, from a fixed three-quarter view: from the south-east, 30° above the
+  horizon, so every scan is seen from the same side. The camera is orthographic and fitted to the mesh. Normals are
+  averaged from the faces, with one light over the camera's shoulder and an ambient fill. The simulator draws it
+  without multisampling, and tests draw few and small pictures (see AGENTS.md).
+- **Drawn once.** `ScanPreviewCache` keeps each picture as a PNG named by the blob's SHA-256, in
+  `Caches/ScanPreviews/v1/`, and draws one at a time, off the main actor (`AppModel.scanPreview`). Tapping the picture
+  previews the scan, as Preview does. A mesh from another device is drawn once it has been downloaded. iOS may empty
+  Caches; a picture it removes is drawn again. Bump `ScanPreview.version` when the look changes, so old pictures are
+  drawn again. Resetting local data deletes them.
+  - A request from a row scrolled out of the list is dropped if it is still waiting, so the rows in view are not
+    kept waiting behind it.
+  - A render that comes back with nothing drawn is not kept, so it is drawn again next time.
+  - Each render runs in its own autorelease pool: without one, what SceneKit autoreleased piled up on the concurrency
+    thread, about 10 MB for each 200,000-triangle mesh.
+- **Show on map** (`AppModel.showOnMap`) switches to the Map tab, which closes any screen open over the map (such as
+  Layers → Surveyed cells), centres on the scan's tree, shows its status if the chips hide it, and selects it,
+  opening its sheet. Debug and TestFlight builds launched with
+  `-canopy.sampleScan YES` record a synthetic scan on the first fixture tree when Your scans opens with none, for UI
+  tests and the simulator.
 
 **Reviewing.** The review queue (Proposals → **Review**) lists other players' open changesets in the followed tiles
 (`ListOpenChangesets`), leaving out the player's own changes and ones they have already agreed with. **Agree**
@@ -543,7 +566,10 @@ site first if needed. It converts them from the site frame to the map with `Site
 Gerardus's trees (the `TREES` layer, `GerardusTree`) are drawn as their crown rings. Ground and sensor arrows are left out. Both renderers draw them while **Show vectors**
 is on. The canopy height grid from the aerial points is kept with the loaded area but drawn by neither renderer now: SwiftUI's MapKit has no image overlays, and the wireframe map has no flat raster yet. Everything loaded lives in memory, merged once into `AppModel.mapReference`.
 
-A screen moves the map with a `MapFocus` request (a region with its own id), which both renderers follow.
+A screen moves the map with a `MapFocus` request (a region with its own id), which both renderers follow. Another
+tab sends the player to a tree with `AppModel.showOnMap`: the Map tab moves to a region 160 m across with the tree 60 m
+above its middle, so on a phone the tree sits in the open map between the summary bar and the sheet it opens
+(`MapViewport.showing`), and selects it.
 
 The map's own steps on the main thread (making the layers, the 3D map applying them, adding its trees and sites) are
 signpost intervals (`MapTiming`), and any over 4 ms is logged at debug level; [PERFORMANCE.md](PERFORMANCE.md) has the
