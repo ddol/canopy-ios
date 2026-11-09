@@ -187,8 +187,8 @@ against it later with no AR session and no camera.
   the census tree's map position is out by Gerardus's (`VectorTreePlacement.correction`). **Save** keeps the placement
   and the corrected position with the rings. The census keeps the tree where it was: no observation moves a tree yet.
 - **Tests.** `ScanAlignmentTests` reads back a scan measured through `TrunkScan.analyse`, snaps rings to its slices
-  and checks the correction; `ScanAlignmentStoreTests` the table; `ScanAlignmentUITests` takes a synthetic scan
-  (`-canopy.seedScan`) through the screen.
+  and checks the correction; `ScanAlignmentStoreTests` the table; `ScanAlignmentModelTests` the rings coming back at
+  launch; `ScanAlignmentUITests` takes a synthetic scan (`-canopy.seedScan`) through the screen.
 
 **Site overlay.** The same view draws the loaded Gerardus sites round the player as wireframe layers
 (`SiteWireframes`: trees, buildings, streets) and the census's trees, through `CaptureSession.showWireframes`.

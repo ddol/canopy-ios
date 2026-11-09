@@ -3,7 +3,7 @@ import CanopyModel
 import SwiftUI
 
 /// Every scan this device has recorded, newest first: the colourless meshes kept as evidence for measurements (and
-/// limb tags), each with its tree, what it measured, and Preview and Share.
+/// limb tags), each with its tree, what it measured, Preview and Share, and aligning the tree's rings against it.
 struct ScansScreen: View {
     @Environment(AppModel.self) private var model
     @State private var scans: [Evidence] = []
@@ -22,6 +22,9 @@ struct ScansScreen: View {
                 Section {
                     details(scan)
                     EvidenceRow(ref: scan.blob, title: label(scan.kind))
+                    if scan.kind == .trunkScan, model.tree(scan.subjectID) != nil {
+                        AlignScanButton(scan: scan.blob, treeID: scan.subjectID)
+                    }
                 }
             }
         }
