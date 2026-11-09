@@ -37,7 +37,7 @@ where the store, capture, sync and players meet.
 | `CanopyModel` | iOS, macOS | Value types (`Tree`, `Tag`, `Route`, `FieldObservation`, `Changeset`, `Evidence`, `Player`, `CountStatus`), `S2CellID`, positions and local frames, `CensusState` derivation, `ChangesetBuilder`, `CensusSummary`, GeoJSON reading |
 | `CanopyDesign` | iOS | Colour, type, spacing and radius tokens; `StatusBadge`, `SummaryBar`, button styles; `QuantityFormat` |
 | `CanopyStore` | iOS, macOS | `LocalStore` (SQLite: append-only log, changesets, evidence, derived tables) and `BlobStore` (SHA-256 named files) |
-| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR, wireframe layers and picking), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, `TreeForm` / `WireframeTree`, `ARSiteFrame` / `SiteWireframes` (Gerardus sites in AR; uses CanopyReference), Quick Look previews, `ScanPreview` and `ScanPreviewCache` (pictures of scans) |
+| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR, wireframe layers and picking), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, `TreeForm` / `WireframeTree`, `ARSiteFrame` / `SiteWireframes` (Gerardus sites in AR; uses CanopyReference), `Compass` (the selected tree's distance, bearing and compass), Quick Look previews, `ScanPreview` and `ScanPreviewCache` (pictures of scans) |
 | `CanopyMap` | iOS | `MapLayers`, the `MapRenderer` protocol, `MapKitRenderer`, status presentation (word, icon, tone) |
 | `CanopySync` | iOS, macOS | `GerardusClient` protocol, `FakeGerardusClient`, `SyncCoordinator`; `GerardusEndpoint` and `GerardusStatusClient` for a real server's status page |
 | `CanopyPlayers` | iOS | `PlayerService` (Game Center sign-in, alias, trusted flag) |
@@ -71,7 +71,9 @@ everything on the simulator.
   launch takes half a second with that many candidates rather than eight; bump `Schema.derivation` when derivation
   changes what the tables hold.
 - **Evidence is immutable and content-addressed.** A trunk or limb scan is cropped, written as GLB, stored
-  under its SHA-256 and referenced by hash from observations and changesets.
+  under its SHA-256 and referenced by hash from observations and changesets. The hash identifies the scan: the store
+  keeps one record per hash, and saving, importing or recording a scan it already has links to what is there (see
+  [DATA-MODEL.md](DATA-MODEL.md), *One record per scan*).
 - **Sync goes through one boundary.** `GerardusClient` is the whole contract with a Gerardus server: upload
   blobs, submit changesets, read their state, and pull applied changes per L16 tile. With a server set in Settings,
   `GerardusMapClient` speaks the server's map service (see *Shared census*). Without one, `FakeGerardusClient`
@@ -122,8 +124,11 @@ slices likewise), and the result says how many it used; with fewer it falls back
 shows the point count and which source the running diameter came from.
 
 The evidence is the kept mesh (positions and indices only) re-cropped around the fitted trunk centre: the trunk
-plus 0.6 m around it, at most 2 m. A trunk's position on the map comes from the GPS fix plus the AR offset from
-the camera to the trunk (`GeoReference`), with the GPS accuracy as its uncertainty.
+plus 0.6 m around it, at most 2 m. A trunk's position on the map, like a new or moved tree's, comes from where the
+overlay is placed: through the 3DEP registration when there is one, else the session origin (the best GPS fix so
+far, less the camera's offset then) plus the trunk's AR offset from it (`GeoReference.position(ofARKit:origin:)`),
+with the fix's accuracy, 10 cm and 1 % of the distance from the origin as its uncertainty. So a tree put somewhere
+in AR is drawn there afterwards. Before the session is placed it is the current fix plus the offset from the camera.
 
 After **Finish scan** a wireframe tree (`TreeForm`, `WireframeTree`: the Mac visualiser's trunk line and crown
 rings, with the trunk's diameter) stands on the measured trunk base, and four sliders (trunk diameter, height,
@@ -163,6 +168,33 @@ floor against the site's ground grid for height). The site under the player is l
 into (`AppModel.loadVectors`, kept raw in `loadedVectors`). Tapping a tree (`pickWireframe`, a collision box round
 each tree) selects it and opens the sliders on it; a census tree so picked becomes the target. See
 GERARDUS-VECTORS.md, *In AR*.
+
+**The selected tree.** The census actions are about one tree (`FocusTree`): the one tapped, else the census tree
+chosen from the card's list, else the nearest within 60 m. Its card at the top gives its status, name, distance and
+bearing, and its wireframe is drawn in the selection orange. `TreeTracker` follows it five times a second:
+
+- **Where it is.** Once the overlay is placed, from the AR world: the camera's position, and the tree's trunk base as
+  drawn (from its pick box). Before that, from the GPS fix and the tree's map position. `Compass` turns either into
+  an east-north offset, a distance and a bearing.
+- **Which way the player faces.** The horizontal part of the camera's −z axis, which with gravity-and-heading
+  alignment is a true bearing, kept while the phone points almost straight up or down; Core Location's true heading
+  when AR is not tracking.
+- **In view.** Four points up the drawn trunk (the base, breast height, half way and the top) are projected into the
+  view. The tree comes into view when one is 12 % of the shorter side inside every edge, and stays in view while
+  one is on screen at all, so the answer does not flicker. Within 2 m it is in view whatever the camera sees.
+
+While it is out of view, `TreeCompassView` draws a top-down compass: the player at the centre with the heading up,
+the tree as an orange marker (an arrow on the rim beyond the compass's reach, 5 to 200 m, chosen to fit it) and the
+nearby census trees faint. Once it is in view, the compass gives way to **Not a tree** (`treeRejected`) and **Move**.
+Move stands the tree's wireframe at the trunk under the reticle (on the ground, a trunk's radius behind the near
+side the ray meets), or under a finger dragged across the view (`CaptureSession.lastDrag`, the mesh where it points
+or the level of the tree's base), with a line back to where it was drawn. **Place here** records `treeMoved` with the
+position placed as above, which also counts as confirming the tree. It refuses a spot in the S2 L22 cell (about 2 m)
+of another tree that is not removed (`CensusState.tree(standingAt:except:)`), since Gerardus keeps one tree per L22
+cell and would mark the move conflicted. While a move is under way the selected tree stays the one being moved, and
+choosing another from the card's list leaves it where it was. **Scan trunk** is the main button throughout;
+New tree here is a small one beside the actions. The geometry (offsets, bearings, heading, the compass's scale and
+placement, in view, the trunk's base) is tested on the Mac (`CompassTests`).
 
 The AR session pauses while the measurement sheet is up (Quick Look's AR preview needs the camera) and resumes
 without resetting, so the mesh and the scan carry on; **Keep scanning** goes back to walking round and measuring
@@ -261,7 +293,8 @@ the saved data's size and can clear it.
 If a server has no ground layer, the ground model is built from the ground and water returns instead (lowest return
 per cell, gaps filled from their neighbours).
 
-**Registration.** On a LiDAR device, Census → **Register with 3DEP** (after the player agrees to the upload) takes
+**Registration.** On a LiDAR device, Census → the overlay menu → **Register with 3DEP** (after the player agrees to
+the upload) takes
 the session's reconstructed mesh within 60 m of where the session started, thins it to one point per 10 cm cube, and
 uploads it as a scan in a z-up sensor frame (ARKit (x, y, z) → (x, −z, y), so +y points north and a north-aligned
 session has heading 0). The pose hint is the session origin's GPS position and its height above the ground. The
@@ -332,7 +365,8 @@ own.
 straight away; one recorded on another device is downloaded first (`GetBlob`, `AppModel.evidenceFile`), checked
 against its hash and kept in the blob store, then opened the same way, as a throwaway USDZ in Quick Look. Until then
 its row shows a placeholder; once it is downloaded, its picture is drawn. Blobs are uploaded with the changeset that
-references them.
+references them, each once a sync however many changesets name it. Gerardus keeps blobs by the same hash, inserted
+once (`UploadBlob` answers `already_stored` for bytes it has), so a scan is one blob there too.
 
 **Your proposals.** Me → **Your proposals** lists the player's open changesets, and History the closed ones. Each
 row gives the trees, what it changes, its state, and what it still needs in words (`ProposalStatus`).
@@ -350,8 +384,8 @@ Other cases have their own wording:
 Tapping a row opens its tree. The tree sheet gives the same line for its open proposal.
 
 **Your scans.** Me → **Your scans** lists every evidence mesh this device recorded, newest first
-(`LocalStore.allEvidence`), with a picture of the mesh, its tree, date, DBH, mesh size and crop radius, Preview and
-Share, and **Show on map**. Scans uploaded for registration are not kept on the phone.
+(`LocalStore.allEvidence`), one row per scan (by hash), with a picture of the mesh, its tree, date, DBH, mesh size and
+crop radius, Preview and Share, and **Show on map**. Scans uploaded for registration are not kept on the phone.
 
 - **The picture** (`ScanPreview`) is the colourless mesh drawn in grey, never a photo. SceneKit renders it offscreen,
   256 pixels square on a clear background, from a fixed three-quarter view: from the south-east, 30° above the

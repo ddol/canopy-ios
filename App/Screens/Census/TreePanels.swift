@@ -299,51 +299,149 @@ struct TreeSectionEditor: View {
     }
 }
 
-/// A tree picked in the AR view: what is known about it, the sliders to reshape its wireframe, and what to do next.
+/// A tree picked in the AR view: what is known about it, the sliders to reshape its wireframe, and what to do next:
+/// Not a tree and Move for a census tree in view, and Scan trunk. Its name, status, distance and bearing are on the
+/// selected tree's card at the top.
 struct SelectedTreePanel: View {
     let selection: ARTreeSelection
     @Binding var form: TreeForm
     /// Whether the player has moved a slider on this tree.
     let isAdjusted: Bool
+    /// Whether Not a tree and Move apply: a census tree, in view.
+    var canEdit = false
     var onReset: () -> Void
     var onScan: () -> Void
     var onDone: () -> Void
-    private let format = QuantityFormat()
+    var onNotATree: () -> Void = {}
+    var onMove: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            HStack(spacing: Spacing.s) {
-                if let status = selection.status {
-                    StatusBadge(status.presentation)
-                } else {
-                    StatusBadge("Gerardus", systemImage: "cube", tone: .ok)
-                }
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(selection.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text(selection.detail).font(CanopyFont.mono(.caption)).foregroundStyle(Color.canopyInkMuted)
-                        .lineLimit(2)
-                }
+            HStack(spacing: Spacing.xs) {
+                Text(selection.detail)
+                    .font(CanopyFont.mono(.caption))
+                    .foregroundStyle(Color.canopyInkMuted)
+                    .lineLimit(2)
                 Spacer(minLength: 0)
+                Button("Reset", systemImage: "arrow.uturn.backward", action: onReset)
+                    .labelStyle(.iconOnly)
+                    .disabled(!isAdjusted)
+                Button("Done", systemImage: "checkmark", action: onDone)
+                    .labelStyle(.titleAndIcon)
             }
+            .buttonStyle(.canopySecondary)
+            .font(.footnote)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("selected-tree")
             TreeFormSliders(form: $form)
+            if canEdit {
+                TreeActionsRow(canEdit: true, onNotATree: onNotATree, onMove: onMove)
+            }
+            ScanHeroButton(action: onScan)
+        }
+        .padding(Spacing.s)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.large))
+    }
+}
+
+/// The selected census tree's actions once it is in view: Not a tree takes it out, Move puts it on its true spot.
+/// New tree here sits at the end, small.
+struct TreeActionsRow: View {
+    var canEdit: Bool
+    var onNotATree: () -> Void
+    var onMove: () -> Void
+    var onNewTree: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: Spacing.s) {
+            if canEdit {
+                Button(action: onNotATree) {
+                    Label {
+                        Text("Not a tree")
+                    } icon: {
+                        Image(systemName: "xmark").foregroundStyle(StatusTone.hazard.foreground.color)
+                    }
+                }
+                .accessibilityIdentifier("tree-not-a-tree")
+                Button("Move", systemImage: "arrow.up.and.down.and.arrow.left.and.right", action: onMove)
+                    .accessibilityIdentifier("tree-move")
+            }
+            Spacer(minLength: 0)
+            if let onNewTree {
+                if canEdit {
+                    Button("New tree here", systemImage: "plus.circle", action: onNewTree)
+                        .labelStyle(.iconOnly)
+                        .accessibilityIdentifier("new-tree")
+                } else {
+                    Button("New tree here", systemImage: "plus.circle", action: onNewTree)
+                        .accessibilityIdentifier("new-tree")
+                }
+            }
+        }
+        .buttonStyle(.canopySecondary)
+        .labelStyle(.titleAndIcon)
+        .font(.footnote)
+    }
+}
+
+/// Scan trunk: the census view's main button.
+struct ScanHeroButton: View {
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Scan trunk", systemImage: "record.circle")
+                .font(.title3.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 52)
+        }
+        .buttonStyle(.canopySurvey)
+        .accessibilityIdentifier("scan-trunk")
+    }
+}
+
+/// Moving the selected tree to its true spot: its wireframe stands where the reticle points or a finger drags it,
+/// with a line back to where it was drawn, until Place here records the move.
+struct MovePanel: View {
+    let name: String
+    /// How far and which way from where it was drawn, such as "1.8 m NE of where it was".
+    let offset: String?
+    var onReticle: () -> Void
+    var onCancel: () -> Void
+    var onPlace: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text("Move " + name)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            Text("Point the reticle at the foot of its trunk and tap To reticle, or drag the tree with a finger.")
+                .font(.footnote)
+                .foregroundStyle(Color.canopyInkMuted)
+            if let offset {
+                Text(offset)
+                    .font(CanopyFont.mono(.caption))
+                    .accessibilityIdentifier("move-offset")
+            }
             HStack(spacing: Spacing.s) {
-                Button("Done", systemImage: "xmark", action: onDone)
+                Button("Cancel", systemImage: "xmark", action: onCancel)
                     .buttonStyle(.canopySecondary)
-                Button("Reset", systemImage: "arrow.uturn.backward", action: onReset)
+                Button("To reticle", systemImage: "scope", action: onReticle)
                     .buttonStyle(.canopySecondary)
-                    .disabled(!isAdjusted)
-                Button(action: onScan) {
-                    Label("Scan trunk", systemImage: "record.circle")
+                    .accessibilityIdentifier("move-to-reticle")
+                Button(action: onPlace) {
+                    Label("Place here", systemImage: "checkmark.circle")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.canopySurvey)
+                .buttonStyle(.canopyPrimary)
+                .accessibilityIdentifier("move-place")
             }
             .labelStyle(.titleAndIcon)
             .font(.footnote)
         }
         .padding(Spacing.s)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.large))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("move-panel")
     }
 }
 
@@ -357,6 +455,8 @@ struct ARTreeSelection: Equatable {
     var status: CountStatus?
     /// The shape the server or the census gives it, before any adjustment.
     var baseForm: TreeForm
+    /// Where it is on the map, for its distance and bearing by GPS.
+    var geo: GeoPoint?
 
     static let censusPrefix = "census:"
 

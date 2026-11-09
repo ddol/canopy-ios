@@ -91,6 +91,11 @@ public actor FakeGerardusClient: GerardusClient {
     /// The shared version of an entity, if it is on the shared map.
     public func version(of id: UUID) -> Int? { versions[id] }
 
+    /// The blobs uploaded, one per hash, sorted: uploading the same bytes again keeps one, as Gerardus does.
+    public func blobRefs() -> [BlobRef] {
+        blobs.keys.sorted { $0.rawValue < $1.rawValue }
+    }
+
     private func settle(_ id: UUID) throws -> Changeset {
         guard var entry = submitted[id] else { throw GerardusError.unknownChangeset(id) }
         guard entry.changeset.state.isOpen,

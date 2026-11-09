@@ -3,7 +3,8 @@ import CanopyModel
 import SwiftUI
 
 /// Every scan this device has recorded, newest first: the colourless meshes kept as evidence for measurements (and
-/// limb tags), each with a picture of the mesh, its tree, what it measured, Preview and Share, and Show on map.
+/// limb tags), each with a picture of the mesh, its tree, what it measured, Preview and Share, and Show on map. One row
+/// per scan, keyed by its hash.
 struct ScansScreen: View {
     @Environment(AppModel.self) private var model
     @State private var scans: [Evidence] = []
@@ -18,7 +19,7 @@ struct ScansScreen: View {
                     description: Text(
                         "Scan a trunk from the Census tab. Its mesh is kept here, and shared when you sync."))
             }
-            ForEach(scans) { scan in
+            ForEach(scans, id: \.blob) { scan in
                 Section {
                     details(scan)
                     EvidenceRow(ref: scan.blob, title: label(scan.kind))

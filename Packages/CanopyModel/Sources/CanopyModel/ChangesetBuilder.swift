@@ -53,6 +53,10 @@ public struct ChangesetBuilder: Sendable {
         }
         ops.append(op)
         tiles.insert(position.tile)
+        // A tree moved across a tile edge touches the tile it left too.
+        if subject.entity == .tree, let before = state.trees[subject.id] {
+            tiles.insert(before.position.tile)
+        }
         if firstChunk == nil {
             firstChunk = position.chunk
         }
