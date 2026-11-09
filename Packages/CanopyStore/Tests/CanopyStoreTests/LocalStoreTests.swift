@@ -263,3 +263,43 @@ extension LocalStore {
         #expect(census.total == 4)
     }
 }
+
+@Suite struct ScanAlignmentStoreTests {
+    /// Stands in for the app's record (CanopyCapture's `ScanAlignment`), which the store keeps as JSON.
+    struct Alignment: Codable, Equatable, Sendable {
+        var scan: BlobRef
+        var tree: UUID
+        var radii: [Double]
+        var offset: SIMD2<Double>?
+    }
+
+    let scan = BlobRef(rawValue: String(repeating: "0f", count: 32))!
+    let other = BlobRef(rawValue: String(repeating: "e1", count: 32))!
+    let tree = UUID()
+
+    @Test func anAlignmentIsKeptByScanReplacedAndKeptAcrossReopening() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "canopy-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: LocalStore? = try LocalStore(directory: directory)
+        let first = Alignment(scan: scan, tree: tree, radii: [0.3, 0.28], offset: nil)
+        let second = Alignment(scan: scan, tree: tree, radii: [0.31, 0.27, 0.25], offset: SIMD2(0.01, -0.02))
+        let older = Date(timeIntervalSince1970: 1_800_000_000)
+        try await store?.saveScanAlignment(first, scan: scan, subject: tree, savedAt: older.addingTimeInterval(60))
+        try await store?.saveScanAlignment(second, scan: scan, subject: tree, savedAt: older.addingTimeInterval(120))
+        let otherScan = Alignment(scan: other, tree: tree, radii: [0.4], offset: nil)
+        try await store?.saveScanAlignment(otherScan, scan: other, subject: tree, savedAt: older)
+        #expect(try await store?.scanAlignment(Alignment.self, scan: scan) == second)
+        store = nil
+
+        // On the phone across launches, oldest first, so the latest for a tree comes last.
+        let reopened = try LocalStore(directory: directory)
+        #expect(try await reopened.scanAlignments(Alignment.self) == [otherScan, second])
+        #expect(try await reopened.scanAlignment(Alignment.self, scan: other) == otherScan)
+        #expect(
+            try await reopened.scanAlignment(
+                Alignment.self, scan: BlobRef(rawValue: String(repeating: "aa", count: 32))!) == nil)
+
+        try await reopened.reset()
+        #expect(try await reopened.scanAlignments(Alignment.self).isEmpty)
+    }
+}

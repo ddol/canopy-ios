@@ -81,7 +81,8 @@ struct MeasurementSheet: View {
                         Text(
                             "From the wireframe you matched to the tree. Rings marked (scan) were fitted to the scan's "
                                 + "points at that height, (camera) to the trunk's edges in the camera image; ✓ ones you "
-                                + "confirmed against the tree. Not saved with the measurement yet.")
+                                + "confirmed against the tree. The rings are kept on this phone with the scan, to align again "
+                                + "from it later; the shape is not shared yet.")
                     }
                 }
 
@@ -173,7 +174,13 @@ struct MeasurementSheet: View {
             // The wireframe drawn for this tree, in AR and on the map, is now the one fitted to it.
             let key = MapLayers.censusWireframeID(saved.id)
             if let form = measurement.form { model.treeForms[key] = form }
-            if let profile = measurement.profile { model.treeProfiles[key] = profile }
+            // The rings are kept with the scan, to correct later against it (`ScanAlignmentScreen`).
+            if let profile = measurement.profile {
+                await model.saveAlignment(
+                    ScanAlignment(
+                        scan: BlobStore.reference(for: capture.glb), treeID: saved.id, profile: profile,
+                        groundHeight: capture.groundHeight))
+            }
             shareURL = try? model.shareableGLB(BlobStore.reference(for: capture.glb))
             onSaved()
         }

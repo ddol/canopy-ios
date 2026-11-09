@@ -85,11 +85,24 @@ against the tree, add a ring above or take one out.
 rings below. As the player walks round with the phone pointed up the trunk, each step moves to the trunk's edges in
 the camera image. Rings are drawn by how they were set: lime fitted to the scan, blue aligned to the camera, green
 confirmed, brown by eye. Uprights join each ring to the next, so a trunk tapers and a crown bulges. Snapped, aligned
-and confirmed rings stay put when the Shape sliders move the rest. Saving the measurement keeps the fitted shape for that tree for the session, in AR and on the
-wireframe map.
+and confirmed rings stay put when the Shape sliders move the rest. Saving the measurement keeps the rings with the scan on
+the phone, so the tree is drawn in them in AR and on the wireframe map after a relaunch too.
 
 The **Wireframes** menu's **S2 cells** layer draws the level-16 tiles round the player on the ground with short
 posts at their corners (green when surveyed) and their level-13 cells with tall blue posts.
+
+## Against a saved scan
+
+**Align rings with the scan** (the tree sheet's Evidence section, or Me → Your scans) opens a trunk scan with no AR
+and no camera: its triangles in 3D, the tree's rings and its DBH on record over them, and Gerardus's nearest tree
+within 15 m from the loaded sites, as the trunk line and crown rings with a cross at its base. It stands where the two
+map positions put it against the trunk: the census tree's (GPS and the AR offset) and Gerardus's (3DEP). When no site
+is loaded there, **Load vectors here** loads the one under the tree (with a server set).
+
+The **Gerardus tree** tab says how far its base is from the trunk, east and north. **Move onto trunk** sets it on the
+trunk, and the arrows nudge it 5 cm at a time the way they point on screen. Save keeps where it was put, and so how
+far the census tree's position is out by Gerardus's, with the scan's rings, on the phone. Nothing is sent to
+Gerardus, and the census tree is not moved yet. See ARCHITECTURE.md, *Aligning against a saved scan*.
 
 ## Available building layers
 

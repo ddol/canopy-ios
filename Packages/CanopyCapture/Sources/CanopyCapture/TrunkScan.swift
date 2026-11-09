@@ -24,12 +24,21 @@ public struct TrunkCapture: Sendable {
     /// there when it holds enough of them, else through the evidence mesh's slice. The centre is from the trunk's
     /// base (x, z). Throws when the scan has too little of the trunk at that height.
     public func fitSection(at height: Double, halfWidth: Float = 0.05) throws -> FittedCircle {
-        let analysis = TrunkAnalysis()
         let band = points.slice(atHeight: Float(height), halfWidth: halfWidth)
         let slice =
-            band.count >= analysis.minimumDepthPoints
-            ? band
-            : [-0.04, -0.02, 0, 0.02, 0.04].flatMap { evidence.slice(atHeight: Float(groundHeight + height + $0)) }
+            band.count >= TrunkAnalysis().minimumDepthPoints
+            ? band : evidence.sectionSlices(atHeight: groundHeight + height)
+        return try Self.ring(through: slice)
+    }
+
+    /// `fitSection` applied to a profile's ring: its radius and centre from the scan, marked as fitted.
+    public func snapping(_ section: TreeSection) throws -> TreeSection {
+        section.snapped(to: try fitSection(at: section.height))
+    }
+
+    /// A trunk's ring through the points of a slice: a robust circle fit, refused when the points are too few, cover
+    /// less than 60° of it, or give a diameter no trunk has. Shared by the AR session and a saved scan.
+    public static func ring(through slice: [SIMD2<Double>]) throws -> FittedCircle {
         guard slice.count >= 12 else { throw TrunkAnalysisError.notEnoughPoints(slice.count) }
         let circle: FittedCircle
         do {
@@ -40,16 +49,25 @@ public struct TrunkCapture: Sendable {
         let arcDegrees = circle.arc * 180 / .pi
         guard arcDegrees >= 60 else { throw TrunkAnalysisError.arcTooShort(degrees: arcDegrees) }
         let diameter = 2 * circle.radius
-        guard analysis.plausibleDiameters.contains(diameter) else {
+        guard TrunkAnalysis().plausibleDiameters.contains(diameter) else {
             throw TrunkAnalysisError.implausibleDiameter(diameter)
         }
         return circle
     }
+}
 
-    /// `fitSection` applied to a profile's ring: its radius and centre from the scan, marked as fitted.
-    public func snapping(_ section: TreeSection) throws -> TreeSection {
-        let circle = try fitSection(at: section.height)
-        var snapped = section
+extension Mesh {
+    /// Where the mesh crosses five horizontal planes 2 cm apart round `height` (in the mesh's frame), pooled: what a
+    /// ring is fitted to when there are no depth points there.
+    public func sectionSlices(atHeight height: Double) -> [SIMD2<Double>] {
+        [-0.04, -0.02, 0, 0.02, 0.04].flatMap { slice(atHeight: Float(height + $0)) }
+    }
+}
+
+extension TreeSection {
+    /// The ring with its radius and centre from a circle fitted to the scan, marked as fitted.
+    public func snapped(to circle: FittedCircle) -> TreeSection {
+        var snapped = self
         snapped.radius = circle.radius
         snapped.offset = circle.center
         snapped.radiusUncertainty = circle.radiusUncertainty
