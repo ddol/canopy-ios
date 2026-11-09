@@ -161,6 +161,12 @@ final class LaunchTests: XCTestCase {
         // The simulator cannot scan, so Your scans records a synthetic one on the first fixture tree.
         let app = launch(["-canopy.sampleScan", "YES"])
         waitForMap(app)
+        // A screen left open over the map, which the Map tab keeps while Me is shown.
+        app.buttons["Layers"].firstMatch.tap()
+        let surveyed = app.buttons["Surveyed cells (L16)"].firstMatch
+        XCTAssertTrue(surveyed.waitForExistence(timeout: 10))
+        surveyed.tap()
+        XCTAssertTrue(app.navigationBars["Surveyed cells"].firstMatch.waitForExistence(timeout: 10))
         app.buttons["Me"].firstMatch.tap()
         let scans = app.buttons["scans-link"].firstMatch
         scroll(app, toReveal: scans)
@@ -186,6 +192,10 @@ final class LaunchTests: XCTestCase {
         onMap.name = "Show on map"
         onMap.lifetime = .keepAlways
         add(onMap)
+        // Under the sheet is the map, not the screen that was open over it.
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(app.otherElements["summary-bar"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.navigationBars["Surveyed cells"].firstMatch.exists)
     }
 
     @MainActor

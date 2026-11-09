@@ -14,7 +14,15 @@ struct MapScreen: View {
         case gerardus
     }
 
+    /// The screens the Layers menu opens over the map.
+    enum Page: Hashable {
+        case surveyedCells
+        case serverCells
+    }
+
     @Environment(AppModel.self) private var model
+    /// The screens open over the map, so Show on map can go back to it.
+    @State private var path: [Page] = []
     @State private var selection: UUID?
     @State private var visibility = MapLayers.Visibility(tags: Features.limbTagging)
     /// The visible region, once the map has reported one; detected trees are drawn only around it.
@@ -29,7 +37,7 @@ struct MapScreen: View {
 
     var body: some View {
         let layers = layers
-        NavigationStack {
+        NavigationStack(path: $path) {
             map(layers)
                 .safeAreaInset(edge: .top) {
                     VStack(spacing: Spacing.xs) {
@@ -75,6 +83,12 @@ struct MapScreen: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         layersMenu
+                    }
+                }
+                .navigationDestination(for: Page.self) { page in
+                    switch page {
+                    case .surveyedCells: SurveyedCellsScreen(viewport: viewport ?? Self.startViewport)
+                    case .serverCells: ServerCellsScreen(viewport: viewport ?? Self.startViewport)
                     }
                 }
                 .sheet(item: selectedTree) { tree in
@@ -241,11 +255,13 @@ struct MapScreen: View {
         return format.percent(fraction, fractionDigits: fraction > 0 && fraction < 0.1 ? 1 : 0)
     }
 
-    /// Another screen asked to show a tree (`AppModel.showOnMap`, such as a scan's Show on map): go to it, draw its
-    /// status if the chips hide it, and select it.
+    /// Another screen asked to show a tree (`AppModel.showOnMap`, such as a scan's Show on map): close any screen open
+    /// over the map (the tab keeps it while another tab is shown), go to the tree, draw its status if the chips hide
+    /// it, and select it.
     private func showMapTarget() {
         guard let id = model.mapTarget else { return }
         model.mapTarget = nil
+        path.removeAll()
         guard let tree = model.tree(id) else { return }
         if tree.displayStatus != .removed { visibility.statuses.insert(tree.displayStatus) }
         focus = MapFocus(.showing(tree.position.geo))
@@ -314,11 +330,7 @@ struct MapScreen: View {
                 }
                 .accessibilityIdentifier("map-whole-city")
             }
-            NavigationLink {
-                SurveyedCellsScreen(viewport: viewport ?? Self.startViewport)
-            } label: {
-                Label("Surveyed cells (L16)", systemImage: "checkmark.square")
-            }
+            Button("Surveyed cells (L16)", systemImage: "checkmark.square") { path.append(.surveyedCells) }
             Divider()
             Section("Aerial LiDAR") {
                 Button("Load real trees in view", systemImage: "tree") {
@@ -346,11 +358,7 @@ struct MapScreen: View {
                     Task { await model.loadVectors(around: centre) }
                 }
                 .disabled(model.aerial.isWorking)
-                NavigationLink {
-                    ServerCellsScreen(viewport: viewport ?? Self.startViewport)
-                } label: {
-                    Label("Server cells (L13)", systemImage: "square.grid.2x2")
-                }
+                Button("Server cells (L13)", systemImage: "square.grid.2x2") { path.append(.serverCells) }
             }
             Section("Legend") {
                 ForEach([CountStatus.detected, .proposed, .confirmed, .verified], id: \.self) { status in

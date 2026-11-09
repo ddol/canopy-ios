@@ -368,8 +368,9 @@ Share, and **Show on map**. Scans uploaded for registration are not kept on the 
   - A render that comes back with nothing drawn is not kept, so it is drawn again next time.
   - Each render runs in its own autorelease pool: without one, what SceneKit autoreleased piled up on the concurrency
     thread, about 10 MB for each 200,000-triangle mesh.
-- **Show on map** (`AppModel.showOnMap`) switches to the Map tab, which centres on the scan's tree, shows its status
-  if the chips hide it, and selects it, opening its sheet. Debug and TestFlight builds launched with
+- **Show on map** (`AppModel.showOnMap`) switches to the Map tab, which closes any screen open over the map (such as
+  Layers → Surveyed cells), centres on the scan's tree, shows its status if the chips hide it, and selects it,
+  opening its sheet. Debug and TestFlight builds launched with
   `-canopy.sampleScan YES` record a synthetic scan on the first fixture tree when Your scans opens with none, for UI
   tests and the simulator.
 
