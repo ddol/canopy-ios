@@ -52,7 +52,8 @@ pan only what is new, and kept areas load offline), fits the georeference in a r
 Sync pushes changesets, pulls the shared map for the tiles in view and those followed before, and fills the
 review queue. Loaded trees are saved to the server's trees layer. Still to do:
 
-- **Evidence offline.** Another device's scan is downloaded only when previewed; nothing prefetches it for offline use.
+- **Evidence offline.** Another device's scan is downloaded only when previewed or aligned; nothing prefetches it
+  for offline use.
 - **Forgetting tiles.** Followed tiles are never dropped, so a sync grows with every area looked at.
 - **Verified identity.** The server trusts the player id header. It should check Game Center's identity signature
   (a server follow-up), and the app should send it.
@@ -84,9 +85,10 @@ Hidden for now (`Features.limbTagging`). To bring it back as an extension:
 - Show which areas are loaded on the map, and let a player drop one.
 - The AR overlay loads a site per L16 tile as the player walks; a city-scale walk should drop sites far behind and
   draw only what is within range of the camera as it moves, rather than within 150 m of where it was last rebuilt.
-- The wireframe shapes and ring profiles a player fits or adjusts in AR are kept for the session only: there is no
-  field observation for height, crown or a profile yet, and nothing writes to Gerardus's trees layer. Decide what a
-  fitted profile is evidence of and record it.
+- The ring profiles a player fits in AR or against a saved scan are kept on the phone with the scan
+  (`scan_alignments`), and the four-slider shapes for the session only: there is no field observation for height,
+  crown or a profile yet, and nothing writes to Gerardus's trees layer. Decide what a fitted profile is evidence of and
+  record it, and sync the alignments, with their corrected map positions, once it is.
 - Surveyed cells are kept on the phone; share them through a changeset so the server can count an area as done.
 - Merging the bumps of one crown cuts false trunks under big crowns, but detections saved to the server's trees layer
   before it stay there until that area is loaded again and the server's copy is reconciled.

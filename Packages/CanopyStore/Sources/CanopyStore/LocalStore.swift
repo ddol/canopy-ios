@@ -330,6 +330,41 @@ public actor LocalStore {
         try db.run("DELETE FROM surveyed_cells WHERE s2_l16_token = ?", [.text(cell.token)])
     }
 
+    // MARK: Scan alignments
+
+    /// Saves a tree's rings as aligned against one of its scans, replacing what was saved for that scan and tree
+    /// before. The record is the app's own (CanopyCapture's `ScanAlignment`, which the store does not depend on), kept
+    /// as JSON by the scan's blob and the tree: a scan saved twice as a new tree is listed by both trees, and each
+    /// keeps its own. On the device only, until the server has a record for them.
+    public func saveScanAlignment(
+        _ alignment: some Encodable & Sendable, scan: BlobRef, subject: UUID, savedAt: Date = .now
+    ) throws {
+        try db.run(
+            "INSERT OR REPLACE INTO scan_alignments (blob, subject_id, saved_at, payload) VALUES (?, ?, ?, ?)",
+            [
+                .text(scan.rawValue), .text(subject.uuidString), .integer(Self.milliseconds(savedAt)),
+                .text(try Self.json(alignment)),
+            ])
+    }
+
+    /// What was saved for one scan of a tree, if anything.
+    public func scanAlignment<T: Decodable & Sendable>(_ type: T.Type, scan: BlobRef, subject: UUID) throws -> T? {
+        try db.query(
+            "SELECT payload FROM scan_alignments WHERE blob = ? AND subject_id = ?",
+            [.text(scan.rawValue), .text(subject.uuidString)]
+        ) { row in
+            try CanopyJSON.decoder.decode(T.self, from: Data(row.string(0).utf8))
+        }.first
+    }
+
+    /// Every saved alignment this version can read, oldest first, so the latest for a tree comes last. A row it
+    /// cannot read (from a later version, say) is left out rather than failing the rest.
+    public func scanAlignments<T: Decodable & Sendable>(_ type: T.Type) throws -> [T] {
+        try db.query("SELECT payload FROM scan_alignments ORDER BY saved_at, rowid") { row in
+            try? CanopyJSON.decoder.decode(T.self, from: Data(row.string(0).utf8))
+        }.compactMap { $0 }
+    }
+
     /// The tiles pulled from the shared map, and the sequence to pull each from next.
     public func sharedTiles() throws -> [S2CellID: Int64] {
         let rows = try db.query("SELECT s2_l16_token, sequence FROM shared_tiles") { row in
@@ -814,6 +849,18 @@ enum Schema {
         CREATE TRIGGER evidence_no_delete BEFORE DELETE ON evidence
             BEGIN SELECT RAISE(ABORT, 'evidence is immutable'); END;
         CREATE UNIQUE INDEX evidence_blob ON evidence (blob);
+        """,
+        // 7: a tree's rings as aligned against one of its scans, by the scan's blob and the tree (a scan saved twice
+        // as a new tree before 6 is listed by both trees). On the device only.
+        """
+        CREATE TABLE scan_alignments (
+            blob TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            saved_at INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (blob, subject_id)
+        );
+        CREATE INDEX scan_alignments_subject ON scan_alignments (subject_id);
         """,
     ]
 

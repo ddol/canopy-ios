@@ -132,6 +132,34 @@ import Testing
         await #expect(throws: SQLiteError.self) { try await store.execute("DELETE FROM evidence") }
     }
 
+    /// A store from before the scan alignments opens with them: from v5, merging its duplicate scans on the way (v6),
+    /// and from v6, without running v6 again.
+    @Test(arguments: [5, 6]) func aStoreFromBeforeTheAlignmentsOpensWithThem(version: Int) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "canopy-migrate-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var evidence: [Evidence] = []
+        if version == 5 {
+            let (kept, other) = try writeDuplicateScans(at: directory, version: version)
+            evidence = [other, kept]
+        } else {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let db = try SQLiteDatabase(path: directory.appending(path: "canopy.sqlite").path)
+            for migration in Schema.migrations.prefix(version) {
+                try db.execute(migration)
+            }
+            try db.execute("PRAGMA user_version = \(version)")
+        }
+
+        let store = try LocalStore(directory: directory)
+        #expect(try await store.schemaVersion() == Schema.migrations.count)
+        #expect(try await store.allEvidence() == evidence)
+        let scan = BlobStore.reference(for: Data("trunk".utf8))
+        let tree = UUID()
+        try await store.saveScanAlignment(["radius": 0.3], scan: scan, subject: tree)
+        #expect(try await store.scanAlignment([String: Double].self, scan: scan, subject: tree) == ["radius": 0.3])
+        #expect(try await store.scanAlignments([String: Double].self) == [["radius": 0.3]])
+    }
+
     @Test func aMergeThatFailsLeavesTheStoreAsItWas() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "canopy-migrate-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }

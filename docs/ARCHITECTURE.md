@@ -36,8 +36,8 @@ where the store, capture, sync and players meet.
 |---|---|---|
 | `CanopyModel` | iOS, macOS | Value types (`Tree`, `Tag`, `Route`, `FieldObservation`, `Changeset`, `Evidence`, `Player`, `CountStatus`), `S2CellID`, positions and local frames, `CensusState` derivation, `ChangesetBuilder`, `CensusSummary`, GeoJSON reading |
 | `CanopyDesign` | iOS | Colour, type, spacing and radius tokens; `StatusBadge`, `SummaryBar`, button styles; `QuantityFormat` |
-| `CanopyStore` | iOS, macOS | `LocalStore` (SQLite: append-only log, changesets, evidence, derived tables) and `BlobStore` (SHA-256 named files) |
-| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR, wireframe layers and picking), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, `TreeForm` / `WireframeTree`, `ARSiteFrame` / `SiteWireframes` (Gerardus sites in AR; uses CanopyReference), `Compass` (the selected tree's distance, bearing and compass), Quick Look previews |
+| `CanopyStore` | iOS, macOS | `LocalStore` (SQLite: append-only log, changesets, evidence, derived tables, scan alignments) and `BlobStore` (SHA-256 named files) |
+| `CanopyCapture` | iOS (AR), macOS (geometry) | `CaptureSession` (ARKit + LiDAR, wireframe layers and picking), `Mesh`, `GLB`, `CircleFit`, `TrunkAnalysis`, `GeoReference`, `TreeForm` / `WireframeTree`, `ScanAlignment` / `SavedScan` (rings against a saved scan), `ARSiteFrame` / `SiteWireframes` (Gerardus sites in AR; uses CanopyReference), `Compass` (the selected tree's distance, bearing and compass), Quick Look previews |
 | `CanopyMap` | iOS | `MapLayers`, the `MapRenderer` protocol, `MapKitRenderer`, status presentation (word, icon, tone) |
 | `CanopySync` | iOS, macOS | `GerardusClient` protocol, `FakeGerardusClient`, `SyncCoordinator`; `GerardusEndpoint` and `GerardusStatusClient` for a real server's status page |
 | `CanopyPlayers` | iOS | `PlayerService` (Game Center sign-in, alias, trusted flag) |
@@ -133,7 +133,8 @@ in AR is drawn there afterwards. Before the session is placed it is the current 
 After **Finish scan** a wireframe tree (`TreeForm`, `WireframeTree`: the Mac visualiser's trunk line and crown
 rings, with the trunk's diameter) stands on the measured trunk base, and four sliders (trunk diameter, height,
 foliage height, foliage width) fit it to the real tree by eye before the measurement sheet; the fitted figures are
-shown there, not yet saved.
+shown there. Saving the measurement keeps the rings with the scan (see *Aligning against a saved scan*); the four-slider
+shape stays in memory.
 
 **Rings a metre apart.** The fitted tree is a stack of rings (`TreeProfile`).
 
@@ -159,6 +160,40 @@ shown there, not yet saved.
   green for confirmed rings. A ring moved by hand, snapped to the scan, confirmed or taken out stops being aligned.
 - **Tests.** The geometry is tested against rendered synthetic images of upright and leaning trunks
   (`RingAlignmentTests`, `TrunkStepsTests`).
+
+**Aligning against a saved scan.** The fitted rings are kept with the scan they were fitted over, and can be corrected
+against it later with no AR session and no camera.
+
+- **Kept.** Saving a measurement saves a `ScanAlignment`: the profile, and the ground's height in the evidence mesh's
+  frame. The store keeps it as JSON in `scan_alignments`, by the evidence blob's hash and the tree (CanopyStore does
+  not depend on CanopyCapture, so the record is the app's). At launch the latest for each tree goes into
+  `AppModel.treeProfiles`, so AR and the 3D map draw the tree in its rings. On the phone only.
+- **Opened.** **Align rings with the scan**, under each trunk scan in the tree sheet's Evidence section and in Me →
+  Your scans, opens `ScanAlignmentScreen` full screen. The GLB is read back (`GLB.File.mesh`, `SavedScan`), downloaded
+  first when another device recorded it.
+- **The frame.** The evidence mesh's frame is the AR session's moved to the trunk: x east, y up, z south, with the
+  origin on the trunk's axis at the height the scan started. The profile stands on (0, ground, 0), as it did in AR. A
+  scan with no saved ground finds it again from the mesh's near-horizontal triangles, as a scan without classified
+  floor does.
+- **Drawn.** SceneKit draws the scan as shaded triangles with their edges. Over them go the profile's rings, coloured
+  as in AR (the picked one orange), and the DBH on record in white, 1.37 m up on the trunk's axis (the evidence is
+  cropped round the DBH circle's centre). Gerardus's nearest tree within 15 m of the census tree, from the loaded sites
+  (`GerardusTree.near`), stands where the two map positions put it. Lines are drawn faintly through the mesh too.
+- **The view.** SceneKit's turntable camera orbits the trunk's axis at breast height: drag to turn, pinch to zoom, two
+  fingers to slide. The 3D map's `CameraRig` is not used: it keeps the ground under a finger from 12 m up, which suits
+  a park, not a metre of trunk.
+- **Rings.** Tap near a ring (within a finger's width of its outline on screen) or pick it from the menu.
+  - Change its height and diameter, or move its centre with arrows that follow the view.
+  - **Snap to scan** fits a circle through the mesh's slices at its height (`TrunkCapture.ring(through:)`: the same
+    fit and limits as AR uses where the depth points do not reach).
+  - **Looks right** confirms it; rings can be added or taken out, and every trunk ring snapped at once.
+  - A scan with nothing fitted yet starts from the tree's known shape with its trunk rings snapped.
+- **Gerardus's tree.** **Move onto trunk** puts its base on the trunk's; arrows nudge it. How far it moved is how far
+  the census tree's map position is out by Gerardus's (`VectorTreePlacement.correction`). **Save** keeps the placement
+  and the corrected position with the rings. The census keeps the tree where it was: no observation moves a tree yet.
+- **Tests.** `ScanAlignmentTests` reads back a scan measured through `TrunkScan.analyse`, snaps rings to its slices
+  and checks the correction; `ScanAlignmentStoreTests` the table; `ScanAlignmentModelTests` the rings coming back at
+  launch; `ScanAlignmentUITests` takes a synthetic scan (`-canopy.seedScan`) through the screen.
 
 **Site overlay.** The same view draws the loaded Gerardus sites round the player as wireframe layers
 (`SiteWireframes`: trees, buildings, streets) and the census's trees, through `CaptureSession.showWireframes`.
@@ -396,8 +431,8 @@ Other cases have their own wording:
 Tapping a row opens its tree. The tree sheet gives the same line for its open proposal.
 
 **Your scans.** Me → **Your scans** lists every evidence mesh this device recorded, newest first
-(`LocalStore.allEvidence`), one row per scan (by hash), with its tree, date, DBH, mesh size and crop radius, and Preview
-and Share. Scans uploaded for registration are not kept on the phone.
+(`LocalStore.allEvidence`), one row per scan (by hash), with its tree, date, DBH, mesh size and crop radius, Preview
+and Share, and **Align rings with the scan** (see *Capture*). Scans uploaded for registration are not kept on the phone.
 
 **Reviewing.** The review queue (Proposals → **Review**) lists other players' open changesets in the followed tiles
 (`ListOpenChangesets`), leaving out the player's own changes and ones they have already agreed with. **Agree**
