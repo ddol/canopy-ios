@@ -101,7 +101,7 @@ final class TreeTracker {
     func sample(capture: CaptureSession, location: LocationProvider) {
         let transform = capture.cameraTransform
         let camera = transform.map { SIMD3($0.columns.3.x, $0.columns.3.y, $0.columns.3.z) }
-        if let heading = transform.flatMap(Compass.heading(ofCamera:)) ?? location.heading {
+        if let heading = Compass.heading(camera: transform, compass: location.heading) {
             set(\.heading, heading.rounded())
         }
         let here = location.geoPoint

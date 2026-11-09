@@ -41,6 +41,14 @@ public enum Compass {
         return bearing(of: forward)
     }
 
+    /// The heading to show, from the camera's pose while AR tracks, else from the compass (Core Location's true
+    /// heading). Nil, so the last heading stays, when the camera points almost straight up or down: Core Location
+    /// follows the phone's top edge in portrait, which in landscape is a quarter turn from where the player faces.
+    public static func heading(camera transform: simd_float4x4?, compass: Double?) -> Double? {
+        guard let transform else { return compass }
+        return heading(ofCamera: transform)
+    }
+
     /// Which way to turn to face a tree.
     public enum Direction: Equatable, Sendable {
         case ahead

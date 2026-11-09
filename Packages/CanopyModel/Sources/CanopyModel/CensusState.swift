@@ -127,6 +127,18 @@ public struct CensusState: Hashable, Sendable {
         return copy
     }
 
+    /// A tree other than `id`, not removed, that stands in the S2 L22 cell (`TreeName.level`, about 2 m across) of
+    /// `point`. Gerardus keeps one tree per L22 cell: a change that puts a second tree in one conflicts when it is
+    /// applied.
+    public func tree(standingAt point: GeoPoint, except id: UUID? = nil) -> Tree? {
+        let cell = S2CellID(point, level: TreeName.level)
+        let chunk = cell.chunk
+        return trees.values.first { tree in
+            tree.id != id && tree.meta.chunk == chunk && tree.effectiveStatus != .removed
+                && S2CellID(tree.position.geo, level: TreeName.level) == cell
+        }
+    }
+
     private mutating func update(tree id: UUID, _ change: (inout Tree) -> Void) {
         guard var tree = trees[id] else { return }
         change(&tree)

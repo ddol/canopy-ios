@@ -82,7 +82,8 @@ the compass gives way to two buttons for a census tree:
 - **Move** for one drawn a little off: its wireframe stands at the trunk under the reticle (or where it was drawn),
   **To reticle** moves it there again, and dragging a finger across the view moves it under the finger. A line on the
   ground runs back to where it was. **Place here** proposes the new position, placed as a new tree is, and counts as
-  confirming it.
+  confirming it. A spot another tree already holds (the same S2 L22 cell, about 2 m across) is refused, since the
+  map keeps one tree to each.
 
 **Scan trunk** is the main button at all times, and measures the target. New tree here is the small button beside
 Not a tree and Move.

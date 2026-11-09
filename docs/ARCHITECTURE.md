@@ -187,7 +187,10 @@ nearby census trees faint. Once it is in view, the compass gives way to **Not a 
 Move stands the tree's wireframe at the trunk under the reticle (on the ground, a trunk's radius behind the near
 side the ray meets), or under a finger dragged across the view (`CaptureSession.lastDrag`, the mesh where it points
 or the level of the tree's base), with a line back to where it was drawn. **Place here** records `treeMoved` with the
-position placed as above, which also counts as confirming the tree. **Scan trunk** is the main button throughout;
+position placed as above, which also counts as confirming the tree. It refuses a spot in the S2 L22 cell (about 2 m)
+of another tree that is not removed (`CensusState.tree(standingAt:except:)`), since Gerardus keeps one tree per L22
+cell and would mark the move conflicted. While a move is under way the selected tree stays the one being moved, and
+choosing another from the card's list leaves it where it was. **Scan trunk** is the main button throughout;
 New tree here is a small one beside the actions. The geometry (offsets, bearings, heading, the compass's scale and
 placement, in view, the trunk's base) is tested on the Mac (`CompassTests`).
 

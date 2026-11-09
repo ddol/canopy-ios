@@ -73,6 +73,22 @@ import Testing
         #expect(state.trees[tree.id]?.position.geo == Sample.windmill)
     }
 
+    @Test func aMoveOntoAnotherTreesL22CellFindsThatTree() throws {
+        // Gerardus keeps one live tree per L22 cell (about 2 m across), so a move there would conflict when applied.
+        let other = Sample.detectedTree(at: Sample.windmill)
+        let state = CensusState(trees: [tree, other])
+        let beside = LocalFrame(origin: Sample.windmill).geoPoint(of: ENU(east: 0.2, north: 0.2, up: 0)).point
+        #expect(S2CellID(beside, level: TreeName.level) == S2CellID(Sample.windmill, level: TreeName.level))
+        #expect(state.tree(standingAt: beside, except: tree.id)?.id == other.id)
+        // Its own cell does not count, nor a cell nobody stands in.
+        #expect(state.tree(standingAt: tree.position.geo, except: tree.id) == nil)
+        let away = LocalFrame(origin: Sample.windmill).geoPoint(of: ENU(east: 30, north: 0, up: 0)).point
+        #expect(state.tree(standingAt: away, except: tree.id) == nil)
+        // Nor a tree that is not one.
+        let rejected = state.applying(Sample.observation(.treeRejected(treeID: other.id)))
+        #expect(rejected.tree(standingAt: beside, except: tree.id) == nil)
+    }
+
     @Test func aMoveSurvivesBeingStoredAsJSON() throws {
         let kind = FieldObservation.Kind.treeMoved(
             treeID: tree.id,

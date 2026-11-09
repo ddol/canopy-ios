@@ -214,9 +214,10 @@ struct LiDARCensusView: View {
 
     // MARK: The selected tree
 
-    /// The census tree chosen from the list, else the nearest one.
+    /// The census tree being moved, else the one chosen from the list, else the nearest one. A move holds on to its
+    /// tree, so walking to its true spot does not make another tree the nearest under it.
     private var target: Tree? {
-        model.tree(targetID).flatMap { $0.effectiveStatus == .removed ? nil : $0 } ?? nearby.first?.0
+        model.tree(move?.treeID ?? targetID).flatMap { $0.effectiveStatus == .removed ? nil : $0 } ?? nearby.first?.0
     }
 
     /// The tree the census actions are about: the tapped one, else the target.
@@ -258,8 +259,9 @@ struct LiDARCensusView: View {
         nearby = model.census.trees(near: here, within: 60, limit: 20)
     }
 
-    /// A tree chosen from the card's list becomes the target.
+    /// A tree chosen from the card's list becomes the target, leaving any move of another where it was.
     private func choose(_ tree: Tree) {
+        if move?.treeID != tree.id { endMove() }
         deselect()
         targetID = tree.id
     }
@@ -1137,6 +1139,14 @@ struct LiDARCensusView: View {
             }
         guard let position = placed else {
             notice = "Waiting for GPS and AR tracking."
+            return
+        }
+        // The shared map keeps one tree to each L22 cell, about 2 m across: a move into one another tree holds would
+        // conflict when it is applied, and the tree would jump back.
+        if let other = model.census.tree(standingAt: position.geo, except: tree.id) {
+            notice =
+                other.name + " already stands there, and the map keeps one tree to every 2 m square. If they are the "
+                + "same tree, cancel and mark this one Not a tree."
             return
         }
         let distance = simd_length(Compass.offset(from: move.from, to: move.base))

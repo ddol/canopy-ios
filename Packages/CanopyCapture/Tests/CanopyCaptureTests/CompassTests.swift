@@ -97,6 +97,18 @@ import simd
         #expect(Compass.heading(ofCamera: camera(looking: SIMD3(0.05, -1, 0))) == nil)
     }
 
+    @Test func theCompassStandsInOnlyWhileARIsNotTracking() {
+        // Tracking: the camera's heading, whatever the compass says.
+        #expect(
+            Compass.heading(camera: camera(looking: SIMD3(1, 0, 0)), compass: 10).map { abs($0 - 90) < 1e-4 } == true)
+        // Tracking but looking straight down: no new heading, so the last one stays. Core Location's heading follows
+        // the phone's top edge in portrait, which in landscape is a quarter turn off.
+        #expect(Compass.heading(camera: camera(looking: SIMD3(0, -1, 0)), compass: 10) == nil)
+        // Not tracking: the compass.
+        #expect(Compass.heading(camera: nil, compass: 10) == 10)
+        #expect(Compass.heading(camera: nil, compass: nil) == nil)
+    }
+
     // MARK: The compass
 
     @Test func theRangeFitsTheTreeWithRoomToSpare() {
@@ -199,5 +211,20 @@ import simd
         #expect(abs(enu.north - 4) < 0.001)
         // The fix's 4 m with the AR offset's 0.1 m and 1 % of the 5 m from the origin.
         #expect(abs(position.covariance.horizontalSigma - (16 + 0.15 * 0.15).squareRoot()) < 1e-9)
+    }
+
+    @Test func aTreePlacedThroughTheSessionOriginIsDrawnWhereItWasPut() {
+        // The overlay draws census trees through a GPS-placed site frame (`ARSiteFrame(origin:…)`): a point placed on
+        // the map through the same session origin comes back to where it was put in AR.
+        let siteOrigin = LocalFrame(origin: stowLake).geoPoint(of: ENU(east: -40, north: 25, up: 0)).point
+        let georeference = SiteOverlayTests.georeference(about: siteOrigin)
+        let frame = ARSiteFrame(
+            origin: stowLake, georeference: georeference, arGroundAtOrigin: -1.5, siteGroundAtOrigin: 12)
+        let put = SIMD3<Float>(7.5, -1.5, -18)
+        let placed = GeoReference.position(ofARKit: put, origin: stowLake, accuracy: 5)
+        let site = frame.site(of: placed.geo)
+        let drawn = frame.arkit(SIMD3<Double>(site.x, site.y, 12))
+        #expect(abs(drawn.x - put.x) < 0.01)
+        #expect(abs(drawn.z - put.z) < 0.01)
     }
 }
