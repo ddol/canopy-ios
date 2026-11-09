@@ -7,9 +7,9 @@ public enum LocalStoreError: Error, Equatable {
     case unknownChangeset(UUID)
 }
 
-/// The app's local data: an append-only observation log, the changesets that share it, immutable evidence,
-/// the aerial base layer, the shared map pulled from a Gerardus server, and current-state tables derived from all of
-/// those.
+/// The app's local data: an append-only observation log, the changesets that share it, immutable evidence (one
+/// record per scan, by hash), the aerial base layer, the shared map pulled from a Gerardus server, and current-state
+/// tables derived from all of those.
 ///
 /// Every write re-derives the current state (`CensusState.derive`) and brings the `trees` and `tags` tables up to
 /// date in the same transaction, so the tables always match the log. Opening a store re-derives too, and rewrites
@@ -139,7 +139,7 @@ public actor LocalStore {
         return states.map { states in all.filter { states.contains($0.state) } } ?? all
     }
 
-    /// Every evidence record on this device (this device's scans), newest first.
+    /// Every evidence record on this device (this device's scans), newest first: one per scan.
     public func allEvidence() throws -> [Evidence] {
         try db.query("SELECT payload FROM evidence ORDER BY created_at DESC, rowid DESC") { row in
             try CanopyJSON.decoder.decode(Evidence.self, from: Data(row.string(0).utf8))
@@ -153,6 +153,13 @@ public actor LocalStore {
         ) { row in
             try CanopyJSON.decoder.decode(Evidence.self, from: Data(row.string(0).utf8))
         }
+    }
+
+    /// The record of the scan with this hash (the SHA-256 of its GLB bytes), if this device has one.
+    public func evidence(hash: BlobRef) throws -> Evidence? {
+        try db.query("SELECT payload FROM evidence WHERE blob = ?", [.text(hash.rawValue)]) { row in
+            try CanopyJSON.decoder.decode(Evidence.self, from: Data(row.string(0).utf8))
+        }.first
     }
 
     /// The aerial base layer, by id.
@@ -252,12 +259,19 @@ public actor LocalStore {
     }
 
     /// Records an observation and the changeset that shares it, in one transaction.
+    ///
+    /// Recording a scan (`FieldObservation.Kind.scan`) that an observation in the log already records adds nothing
+    /// while that observation stands (its changeset is open or applied): it and its changeset are returned instead, so
+    /// saving one scan twice is one measurement. A scan whose changeset was rejected or conflicted can be recorded again.
     @discardableResult
     public func record(
         _ kind: FieldObservation.Kind, by player: PlayerID, at date: Date = .now
     ) throws
         -> (observation: FieldObservation, changeset: Changeset)
     {
+        if let scan = kind.scan, let recorded = try recorded(scan) {
+            return recorded
+        }
         let subject = kind.subject
         let chunk: S2CellID
         switch kind {
@@ -265,7 +279,7 @@ public actor LocalStore {
             chunk = tree.position.chunk
         case .tagPlaced(let tag):
             chunk = tag.point.position.chunk
-        case .treeConfirmed(let id), .treeRejected(let id), .trunkMeasured(let id, _, _, _):
+        case .treeConfirmed(let id), .treeRejected(let id), .trunkMeasured(let id, _, _, _), .treeMoved(let id, _):
             guard let tree = current.trees[id] else { throw LocalStoreError.unknownSubject(subject.id) }
             chunk = tree.position.chunk
         }
@@ -291,20 +305,17 @@ public actor LocalStore {
         return (observation, changeset)
     }
 
-    /// Stores an evidence mesh and its record. The data must hash to `evidence.blob`.
-    public func addEvidence(_ evidence: Evidence, data: Data) throws {
+    /// Stores a scan: its mesh and its evidence record. The data must hash to `evidence.blob`.
+    ///
+    /// A scan is identified by its hash, so saving or importing one this device already has adds no record: the one
+    /// already stored is returned, and callers link to it (its `subjectID` is the tree or tag the scan is about).
+    /// Otherwise the new record is returned.
+    @discardableResult
+    public func addEvidence(_ evidence: Evidence, data: Data) throws -> Evidence {
         try blobs.put(data, expecting: evidence.blob)
-        try db.run(
-            """
-            INSERT INTO evidence (id, created_at, player_id, s2_l19_token, blob, subject_id, kind, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                .text(evidence.id.uuidString), .integer(Self.milliseconds(evidence.meta.createdAt)),
-                .text(evidence.meta.playerID.rawValue), .text(evidence.meta.chunk.token), .text(evidence.blob.rawValue),
-                .text(evidence.subjectID.uuidString), .text(evidence.kind.rawValue), .text(try Self.json(evidence)),
-            ]
-        )
+        if let stored = try self.evidence(hash: evidence.blob) { return stored }
+        try Self.insert(evidence, in: db)
+        return evidence
     }
 
     // MARK: The shared map
@@ -535,6 +546,19 @@ public actor LocalStore {
         derived = (inputs, next)
     }
 
+    /// The first observation in the log that records `scan` and still stands (its changeset is open or applied), with
+    /// its changeset.
+    private func recorded(_ scan: BlobRef) throws -> (observation: FieldObservation, changeset: Changeset)? {
+        for observation in inputs.observations where observation.kind.scan == scan {
+            guard let id = observation.changesetID, let state = inputs.changesetStates[id],
+                state.isOpen || state == .applied,
+                let changeset = try changesets().first(where: { $0.id == id })
+            else { continue }
+            return (observation, changeset)
+        }
+        return nil
+    }
+
     /// What wrote the `trees` and `tags` tables last, or nil before any stamp.
     static func derivedStamp(_ db: SQLiteDatabase) throws -> String? {
         try db.query("SELECT value FROM store_meta WHERE key = 'derived'") { $0.string(0) }.first
@@ -650,7 +674,7 @@ public actor LocalStore {
         }
     }
 
-    private static func insert(_ observation: FieldObservation, in db: SQLiteDatabase) throws {
+    static func insert(_ observation: FieldObservation, in db: SQLiteDatabase) throws {
         try db.run(
             """
             INSERT INTO observations (id, created_at, player_id, s2_l19_token, version, kind, subject_id, changeset_id, payload)
@@ -666,7 +690,21 @@ public actor LocalStore {
         )
     }
 
-    private static func insert(_ changeset: Changeset, in db: SQLiteDatabase) throws {
+    static func insert(_ evidence: Evidence, in db: SQLiteDatabase) throws {
+        try db.run(
+            """
+            INSERT INTO evidence (id, created_at, player_id, s2_l19_token, blob, subject_id, kind, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                .text(evidence.id.uuidString), .integer(milliseconds(evidence.meta.createdAt)),
+                .text(evidence.meta.playerID.rawValue), .text(evidence.meta.chunk.token), .text(evidence.blob.rawValue),
+                .text(evidence.subjectID.uuidString), .text(evidence.kind.rawValue), .text(try json(evidence)),
+            ]
+        )
+    }
+
+    static func insert(_ changeset: Changeset, in db: SQLiteDatabase) throws {
         try db.run(
             """
             INSERT INTO changesets (id, created_at, player_id, s2_l19_token, state, s2_l16_tokens, payload, updated_at)
@@ -816,6 +854,26 @@ enum Schema {
             s2_l16_token TEXT PRIMARY KEY,
             payload TEXT NOT NULL
         );
+        """,
+        // 6: one evidence record per scan. A scan is identified by its hash, the SHA-256 of its GLB bytes (`blob`), so
+        // records with the same blob are one scan saved more than once (Save tapped twice): the first record is kept,
+        // the others go, and no second record can be added. Observations, trees, tags and changesets name scans by
+        // hash, so they all still point at the one kept. The observations themselves are append-only and stay.
+        // Numbering each scan's records in one pass keeps this quick with thousands of scans: it runs at launch, on
+        // the main thread, and a query comparing every record with every other took seconds there.
+        """
+        DROP TRIGGER evidence_no_delete;
+        DELETE FROM evidence WHERE rowid IN (
+            SELECT duplicate FROM (
+                SELECT rowid AS duplicate,
+                    row_number() OVER (PARTITION BY blob ORDER BY created_at, rowid) AS position
+                FROM evidence
+            )
+            WHERE position > 1
+        );
+        CREATE TRIGGER evidence_no_delete BEFORE DELETE ON evidence
+            BEGIN SELECT RAISE(ABORT, 'evidence is immutable'); END;
+        CREATE UNIQUE INDEX evidence_blob ON evidence (blob);
         """,
     ]
 

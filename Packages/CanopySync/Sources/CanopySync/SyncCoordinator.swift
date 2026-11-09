@@ -6,6 +6,9 @@ import Foundation
 /// For each open local changeset: if the server has not seen it, upload the blobs it references and submit
 /// it; otherwise take the server's state and approvals. The result is the changesets that changed, for the
 /// caller to save.
+///
+/// Blobs are scans named by their hash, so each is uploaded at most once a sync, however many changesets name it (a
+/// scan saved twice before saves were deduplicated has two).
 public struct SyncCoordinator: Sendable {
     public let client: any GerardusClient
 
@@ -16,6 +19,7 @@ public struct SyncCoordinator: Sendable {
     public struct Report: Hashable, Sendable {
         public var submitted: Int = 0
         public var updated: [Changeset] = []
+        /// The scans uploaded, each counted once.
         public var blobsUploaded: Int = 0
         /// The open changesets the server has after this sync: ones it already knew and ones just submitted.
         public var known: Set<UUID> = []
@@ -30,6 +34,7 @@ public struct SyncCoordinator: Sendable {
         blob: @Sendable (BlobRef) async throws -> Data
     ) async throws -> Report {
         var report = Report()
+        var uploaded: Set<BlobRef> = []
         let open = local.filter(\.state.isOpen)
         let known = Dictionary(
             try await client.changesets(open.map(\.id)).map { ($0.id, $0) },
@@ -40,7 +45,7 @@ public struct SyncCoordinator: Sendable {
             if let existing = known[changeset.id] {
                 remote = existing
             } else {
-                for ref in changeset.referencedBlobs {
+                for ref in changeset.referencedBlobs where uploaded.insert(ref).inserted {
                     try await client.uploadBlob(try await blob(ref), ref: ref)
                     report.blobsUploaded += 1
                 }

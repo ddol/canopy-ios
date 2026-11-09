@@ -156,6 +156,35 @@ Evidence is immutable: a cropped, colourless mesh stored as a GLB blob and named
 
 The GLB holds vertex positions and triangle indices only: no normals, colours, textures or images.
 
+### One record per scan
+
+A scan is identified by its hash, `blob`: the SHA-256 of the GLB bytes, which is already the blob's name on the phone
+and on a Gerardus server. Canopy hashes the bytes rather than a canonical form of the mesh, because one capture cannot
+give two different sets of bytes:
+
+- the GLB writer is deterministic (sorted JSON keys, fixed layout), so a mesh always encodes the same way;
+- a scan is encoded once, at **Finish scan**; saving it, syncing it and downloading it again (`GetBlob`, checked
+  against the hash) all move those same bytes;
+- **Keep scanning** and finishing again measures a mesh that has grown since, which is a different scan.
+
+If the writer ever changes, old scans keep the bytes they were stored with, so that cannot make a duplicate either.
+
+So records with the same hash are the same scan saved twice, and the store keeps one per hash:
+
+- `LocalStore.addEvidence` returns the record already stored for the hash instead of adding one. Its `subjectID` says
+  which tree or tag the scan is about.
+- `LocalStore.record` returns the observation that already records the scan (`FieldObservation.Kind.scan`), with its
+  changeset, instead of appending another, while that observation stands (its changeset is open or applied). A scan
+  whose measurement was rejected or conflicted can be recorded again.
+- The app saves a scan once at a time, and saving one already saved returns the tree (or tag) it is about
+  (`AppModel.saveTrunkMeasurement`, `placeTag`), so Save tapped twice adds no second tree either.
+- Schema v6 merged the duplicates older versions let in: the first record of each scan is kept and the others
+  deleted, and a unique index on `evidence.blob` keeps it that way. Observations, trees, tags and changesets name
+  scans by hash, so they still point at the kept record. The observations are append-only and stay, and so do their
+  changesets: a scan saved twice for one tree before v6 has two proposals, the second changing only the tree's
+  status. One saved twice as a new tree made two trees that both list it; the record names the first, and the
+  second is a duplicate tree for players to mark Not a tree. Trees are not merged.
+
 ## Observations
 
 A `FieldObservation` is something a player saw or did. (It is not called `Observation` because that name
@@ -165,9 +194,10 @@ shares it, and a `kind`:
 
 | Kind | From |
 |---|---|
-| `treeConfirmed(treeID)` | Census → Confirm tree |
+| `treeConfirmed(treeID)` | Confirm tree, on a tree's sheet and in the list without LiDAR |
 | `treeAdded(Tree)` | Census → New tree here |
 | `treeRejected(treeID)` | Census → Not a tree |
+| `treeMoved(treeID, position)` | Census → Move → Place here: the tree's true spot, placed in AR |
 | `trunkMeasured(treeID, dbh, lean, evidence)` | Census → Scan trunk |
 | `tagPlaced(Tag)` | Tag |
 
@@ -187,7 +217,9 @@ drop out of both folds, which is how a rejected change disappears. An applied ob
 shared map already has is skipped, since the server's copy (with its version) already includes it.
 
 Folding an observation sets the status it argues for: confirm → `confirmed`, add → `confirmed`, not a tree →
-`removed`, measure → `verified`; a placed tag → `confirmed`.
+`removed`, move → `confirmed` (a verified tree stays verified), measure → `verified`; a placed tag → `confirmed`. A
+move also sets the tree's position and its L19 chunk; its changeset names the tile it left as well as the one it
+moved to when they differ.
 
 ## Changesets
 
@@ -243,12 +275,13 @@ except those a player has observed (see docs/ARCHITECTURE.md, *Aerial data and r
 a thin wrapper, no ORM). The database is `Application Support/Canopy/canopy.sqlite` (WAL mode); blobs are in
 `Application Support/Canopy/blobs/`. Both use iOS file protection
 (`completeUntilFirstUserAuthentication`). The schema is versioned with `PRAGMA user_version`. v2 renamed the v1 S2
-columns (`cell`, `cells`, `tile`) to level-named ones, and v3 added the shared map.
+columns (`cell`, `cells`, `tile`) to level-named ones, v3 added the shared map, and v6 left one evidence record per
+scan (see *One record per scan*).
 
 | Table | Contents | Mutability |
 |---|---|---|
 | `observations` | `seq` (log order), id, created_at (ms), player_id, s2_l19_token, version, kind, subject_id, changeset_id, `payload` (JSON) | **Append-only**: triggers abort any `UPDATE` or `DELETE` |
-| `evidence` | id, created_at, player_id, s2_l19_token, blob (SHA-256), subject_id, kind, `payload` | **Immutable**: same triggers |
+| `evidence` | id, created_at, player_id, s2_l19_token, blob (SHA-256, unique: one row per scan), subject_id, kind, `payload` | **Immutable**: same triggers |
 | `changesets` | id, created_at, player_id, s2_l19_token, state, s2_l16_tokens (space-separated), `payload`, updated_at | State and approvals change with sync |
 | `candidates` | The aerial base layer, one JSON `TreeCandidate` per row | Replaced on import |
 | `shared` | The shared map as last pulled: id, kind, version, s2_l16_token (indexed), created_by, created_at, `fields` (the entity's shared fields as JSON) | Rewritten by pulls |
@@ -257,10 +290,11 @@ columns (`cell`, `cells`, `tile`) to level-named ones, and v3 added the shared m
 
 Every write runs in one transaction that also re-derives the state (`CensusState.derive`) and rewrites
 `trees` and `tags`, so the derived tables always match the log; opening the store re-derives too.
-`LocalStore.record(_:by:)` appends an observation and the changeset built from it atomically.
+`LocalStore.record(_:by:)` appends an observation and the changeset built from it atomically; recording a scan
+whose observation still stands returns that observation and its changeset instead (see *One record per scan*).
 
 The blob store names each file by its SHA-256 (`blobs/ab/cdef…`), checks the hash on write
-(`put(_:expecting:)`) and on read, and never overwrites.
+(`put(_:expecting:)`) and on read, and never overwrites, so a scan's mesh is kept once however often it is put.
 
 The debug **Reset local data** action deletes the database files and the blob folder, then recreates an empty
 store.

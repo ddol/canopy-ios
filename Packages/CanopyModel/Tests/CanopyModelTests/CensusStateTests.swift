@@ -46,6 +46,60 @@ import Testing
         }
     }
 
+    @Test func aPendingMoveShowsTheTreeAtItsNewPlaceAsProposed() throws {
+        let moved = LocalFrame(origin: tree.position.geo).geoPoint(of: ENU(east: -2, north: 1.5, up: 0)).point
+        let position = Position(geo: moved, covariance: .isotropic(horizontal: 3, vertical: 3))
+        let observation = Sample.observation(.treeMoved(treeID: tree.id, position: position))
+        let state = CensusState.derive(
+            base: [tree], observations: [observation], changesetStates: [observation.changesetID!: .pending])
+        let derived = try #require(state.trees[tree.id])
+        #expect(derived.position == position)
+        #expect(derived.meta.chunk == moved.chunk)
+        #expect(derived.countStatus == .detected)
+        #expect(derived.proposedStatus == .confirmed)
+        #expect(derived.displayStatus == .proposed)
+    }
+
+    @Test func movingAVerifiedTreeKeepsItVerified() throws {
+        var verified = tree
+        verified.countStatus = .verified
+        let observation = Sample.observation(
+            .treeMoved(
+                treeID: tree.id,
+                position: Position(geo: Sample.windmill, covariance: .isotropic(horizontal: 1, vertical: 1))
+            ))
+        let state = CensusState(trees: [verified]).applying(observation)
+        #expect(state.trees[tree.id]?.countStatus == .verified)
+        #expect(state.trees[tree.id]?.position.geo == Sample.windmill)
+    }
+
+    @Test func aMoveOntoAnotherTreesL22CellFindsThatTree() throws {
+        // Gerardus keeps one live tree per L22 cell (about 2 m across), so a move there would conflict when applied.
+        let other = Sample.detectedTree(at: Sample.windmill)
+        let state = CensusState(trees: [tree, other])
+        let beside = LocalFrame(origin: Sample.windmill).geoPoint(of: ENU(east: 0.2, north: 0.2, up: 0)).point
+        #expect(S2CellID(beside, level: TreeName.level) == S2CellID(Sample.windmill, level: TreeName.level))
+        #expect(state.tree(standingAt: beside, except: tree.id)?.id == other.id)
+        // Its own cell does not count, nor a cell nobody stands in.
+        #expect(state.tree(standingAt: tree.position.geo, except: tree.id) == nil)
+        let away = LocalFrame(origin: Sample.windmill).geoPoint(of: ENU(east: 30, north: 0, up: 0)).point
+        #expect(state.tree(standingAt: away, except: tree.id) == nil)
+        // Nor a tree that is not one.
+        let rejected = state.applying(Sample.observation(.treeRejected(treeID: other.id)))
+        #expect(rejected.tree(standingAt: beside, except: tree.id) == nil)
+    }
+
+    @Test func aMoveSurvivesBeingStoredAsJSON() throws {
+        let kind = FieldObservation.Kind.treeMoved(
+            treeID: tree.id,
+            position: Position(geo: Sample.windmill, covariance: .isotropic(horizontal: 2, vertical: 2)))
+        let decoded = try CanopyJSON.decoder.decode(
+            FieldObservation.Kind.self, from: CanopyJSON.encoder.encode(kind))
+        #expect(decoded == kind)
+        #expect(kind.name == "treeMoved")
+        #expect(kind.subject.id == tree.id)
+    }
+
     @Test func measurementIsVisibleAtOnceAndVerifiesWhenApplied() throws {
         let confirm = Sample.observation(.treeConfirmed(treeID: tree.id))
         let measure = Sample.observation(
