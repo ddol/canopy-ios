@@ -117,7 +117,6 @@ extension AppModel {
             let timing = Self.describe(timed, total: ContinuousClock.now - start)
             Self.aerialLog.info("Loaded \(result.candidates.count) trees. \(timing, privacy: .public)")
             let format = QuantityFormat()
-            if !result.usedOSM { detectedTiles.formUnion(result.tiles) }
             var message =
                 "\(format.count(result.candidates.count)) trees from aerial LiDAR in the \(result.tiles.count) tiles "
                 + "round tile \(tile.familyDisplay)"
@@ -146,15 +145,21 @@ extension AppModel {
 
     /// Saves the trees found in a load to the server's trees layer, so they are on the shared map and players can
     /// confirm them. Trees found with OpenStreetMap stay on the phone: the shared layer takes nothing from it. Returns
-    /// what to tell the player, or nil when there is nothing to say.
+    /// what to tell the player, or nil when there is nothing to say. The tiles count as detected in full
+    /// (`detectedTiles`) once the server has their trees, or when none were found: a tile whose trees did not reach
+    /// the server is left for Detect every park tile in full to do again.
     func saveDetectedTrees(_ result: AerialTrees.SiteResult) async -> String? {
-        guard let client = mapClient, !result.candidates.isEmpty else { return nil }
+        guard let client = mapClient, !result.candidates.isEmpty else {
+            if !result.usedOSM { detectedTiles.formUnion(result.tiles) }
+            return nil
+        }
         guard !result.usedOSM else { return "They were found with OpenStreetMap, so they stay on this phone." }
         let version = Bundle.main.object(forInfoDictionaryKey: "CanopyVersion") as? String ?? "dev"
         do {
             let saved = try await client.importDetectedTrees(
                 result.candidates, source: result.candidates[0].source ?? "USGS 3DEP aerial LiDAR",
                 tiles: result.tiles, detector: "Canopy \(version) TreeDetector, 1 m voxels")
+            detectedTiles.formUnion(result.tiles)
             let format = QuantityFormat()
             return saved.created == 0
                 ? "The server already has them."

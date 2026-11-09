@@ -288,17 +288,26 @@ public struct GerardusMapClient: GerardusClient {
         public var refused: [String] = []
     }
 
-    /// Saves trees found in aerial LiDAR to the trees layer as detected, in one changeset the server applies at once.
-    /// Idempotent: candidates already saved, or in an occupied L22 cell, are skipped. The server refuses the whole
-    /// request when `source` mentions OpenStreetMap or says the candidates are for checking only.
+    /// How many trees one ImportDetectedTrees may carry.
+    public static let importBatch = 20_000
+
+    /// Saves trees found in aerial LiDAR to the trees layer as detected, in one changeset the server applies at once
+    /// for each `importBatch` of them. Idempotent: candidates already saved, or in an occupied L22 cell, are skipped.
+    /// The server refuses the whole request when `source` mentions OpenStreetMap or says the candidates are for
+    /// checking only.
+    ///
+    /// `tiles` are the tiles the detection covered in full. Only the last call names them: the server records each
+    /// tile named as detected in full when the call that names it arrives, so naming them in every call would leave
+    /// them marked complete, with only part of their trees, if a later call failed. A call that names no tile is taken
+    /// as unchecked, and records nothing.
     public func importDetectedTrees(
         _ candidates: [TreeCandidate], source: String, tiles: Set<S2CellID>, detector: String
     ) async throws -> ImportResult {
         var total = ImportResult()
-        // The server takes at most 20 000 a call.
-        for start in stride(from: 0, to: candidates.count, by: 20_000) {
+        let starts = Array(stride(from: 0, to: candidates.count, by: Self.importBatch))
+        for start in starts {
             var request = ProtoWriter()
-            for candidate in candidates[start..<min(candidates.count, start + 20_000)] {
+            for candidate in candidates[start..<min(candidates.count, start + Self.importBatch)] {
                 request.message(1) { tree in
                     tree.string(1, candidate.id.uuidString.lowercased())
                     tree.double(2, candidate.location.latitude, always: true)
@@ -309,7 +318,9 @@ public struct GerardusMapClient: GerardusClient {
                 }
             }
             request.string(2, source)
-            for tile in tiles.sorted() { request.string(3, tile.token) }
+            if start == starts.last {
+                for tile in tiles.sorted() { request.string(3, tile.token) }
+            }
             request.string(4, detector)
             for f in try await call("ImportDetectedTrees", request) {
                 switch f.number {
