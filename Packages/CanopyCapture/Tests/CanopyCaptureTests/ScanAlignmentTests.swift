@@ -90,6 +90,39 @@ import simd
         #expect(alignment.trunkBase == SIMD3(0, -1.31, 0))
     }
 
+    /// The record as the store keeps it, written out: a later version must still read rows saved by this one, so
+    /// renaming a property or a case is a change to this format, not a refactor.
+    @Test func anAlignmentKeepsItsStoredFormat() throws {
+        let stored = """
+            {"correctedPosition":{"latitude":37.77,"longitude":-122.48},"groundHeight":-1.31,\
+            "profile":{"sections":[{"height":1.37,"id":"6F1C7F5A-8B11-4C1E-9C55-0D6E3A1B2C3D","offset":[0.012,-0.004],\
+            "part":"trunk","radius":0.31,"radiusUncertainty":0.002,"source":"scan"},\
+            {"height":4,"id":"0B6A2C1D-3E4F-4A5B-8C7D-9E0F1A2B3C4D","part":"crown","radius":3.5,"source":"eye"}]},\
+            "savedAt":1800000000123,"scan":"\(String(repeating: "ab", count: 32))",\
+            "treeID":"9A8B7C6D-5E4F-4321-8765-0FEDCBA98765",\
+            "vectorTree":{"drawn":[2.5,-1],"id":"gerardus:tree/7","placed":[0.1,0]}}
+            """
+        let expected = ScanAlignment(
+            scan: try #require(BlobRef(rawValue: String(repeating: "ab", count: 32))),
+            treeID: try #require(UUID(uuidString: "9A8B7C6D-5E4F-4321-8765-0FEDCBA98765")),
+            profile: TreeProfile(sections: [
+                TreeSection(
+                    id: try #require(UUID(uuidString: "6F1C7F5A-8B11-4C1E-9C55-0D6E3A1B2C3D")), part: .trunk,
+                    height: 1.37, radius: 0.31, source: .scan, offset: SIMD2(0.012, -0.004), radiusUncertainty: 0.002),
+                TreeSection(
+                    id: try #require(UUID(uuidString: "0B6A2C1D-3E4F-4A5B-8C7D-9E0F1A2B3C4D")), part: .crown,
+                    height: 4, radius: 3.5),
+            ]),
+            groundHeight: -1.31,
+            vectorTree: VectorTreePlacement(id: "gerardus:tree/7", drawn: SIMD2(2.5, -1), placed: SIMD2(0.1, 0)),
+            correctedPosition: GeoPoint(latitude: 37.77, longitude: -122.48),
+            savedAt: Date(timeIntervalSince1970: 1_800_000_000.123))
+        #expect(try CanopyJSON.decoder.decode(ScanAlignment.self, from: Data(stored.utf8)) == expected)
+        // And this version writes the same document.
+        let written = try JSONSerialization.jsonObject(with: CanopyJSON.encoder.encode(expected)) as? NSDictionary
+        #expect(written == (try JSONSerialization.jsonObject(with: Data(stored.utf8)) as? NSDictionary))
+    }
+
     @Test func movingGerardusTreeOntoTheTrunkCorrectsTheTreesPosition() throws {
         let census = GeoPoint(latitude: 37.7700, longitude: -122.4800)
         var placement = VectorTreePlacement(id: "gerardus:tree/7", drawn: SIMD2(3, 4))

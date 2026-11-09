@@ -321,9 +321,10 @@ public actor LocalStore {
 
     // MARK: Scan alignments
 
-    /// Saves a tree's rings as aligned against one of its scans, replacing what was saved for that scan before. The
-    /// record is the app's own (CanopyCapture's `ScanAlignment`, which the store does not depend on), kept as JSON by
-    /// the scan's blob and the tree. On the device only, until the server has a record for them.
+    /// Saves a tree's rings as aligned against one of its scans, replacing what was saved for that scan and tree
+    /// before. The record is the app's own (CanopyCapture's `ScanAlignment`, which the store does not depend on), kept
+    /// as JSON by the scan's blob and the tree: a scan saved twice as a new tree is listed by both trees, and each
+    /// keeps its own. On the device only, until the server has a record for them.
     public func saveScanAlignment(
         _ alignment: some Encodable & Sendable, scan: BlobRef, subject: UUID, savedAt: Date = .now
     ) throws {
@@ -335,18 +336,22 @@ public actor LocalStore {
             ])
     }
 
-    /// What was saved for one scan, if anything.
-    public func scanAlignment<T: Decodable & Sendable>(_ type: T.Type, scan: BlobRef) throws -> T? {
-        try db.query("SELECT payload FROM scan_alignments WHERE blob = ?", [.text(scan.rawValue)]) { row in
+    /// What was saved for one scan of a tree, if anything.
+    public func scanAlignment<T: Decodable & Sendable>(_ type: T.Type, scan: BlobRef, subject: UUID) throws -> T? {
+        try db.query(
+            "SELECT payload FROM scan_alignments WHERE blob = ? AND subject_id = ?",
+            [.text(scan.rawValue), .text(subject.uuidString)]
+        ) { row in
             try CanopyJSON.decoder.decode(T.self, from: Data(row.string(0).utf8))
         }.first
     }
 
-    /// Every saved alignment, oldest first, so the latest for a tree comes last.
+    /// Every saved alignment this version can read, oldest first, so the latest for a tree comes last. A row it
+    /// cannot read (from a later version, say) is left out rather than failing the rest.
     public func scanAlignments<T: Decodable & Sendable>(_ type: T.Type) throws -> [T] {
         try db.query("SELECT payload FROM scan_alignments ORDER BY saved_at, rowid") { row in
-            try CanopyJSON.decoder.decode(T.self, from: Data(row.string(0).utf8))
-        }
+            try? CanopyJSON.decoder.decode(T.self, from: Data(row.string(0).utf8))
+        }.compactMap { $0 }
     }
 
     /// The tiles pulled from the shared map, and the sequence to pull each from next.
@@ -787,13 +792,15 @@ enum Schema {
             payload TEXT NOT NULL
         );
         """,
-        // 6: a tree's rings as aligned against one of its scans, by the scan's blob. On the device only.
+        // 6: a tree's rings as aligned against one of its scans, by the scan's blob and the tree. On the device
+        // only.
         """
         CREATE TABLE scan_alignments (
-            blob TEXT PRIMARY KEY,
+            blob TEXT NOT NULL,
             subject_id TEXT NOT NULL,
             saved_at INTEGER NOT NULL,
-            payload TEXT NOT NULL
+            payload TEXT NOT NULL,
+            PRIMARY KEY (blob, subject_id)
         );
         CREATE INDEX scan_alignments_subject ON scan_alignments (subject_id);
         """,

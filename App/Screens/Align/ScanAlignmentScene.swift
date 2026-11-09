@@ -32,11 +32,23 @@ final class ScanAlignmentCamera {
     /// The screen's right and the direction into the screen, on the ground (scene x and z), each a unit vector.
     var groundAxes: (right: SIMD2<Float>, away: SIMD2<Float>) {
         guard let pov = view?.pointOfView else { return (SIMD2(1, 0), SIMD2(0, -1)) }
-        let right = SIMD2(pov.simdWorldRight.x, pov.simdWorldRight.z)
-        let front = SIMD2(pov.simdWorldFront.x, pov.simdWorldFront.z)
-        guard simd_length(right) > 1e-3 else { return (SIMD2(1, 0), SIMD2(0, -1)) }
-        let away = simd_length(front) > 1e-3 ? simd_normalize(front) : SIMD2(-right.y, right.x)
-        return (simd_normalize(right), away)
+        return Self.groundAxes(right: pov.simdWorldRight, front: pov.simdWorldFront, up: pov.simdWorldUp)
+    }
+
+    /// `groundAxes` from the camera's own axes in the scene. Looking straight down, the view has no direction on the
+    /// ground, so "away" is the screen's up instead.
+    nonisolated static func groundAxes(
+        right: SIMD3<Float>, front: SIMD3<Float>, up: SIMD3<Float>
+    ) -> (right: SIMD2<Float>, away: SIMD2<Float>) {
+        let flatRight = SIMD2(right.x, right.z)
+        guard simd_length(flatRight) > 1e-3 else { return (SIMD2(1, 0), SIMD2(0, -1)) }
+        let unitRight = simd_normalize(flatRight)
+        // Into the screen when the view looks across the ground at all, else the screen's up; a quarter turn
+        // anticlockwise from the right, seen from above (scene x east, z south), when neither shows.
+        let away =
+            [SIMD2(front.x, front.z), SIMD2(up.x, up.z)].first { simd_length($0) > 1e-3 }.map { simd_normalize($0) }
+            ?? SIMD2(unitRight.y, -unitRight.x)
+        return (unitRight, away)
     }
 
     /// Back to where the view started.
@@ -50,13 +62,52 @@ final class ScanAlignmentCamera {
     }
 }
 
+/// A scan's triangles ready to draw: a normal at each vertex from the faces round it, since the evidence holds none,
+/// and each edge once. A real scan runs to 100,000 triangles and more, so this is worked out off the main thread when
+/// the scan opens.
+nonisolated struct ScanSurface: Sendable {
+    var positions: [SIMD3<Float>]
+    var normals: [SIMD3<Float>]
+    var triangles: [UInt32]
+    /// Two indices per edge.
+    var edges: [UInt32]
+
+    init(_ mesh: Mesh) {
+        positions = mesh.positions
+        triangles = mesh.indices
+        var normals = [SIMD3<Float>](repeating: .zero, count: mesh.positions.count)
+        var edges: [UInt32] = []
+        var seen = Set<UInt64>(minimumCapacity: mesh.indices.count / 2)
+        func edge(_ p: UInt32, _ q: UInt32) {
+            guard seen.insert(UInt64(min(p, q)) << 32 | UInt64(max(p, q))).inserted else { return }
+            edges.append(p)
+            edges.append(q)
+        }
+        for t in stride(from: 0, to: mesh.indices.count - 2, by: 3) {
+            let (i, j, k) = (mesh.indices[t], mesh.indices[t + 1], mesh.indices[t + 2])
+            let a = mesh.positions[Int(i)]
+            let normal = simd_cross(mesh.positions[Int(j)] - a, mesh.positions[Int(k)] - a)
+            normals[Int(i)] += normal
+            normals[Int(j)] += normal
+            normals[Int(k)] += normal
+            edge(i, j)
+            edge(j, k)
+            edge(k, i)
+        }
+        self.normals = normals.map { simd_length($0) > 0 ? simd_normalize($0) : SIMD3(0, 1, 0) }
+        self.edges = edges
+    }
+
+    var isEmpty: Bool { triangles.isEmpty }
+}
+
 /// The scan's triangles in 3D with the overlay over them. SceneKit's turntable camera orbits the trunk: drag to turn
 /// round it and up or down, pinch to zoom, two fingers to slide. Tapping near a ring picks it.
 ///
 /// The 3D map's `CameraRig` is not used: it keeps the ground under a finger and starts 12 m up, which suits a park,
 /// not a metre of trunk turned in the hand.
 struct ScanAlignmentSceneView: UIViewRepresentable {
-    let mesh: Mesh
+    let surface: ScanSurface
     let overlay: ScanAlignmentOverlay
     let camera: ScanAlignmentCamera
     var onPick: (TreeSection.ID) -> Void
@@ -77,7 +128,7 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
             view.antialiasingMode = .multisampling4X
         #endif
         view.autoenablesDefaultLighting = true
-        scene.rootNode.addChildNode(Self.scanNode(mesh))
+        scene.rootNode.addChildNode(Self.scanNode(surface))
         let overlayNode = SCNNode()
         scene.rootNode.addChildNode(overlayNode)
         context.coordinator.overlayNode = overlayNode
@@ -239,35 +290,14 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
         return geometry
     }
 
-    /// The scan as shaded triangles (normals from the faces, since the evidence holds none) with their edges drawn
-    /// over them.
-    static func scanNode(_ mesh: Mesh) -> SCNNode {
+    /// The scan as shaded triangles with their edges drawn over them.
+    static func scanNode(_ scan: ScanSurface) -> SCNNode {
         let node = SCNNode()
-        guard !mesh.isEmpty else { return node }
-        var normals = [SIMD3<Float>](repeating: .zero, count: mesh.positions.count)
-        var edges: [UInt32] = []
-        var seen = Set<UInt64>()
-        for t in stride(from: 0, to: mesh.indices.count - 2, by: 3) {
-            let corners = [mesh.indices[t], mesh.indices[t + 1], mesh.indices[t + 2]]
-            let a = mesh.positions[Int(corners[0])]
-            let b = mesh.positions[Int(corners[1])]
-            let c = mesh.positions[Int(corners[2])]
-            let normal = simd_cross(b - a, c - a)
-            for corner in corners {
-                normals[Int(corner)] += normal
-            }
-            for (p, q) in [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])] {
-                if seen.insert(UInt64(min(p, q)) << 32 | UInt64(max(p, q))).inserted {
-                    edges += [p, q]
-                }
-            }
-        }
-        let vertices = SCNGeometrySource(vertices: mesh.positions.map { SCNVector3($0) })
-        let normalSource = SCNGeometrySource(
-            normals: normals.map { simd_length($0) > 0 ? SCNVector3(simd_normalize($0)) : SCNVector3(0, 1, 0) })
+        guard !scan.isEmpty else { return node }
+        let vertices = source(scan.positions, semantic: .vertex)
         let fill = SCNGeometry(
-            sources: [vertices, normalSource],
-            elements: [SCNGeometryElement(indices: mesh.indices, primitiveType: .triangles)])
+            sources: [vertices, source(scan.normals, semantic: .normal)],
+            elements: [SCNGeometryElement(indices: scan.triangles, primitiveType: .triangles)])
         let surface = SCNMaterial()
         surface.diffuse.contents = UIColor(red: 0.74, green: 0.77, blue: 0.70, alpha: 1)
         surface.lightingModel = .lambert
@@ -276,7 +306,7 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
         node.addChildNode(SCNNode(geometry: fill))
 
         let wire = SCNGeometry(
-            sources: [vertices], elements: [SCNGeometryElement(indices: edges, primitiveType: .line)])
+            sources: [vertices], elements: [SCNGeometryElement(indices: scan.edges, primitiveType: .line)])
         let edge = SCNMaterial()
         edge.diffuse.contents = UIColor(white: 0.25, alpha: 0.45)
         edge.lightingModel = .constant
@@ -285,5 +315,13 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
         wireNode.renderingOrder = 1
         node.addChildNode(wireNode)
         return node
+    }
+
+    /// A geometry source straight from the vectors' bytes, with no copy into `SCNVector3`s first.
+    static func source(_ vectors: [SIMD3<Float>], semantic: SCNGeometrySource.Semantic) -> SCNGeometrySource {
+        SCNGeometrySource(
+            data: vectors.withUnsafeBytes { Data($0) }, semantic: semantic, vectorCount: vectors.count,
+            usesFloatComponents: true, componentsPerVector: 3, bytesPerComponent: MemoryLayout<Float>.size,
+            dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.stride)
     }
 }

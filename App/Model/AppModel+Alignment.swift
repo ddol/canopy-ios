@@ -11,20 +11,21 @@ extension AppModel {
     /// on a simulator, which cannot scan.
     static let seedScanArgument = "-canopy.seedScan"
 
-    /// Draws every tree with saved rings in them, the latest saved for each tree.
+    /// Draws every tree with saved rings in them, the latest saved for each tree. A tree already drawn in rings keeps
+    /// them: those were saved (`saveAlignment`) no earlier than anything read here.
     func loadAlignments() async {
         guard let saved = try? await store.scanAlignments(ScanAlignment.self) else { return }
-        for alignment in saved {
-            treeProfiles[MapLayers.censusWireframeID(alignment.treeID)] = alignment.profile
-        }
+        let latest = Dictionary(
+            saved.map { (MapLayers.censusWireframeID($0.treeID), $0.profile) }, uniquingKeysWith: { _, later in later })
+        treeProfiles.merge(latest) { current, _ in current }
     }
 
-    /// What was saved for a scan, if anything.
-    func alignment(for scan: BlobRef) async -> ScanAlignment? {
-        try? await store.scanAlignment(ScanAlignment.self, scan: scan)
+    /// What was saved for a tree's scan, if anything.
+    func alignment(for scan: BlobRef, tree: UUID) async -> ScanAlignment? {
+        try? await store.scanAlignment(ScanAlignment.self, scan: scan, subject: tree)
     }
 
-    /// Saves an alignment, replacing what was saved for its scan, and draws the tree in its rings from now on.
+    /// Saves an alignment, replacing what was saved for its scan and tree, and draws the tree in its rings from now on.
     @discardableResult
     func saveAlignment(_ alignment: ScanAlignment) async -> Bool {
         do {

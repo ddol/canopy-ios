@@ -400,6 +400,8 @@ extension AppModel {
     func reset() async {
         do {
             try await store.reset()
+            // The rings were restored from the store, which no longer has them.
+            treeProfiles = [:]
             server = FakeGerardusClient()
             lastSync = nil
             try await store.importCandidates(try ParkFixtures.candidates())

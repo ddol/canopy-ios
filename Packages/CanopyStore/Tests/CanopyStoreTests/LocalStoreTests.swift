@@ -288,18 +288,41 @@ extension LocalStore {
         try await store?.saveScanAlignment(second, scan: scan, subject: tree, savedAt: older.addingTimeInterval(120))
         let otherScan = Alignment(scan: other, tree: tree, radii: [0.4], offset: nil)
         try await store?.saveScanAlignment(otherScan, scan: other, subject: tree, savedAt: older)
-        #expect(try await store?.scanAlignment(Alignment.self, scan: scan) == second)
+        #expect(try await store?.scanAlignment(Alignment.self, scan: scan, subject: tree) == second)
         store = nil
 
         // On the phone across launches, oldest first, so the latest for a tree comes last.
         let reopened = try LocalStore(directory: directory)
         #expect(try await reopened.scanAlignments(Alignment.self) == [otherScan, second])
-        #expect(try await reopened.scanAlignment(Alignment.self, scan: other) == otherScan)
+        #expect(try await reopened.scanAlignment(Alignment.self, scan: other, subject: tree) == otherScan)
         #expect(
             try await reopened.scanAlignment(
-                Alignment.self, scan: BlobRef(rawValue: String(repeating: "aa", count: 32))!) == nil)
+                Alignment.self, scan: BlobRef(rawValue: String(repeating: "aa", count: 32))!, subject: tree) == nil)
 
         try await reopened.reset()
         #expect(try await reopened.scanAlignments(Alignment.self).isEmpty)
+    }
+
+    /// A scan saved twice as a new tree is listed by both trees: each keeps its own rings against it.
+    @Test func twoTreesListingOneScanKeepTheirOwnAlignments() async throws {
+        let store = try LocalStore.inMemory()
+        let other = UUID()
+        let mine = Alignment(scan: scan, tree: tree, radii: [0.3], offset: nil)
+        let theirs = Alignment(scan: scan, tree: other, radii: [0.5], offset: nil)
+        try await store.saveScanAlignment(mine, scan: scan, subject: tree)
+        try await store.saveScanAlignment(theirs, scan: scan, subject: other)
+        #expect(try await store.scanAlignment(Alignment.self, scan: scan, subject: tree) == mine)
+        #expect(try await store.scanAlignment(Alignment.self, scan: scan, subject: other) == theirs)
+        #expect(try await store.scanAlignments(Alignment.self).count == 2)
+    }
+
+    /// A row this version cannot read (written by a later one, say) is skipped, not allowed to hide the rest.
+    @Test func aRowThatDoesNotDecodeLeavesTheOthers() async throws {
+        struct Later: Codable, Sendable { var shape: String }
+        let store = try LocalStore.inMemory()
+        let kept = Alignment(scan: scan, tree: tree, radii: [0.3], offset: nil)
+        try await store.saveScanAlignment(kept, scan: scan, subject: tree)
+        try await store.saveScanAlignment(Later(shape: "new"), scan: other, subject: UUID())
+        #expect(try await store.scanAlignments(Alignment.self) == [kept])
     }
 }

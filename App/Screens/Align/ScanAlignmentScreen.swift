@@ -32,6 +32,7 @@ struct ScanAlignmentScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var saved: SavedScan?
+    @State private var surface: ScanSurface?
     @State private var failure: String?
     @State private var profile = TreeProfile(sections: [])
     @State private var groundHeight = 0.0
@@ -62,9 +63,9 @@ struct ScanAlignmentScreen: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let saved {
+                if saved != nil, let surface {
                     VStack(spacing: 0) {
-                        ScanAlignmentSceneView(mesh: saved.mesh, overlay: overlay, camera: camera) { id in
+                        ScanAlignmentSceneView(surface: surface, overlay: overlay, camera: camera) { id in
                             selected = id
                             mode = .rings
                         }
@@ -144,44 +145,51 @@ struct ScanAlignmentScreen: View {
                 .labelStyle(.iconOnly)
         }
         if let ring = selectedRing {
-            Stepper(value: heightBinding(ring), in: TreeProfile.heights, step: 0.05) {
-                LabeledContent("Height", value: format.length(ring.height, fractionDigits: 2))
-            }
-            Stepper(value: diameterBinding(ring), in: 0.03...35, step: 0.01) {
-                LabeledContent("Diameter", value: diameterText(ring))
-            }
-            HStack {
-                Text("Centre")
-                Spacer()
-                nudges(step: 0.01, move: moveRing)
-            }
-            HStack(spacing: Spacing.s) {
-                Button("Snap to scan", systemImage: "scope") { snap(ring) }
-                    .buttonStyle(.canopyPrimary)
-                    .disabled(isFitting || ring.part != .trunk)
-                    .accessibilityIdentifier("align-snap")
-                Button("Looks right", systemImage: "checkmark") { confirm(ring) }
-                    .buttonStyle(.canopySecondary)
-                    .disabled(ring.source == .confirmed)
-                Menu("More", systemImage: "ellipsis.circle") {
-                    Button("Add a ring above", systemImage: "plus") {
-                        selected = profile.addSection(above: ring.id) ?? selected
-                        changed()
-                    }
-                    Button("Take this ring out", systemImage: "minus", role: .destructive) {
-                        profile.removeSection(ring.id)
-                        selected = profile.section(ring.id) == nil ? nil : ring.id
-                        changed()
-                    }
-                    Button("Snap every trunk ring", systemImage: "scope") { snapTrunk() }
-                }
-                .labelStyle(.iconOnly)
-                if isFitting { ProgressView() }
-            }
+            // A fit runs off the main thread and writes its ring when it ends, so nothing edits rings meanwhile.
+            Group { ringEditor(ring) }
+                .disabled(isFitting)
         } else {
             Text("Tap a ring in the view, or pick one above.")
                 .font(.footnote)
                 .foregroundStyle(Color.canopyInkMuted)
+        }
+    }
+
+    @ViewBuilder
+    private func ringEditor(_ ring: TreeSection) -> some View {
+        Stepper(value: heightBinding(ring), in: TreeProfile.heights, step: 0.05) {
+            LabeledContent("Height", value: format.length(ring.height, fractionDigits: 2))
+        }
+        Stepper(value: diameterBinding(ring), in: 0.03...35, step: 0.01) {
+            LabeledContent("Diameter", value: diameterText(ring))
+        }
+        HStack {
+            Text("Centre")
+            Spacer()
+            nudges(step: 0.01, move: moveRing)
+        }
+        HStack(spacing: Spacing.s) {
+            Button("Snap to scan", systemImage: "scope") { snap(ring) }
+                .buttonStyle(.canopyPrimary)
+                .disabled(ring.part != .trunk)
+                .accessibilityIdentifier("align-snap")
+            Button("Looks right", systemImage: "checkmark") { confirm(ring) }
+                .buttonStyle(.canopySecondary)
+                .disabled(ring.source == .confirmed)
+            Menu("More", systemImage: "ellipsis.circle") {
+                Button("Add a ring above", systemImage: "plus") {
+                    selected = profile.addSection(above: ring.id) ?? selected
+                    changed()
+                }
+                Button("Take this ring out", systemImage: "minus", role: .destructive) {
+                    profile.removeSection(ring.id)
+                    selected = profile.section(ring.id) == nil ? nil : ring.id
+                    changed()
+                }
+                Button("Snap every trunk ring", systemImage: "scope") { snapTrunk() }
+            }
+            .labelStyle(.iconOnly)
+            if isFitting { ProgressView() }
         }
     }
 
@@ -466,10 +474,14 @@ struct ScanAlignmentScreen: View {
         guard saved == nil, failure == nil else { return }
         do {
             let file = try await model.evidenceFile(scan)
-            let loaded = try await Task.detached { try SavedScan(glb: Data(contentsOf: file)) }.value
-            let alignment = await model.alignment(for: scan)
-            let ground =
-                alignment?.groundHeight ?? loaded.estimatedGroundHeight ?? Double(loaded.mesh.bounds?.min.y ?? 0)
+            // Reading the mesh and readying it to draw take a while for a real scan: off the main thread.
+            let (loaded, drawn, estimated) = try await Task.detached {
+                let loaded = try SavedScan(glb: Data(contentsOf: file))
+                let ground = loaded.estimatedGroundHeight ?? Double(loaded.mesh.bounds?.min.y ?? 0)
+                return (loaded, ScanSurface(loaded.mesh), ground)
+            }.value
+            let alignment = await model.alignment(for: scan, tree: treeID)
+            let ground = alignment?.groundHeight ?? estimated
             var start = alignment?.profile ?? model.treeProfiles[MapLayers.censusWireframeID(treeID)]
             if start == nil {
                 // Nothing fitted yet: the census's shape, with the trunk's rings snapped to the scan, as AR starts.
@@ -487,9 +499,12 @@ struct ScanAlignmentScreen: View {
             placement = alignment?.vectorTree
             findVectorTrees()
             isSaved = alignment != nil
+            surface = drawn
             saved = loaded
         } catch let error as GRPCStatusError where error.code == GRPCStatusError.notFound {
             failure = "The server does not have this scan."
+        } catch is GLB.Error {
+            failure = "The scan's file could not be read."
         } catch {
             failure = error.localizedDescription
         }
