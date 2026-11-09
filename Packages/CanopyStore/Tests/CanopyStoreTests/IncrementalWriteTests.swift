@@ -159,11 +159,36 @@ extension LocalStore {
         #expect(try await reopened.tableCount("trees") == 0)
         #expect(await reopened.state().trees.count == 50)
 
-        // A store written by an older derivation (or none) is rewritten once.
+        // A store written by an older derivation (or none) is rewritten once, when it is prepared.
         try await reopened.execute("UPDATE store_meta SET value = 'schema 4, derivation 0'")
         let upgraded = try LocalStore(directory: folder)
+        try await upgraded.prepare()
         #expect(try await upgraded.tableCount("trees") == 50)
         #expect(try await upgraded.derived() == Schema.derived)
+    }
+
+    /// Opening only opens the database, so it costs the caller (the main thread, at launch) nothing; the reading and
+    /// deriving wait for `prepare`, which is where a store that cannot be read says so.
+    @Test func openingWaitsForPrepareToReadTheStore() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "opening-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try LocalStore(directory: folder)
+        let candidate = TreeCandidate(
+            id: UUID(), location: GeoPoint(latitude: 37.769, longitude: -122.477), confidence: 0.8,
+            isSynthetic: false)
+        try await store.importCandidates([candidate])
+        try await store.execute("UPDATE store_meta SET value = 'schema 4, derivation 0'")
+
+        let reopened = try LocalStore(directory: folder)
+        #expect(try await reopened.derived() == "schema 4, derivation 0")
+        try await reopened.prepare()
+        #expect(try await reopened.derived() == Schema.derived)
+        #expect(await reopened.state().trees[candidate.id] != nil)
+
+        // A payload that no longer decodes: the store still opens, and preparing it throws.
+        try await reopened.execute("UPDATE candidates SET payload = 'not json'")
+        let broken = try LocalStore(directory: folder)
+        await #expect(throws: (any Error).self) { try await broken.prepare() }
     }
 }
 

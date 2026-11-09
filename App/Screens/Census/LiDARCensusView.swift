@@ -101,7 +101,7 @@ struct LiDARCensusView: View {
             VStack(spacing: Spacing.s) {
                 SelectedTreeCard(
                     focus: focus, tracker: tracker,
-                    placeholder: location.geoPoint == nil ? "Waiting for GPS…" : "No tree within 60 m",
+                    placeholder: placeholder,
                     choices: nearby, onChoose: choose)
                 overlayStatusRow
                 if let notice {
@@ -244,6 +244,13 @@ struct LiDARCensusView: View {
         return TrackerTargets(
             focus: focus.map { target($0.id, geo: $0.geo) },
             nearby: nearby.map { target(ARTreeSelection.censusPrefix + $0.0.id.uuidString, geo: $0.0.position.geo) })
+    }
+
+    /// What the tree card says with no tree to show. Until the store has been read at launch the census is empty, which
+    /// is not the same as no tree near by: saying so keeps a player from adding trees that are there.
+    private var placeholder: String {
+        if model.phase == .loading { return "Reading the trees on this phone…" }
+        return location.geoPoint == nil ? "Waiting for GPS…" : "No tree within 60 m"
     }
 
     /// What changes the trees near by besides the fix: trees arriving, and every change the player records.
