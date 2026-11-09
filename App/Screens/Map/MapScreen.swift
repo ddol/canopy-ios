@@ -55,13 +55,23 @@ struct MapScreen: View {
                 }
                 .safeAreaInset(edge: .bottom) {
                     VStack(alignment: .leading, spacing: Spacing.xs) {
-                        if baseMap == .gerardus, model.mapReference == nil, !model.aerial.isWorking {
-                            Text(
-                                "Only trees so far. Layers → Load real trees in view draws the canopy and outlines here."
-                            )
-                            .font(.footnote)
+                        if baseMap == .gerardus, visibility.vectors, model.mapReference == nil, !model.aerial.isWorking
+                        {
+                            Text("No vectors loaded here yet. Layers → Load vectors in view draws Gerardus's sites.")
+                                .font(.footnote)
+                                .padding(Spacing.xs)
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.medium))
+                        }
+                        if model.phase == .loading {
+                            // The map is up before the store is read; the trees fill in when it is.
+                            HStack(spacing: Spacing.xs) {
+                                ProgressView()
+                                Text("Reading the trees on this phone…").font(.footnote)
+                            }
                             .padding(Spacing.xs)
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.medium))
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("map-loading")
                         }
                         aerialStatus
                         detailNote(layers)
@@ -117,13 +127,16 @@ struct MapScreen: View {
 
     /// What the map draws, made once per update and shared by the map and the note under it.
     private var layers: MapLayers {
-        MapLayers(
-            // Before the map reports where it is, the region it opens on: without one, everything is drawn in full.
-            state: model.census, boundary: model.boundary, visibility: visibility,
-            region: viewport ?? Self.startViewport,
-            detectedLimit: detectedLimit, reference: model.mapReference, surveyed: Set(model.surveyedCells.keys),
-            treeForms: model.treeForms, treeProfiles: model.treeProfiles, censusTiles: model.censusTiles,
-            remoteTiles: model.serverTiles)
+        MapTiming.measure("layers") {
+            MapLayers(
+                // Before the map reports where it is, the region it opens on: without one, everything is drawn in full.
+                state: model.census, boundary: model.boundary, visibility: visibility,
+                region: viewport ?? Self.startViewport,
+                detectedLimit: detectedLimit, reference: model.mapReference, surveyed: Set(model.surveyedCells.keys),
+                treeForms: model.treeForms, treeProfiles: model.treeProfiles, censusTiles: model.censusTiles,
+                remoteTiles: model.serverTiles, pulledTiles: model.followedTiles, own: model.ownTrees,
+                detectedTiles: model.detectedTiles)
+        }
     }
 
     @ViewBuilder
@@ -225,7 +238,7 @@ struct MapScreen: View {
                     ? "Trees drawn in the \(MapDetail.detailedTileLimit) tiles nearest the centre; \(patches) more "
                         + "shaded by how many they hold. Tap one to go there."
                     : "Zoomed out: \(patches) \(detail.summaryLevel == 13 ? "cells" : "tiles") shaded by how many "
-                        + "trees they hold. Zoom in or tap one to see its trees."
+                        + "trees they hold, outlined where detected in full. Zoom in or tap one to see its trees."
             )
             .font(.caption)
             .foregroundStyle(Color.canopyInkMuted)
@@ -245,8 +258,10 @@ struct MapScreen: View {
         return viewport.latitudeDelta > 0.008 ? 250 : 400
     }
 
+    /// Counted once per census with the tiles, not on every update.
     private var statusCounts: [CountStatus: Int] {
-        Dictionary(grouping: model.census.trees.values, by: \.displayStatus).mapValues(\.count)
+        let total = model.censusTiles.total
+        return Dictionary(uniqueKeysWithValues: CountStatus.allCases.map { ($0, total[$0]) })
     }
 
     /// One decimal below 10 %, so the first few trees show progress.
@@ -315,7 +330,7 @@ struct MapScreen: View {
                     Label("Apple Maps", systemImage: "map").tag(BaseMap.apple)
                     Label("Gerardus 3D", systemImage: "view.3d").tag(BaseMap.gerardus)
                 }
-                if baseMap == .gerardus {
+                if baseMap == .gerardus, visibility.vectors {
                     Toggle("Ground", systemImage: "mountain.2", isOn: $visibility.ground)
                 }
             }
@@ -353,8 +368,11 @@ struct MapScreen: View {
                 }
             }
             Section("Gerardus vectors") {
+                // Off by default: buildings, streets and Gerardus's trees are loaded and drawn only when asked for.
                 Toggle("Show vectors", systemImage: "square.stack.3d.down.right", isOn: $visibility.vectors)
+                    .accessibilityIdentifier("show-vectors")
                 Button("Load vectors in view", systemImage: "arrow.down.circle") {
+                    visibility.vectors = true
                     Task { await model.loadVectors(around: centre) }
                 }
                 .disabled(model.aerial.isWorking)

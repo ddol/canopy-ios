@@ -6,19 +6,60 @@ import Foundation
 
 /// The shared map: other players' trees and approvals, pulled from the Gerardus server, and the review queue.
 extension AppModel {
-    /// The widest view (centre to corner, in metres) whose tiles a sync pulls. Wider views would mean dozens of tiles;
-    /// the tiles already pulled are kept up to date either way.
-    static let pullRadiusLimit = 400.0
-
-    /// The tiles a sync follows: every tile pulled before, plus the tiles in view when the map is close enough, plus
-    /// every tile in the city the server holds trees in when the map shows the whole city.
+    /// The tiles a sync follows: the tiles the map draws in full now (`MapDetail`: at most 16 level-16 tiles, and only
+    /// when the map is close enough to draw any), and the tiles pulled before where the player has been, that is, drawn
+    /// in full on the map lately (`visitedTiles`, the last `visitedTileLimit`) or recorded something in on this phone
+    /// (whoever was signed in). A tile pulled for some other reason (an earlier version followed every tile in the city)
+    /// is forgotten (`forgetUnfollowed`) and pulled again when the map draws it in full. Everything else the map shades
+    /// from the server's summaries.
     func followedTiles() async throws -> Set<S2CellID> {
-        var tiles = Set(try await store.sharedTiles().keys)
-        if let viewport = mapViewport, viewport.cornerDistance <= Self.pullRadiusLimit {
-            tiles.formUnion(Self.tiles(in: viewport))
-        }
-        if showsWholeCity { tiles.formUnion(cityTiles) }
-        return tiles
+        let drawn = mapViewport.map(Self.drawnTiles) ?? []
+        visitedTiles = Self.visiting(drawn, after: visitedTiles)
+        let pulled = Set(try await store.sharedTiles().keys)
+        // From the store, not `changesets`: that is empty until the store has been read at launch.
+        let recorded = Set(try await store.changesets().flatMap(\.tiles))
+        return pulled.intersection(Set(visitedTiles).union(recorded)).union(drawn)
+    }
+
+    /// Forgets the pulled tiles a sync does not follow. Earlier versions pulled every tile in the city with trees, tens
+    /// of thousands of them after a park-wide detection, and a store holding them takes seconds to read at every launch
+    /// and to re-derive at every change. This device's own work is in tiles it follows, and stays; the store keeps any
+    /// tile holding a shared tree this device worked on in any case (`LocalStore.forgetShared`).
+    func forgetUnfollowed(_ followed: Set<S2CellID>) async throws {
+        let unfollowed = Set(try await store.sharedTiles().keys).subtracting(followed)
+        guard !unfollowed.isEmpty else { return }
+        try await store.forgetShared(unfollowed)
+    }
+
+    /// The tiles a view draws in full, and so pulls: none for a view too wide to draw any.
+    nonisolated static func drawnTiles(in viewport: MapViewport) -> Set<S2CellID> {
+        MapDetail(region: viewport).detailed ?? []
+    }
+
+    /// How many of the tiles drawn in full lately a sync keeps following (`visitedTiles`): sixteen views' worth. Every
+    /// tile followed is kept up to date at each sync and asked about for the review queue (a call each), so the
+    /// tiles visited longest ago are let go, as the city's tiles were; they are pulled again when drawn in full.
+    nonisolated static let visitedTileLimit = 256
+
+    /// `visited` with `tiles` visited now: those move to the end, the most recent, and only the last
+    /// `visitedTileLimit` are kept.
+    nonisolated static func visiting(_ tiles: Set<S2CellID>, after visited: [S2CellID]) -> [S2CellID] {
+        guard !tiles.isEmpty else { return visited }
+        let kept = visited.filter { !tiles.contains($0) } + tiles.sorted()
+        return Array(kept.suffix(visitedTileLimit))
+    }
+
+    nonisolated static let visitedTilesKey = "canopy.visitedTiles"
+
+    nonisolated static func savedVisitedTiles(defaults: UserDefaults = .standard) -> [S2CellID] {
+        Array(
+            (defaults.stringArray(forKey: visitedTilesKey) ?? []).compactMap(S2CellID.init(token:)).suffix(
+                visitedTileLimit))
+    }
+
+    static func saveVisitedTiles(_ tiles: [S2CellID], defaults: UserDefaults = .standard) {
+        guard !isTesting() else { return }
+        defaults.set(tiles.map(\.token), forKey: visitedTilesKey)
     }
 
     /// Every level-16 tile in the city (`MapViewport.sanFrancisco`, its corners included): the children of the
@@ -30,61 +71,41 @@ extension AppModel {
     /// How long the whole city's summaries are kept before they are asked for again.
     static let citySummaryAge: TimeInterval = 300
 
-    /// When the map shows the whole city, asks the server what every tile in it holds, at most every five minutes:
-    /// the map shades every tile from the answer, and a sync then follows every tile with trees, so trees loaded
-    /// anywhere in the city (Lands End, say) are on this phone without going there. A server too old to answer
-    /// leaves things as they were.
+    /// When the map shows the whole city, asks the server what every tile in it holds, at most every five minutes, so
+    /// the map shades every tile from the counts (and marks those detected in full) wherever it is. Only the counts: a
+    /// tile's trees come to the phone when the map draws it in full (`followedTiles`), so a park-wide detection on the
+    /// server is a few calls here rather than tens of thousands of trees. A server too old to answer leaves things as
+    /// they were.
     func summariseCity(_ client: GerardusMapClient) async throws {
         guard showsWholeCity else { return }
         if let asked = cityAskedAt, Date().timeIntervalSince(asked) < Self.citySummaryAge { return }
         let tiles = Self.wholeCity
         guard let answer = try await Self.summaries(of: tiles, client) else { return }
+        let patches = await Task.detached(priority: .utility) { Self.patches(answer) }.value
         let now = Date()
         cityAskedAt = now
         var known = serverTiles
         for tile in tiles {
             summariesAskedAt[tile] = now
-            known[tile] = answer[tile].map {
-                TileSummary(id: tile, detected: $0.detected, reviewed: $0.reviewed, tags: $0.tags)
-            }
+            known[tile] = patches[tile]
         }
         serverTiles = known
-        cityTiles = Self.tilesWithTrees(answer)
         detectedTiles.formUnion(answer.values.filter { $0.detectedAt != nil }.map(\.tile))
     }
 
-    /// The tiles a summary says hold trees that are not removed.
-    nonisolated static func tilesWithTrees(_ summaries: [S2CellID: GerardusMapClient.TileCounts]) -> Set<S2CellID> {
-        Set(summaries.values.filter { $0.detected + $0.reviewed > 0 }.map(\.tile))
-    }
-
-    /// The L16 tiles a region touches, found by sampling it every 40 m (a tile is about 125 m across).
-    nonisolated static func tiles(in viewport: MapViewport) -> Set<S2CellID> {
-        let latitudeStep = 40 / 110_574.0
-        let longitudeStep = 40 / (111_320 * cos(viewport.center.latitude * .pi / 180))
-        let south = viewport.center.latitude - viewport.latitudeDelta / 2
-        let west = viewport.center.longitude - viewport.longitudeDelta / 2
-        var tiles: Set<S2CellID> = []
-        for latitude in stride(from: south, through: south + viewport.latitudeDelta + latitudeStep, by: latitudeStep) {
-            for longitude in stride(
-                from: west, through: west + viewport.longitudeDelta + longitudeStep, by: longitudeStep)
-            {
-                tiles.insert(
-                    GeoPoint(
-                        latitude: min(latitude, south + viewport.latitudeDelta),
-                        longitude: min(longitude, west + viewport.longitudeDelta)
-                    ).tile)
-            }
-        }
-        return tiles
+    /// The server's counts as the map's patches. Each works out its tile's corners and area, which for the whole city
+    /// is thousands of tiles: called off the main actor.
+    nonisolated static func patches(_ answer: [S2CellID: GerardusMapClient.TileCounts]) -> [S2CellID: TileSummary] {
+        answer.mapValues { TileSummary(id: $0.tile, detected: $0.detected, reviewed: $0.reviewed, tags: $0.tags) }
     }
 
     /// Brings the followed tiles up to date: a snapshot for a tile never pulled (or one the server has reset), the ops
     /// applied since for the rest. Everything lands in one store transaction. Each tile is a question of its own, so
     /// they are asked a few at a time rather than one round trip after another.
-    func pullSharedMap(_ client: GerardusMapClient) async throws {
+    func pullSharedMap(_ client: GerardusMapClient, tiles: Set<S2CellID>? = nil) async throws {
         let cursors = try await store.sharedTiles()
-        let followed = try await followedTiles().sorted()
+        let followed: [S2CellID]
+        if let tiles { followed = tiles.sorted() } else { followed = try await followedTiles().sorted() }
         // One question for every tile pulled before, rather than one each: only the tiles that changed are pulled.
         let summaries = try await Self.summaries(of: followed.filter { cursors[$0] != nil }, client)
         let tiles = Self.tilesToPull(followed, cursors: cursors, summaries: summaries)
@@ -165,9 +186,10 @@ extension AppModel {
 
     /// Asks the server, a moment after the map settles, what the tiles round it hold, so a wide view shades tiles this
     /// phone never pulled. Tiles asked about in the last two minutes are not asked again. A server too old to answer,
-    /// or no answer at all, leaves the map shading what the phone holds.
+    /// or no answer at all, leaves the map shading what the phone holds. It needs nothing from the store, so it runs
+    /// while the store is still being read at launch.
     func summariseSoon(_ viewport: MapViewport) {
-        guard let client = mapClient, phase == .ready, !Self.isTesting() else { return }
+        guard let client = mapClient, !Self.isTesting() else { return }
         let now = Date()
         let tiles = Self.summaryTiles(around: viewport).filter {
             summariesAskedAt[$0].map { now.timeIntervalSince($0) > 120 } ?? true
@@ -179,12 +201,11 @@ extension AppModel {
             guard !Task.isCancelled, let self,
                 let answer = try? await Self.summaries(of: tiles, client), !Task.isCancelled
             else { return }
+            let patches = await Task.detached(priority: .utility) { Self.patches(answer) }.value
             var known = serverTiles
             for tile in tiles {
                 summariesAskedAt[tile] = now
-                known[tile] = answer[tile].map {
-                    TileSummary(id: tile, detected: $0.detected, reviewed: $0.reviewed, tags: $0.tags)
-                }
+                known[tile] = patches[tile]
             }
             serverTiles = known
             detectedTiles.formUnion(answer.values.filter { $0.detectedAt != nil }.map(\.tile))
@@ -200,9 +221,11 @@ extension AppModel {
     }
 
     /// Other players' open changesets in the followed tiles that this player has not agreed with yet, oldest first.
-    func refreshReviewQueue(_ client: GerardusMapClient) async throws {
+    /// One call per tile, so only the followed tiles, not every tile ever pulled.
+    func refreshReviewQueue(_ client: GerardusMapClient, tiles followed: Set<S2CellID>? = nil) async throws {
         async let asked = client.player()
-        let tiles = try await store.sharedTiles().keys.sorted()
+        let tiles: [S2CellID]
+        if let followed { tiles = followed.sorted() } else { tiles = try await followedTiles().sorted() }
         let open = try await Self.concurrently(tiles) { try await client.openChangesets(in: $0) }
         serverPlayer = try await asked
         var seen: Set<UUID> = []
@@ -257,12 +280,12 @@ extension AppModel {
         }
     }
 
-    /// The map stopped moving: remember where, and pull its tiles if any are new and the view is close enough.
+    /// The map stopped moving: remember where, and pull the tiles it draws in full if any are new.
     func mapDidSettle(_ viewport: MapViewport) {
         mapViewport = viewport
         summariseSoon(viewport)
-        guard viewport.cornerDistance <= Self.pullRadiusLimit, !Self.tiles(in: viewport).isSubset(of: followedTiles)
-        else { return }
+        let drawn = Self.drawnTiles(in: viewport)
+        guard !drawn.isEmpty, !drawn.isSubset(of: followedTiles) else { return }
         syncSoon(after: .seconds(3))
     }
 

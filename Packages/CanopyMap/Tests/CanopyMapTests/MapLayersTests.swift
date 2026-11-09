@@ -205,6 +205,16 @@ import Testing
         let mine = MapLayers(state: CensusState(trees: [local]), region: view, remoteTiles: remote)
         let own = try #require(mine.summaries.first { $0.id == shaded })
         #expect((own.detected, own.reviewed) == (0, 1))
+        // Unless the phone has not pulled the tile: its trees there are only the base layer and its own, so the
+        // server's count, which has everyone's, shades it.
+        let sample = MapLayers(
+            state: CensusState(trees: [local]), region: view, remoteTiles: remote, pulledTiles: [])
+        let counted = try #require(sample.summaries.first { $0.id == shaded })
+        #expect((counted.detected, counted.reviewed) == (40, 2))
+        let pulled = MapLayers(
+            state: CensusState(trees: [local]), region: view, remoteTiles: remote, pulledTiles: [shaded])
+        let held = try #require(pulled.summaries.first { $0.id == shaded })
+        #expect((held.detected, held.reviewed) == (0, 1))
         // Hiding detected trees hides them in the server's counts too.
         let reviewedOnly = MapLayers(
             state: CensusState(), visibility: .init(statuses: [.confirmed]), region: view, remoteTiles: remote)
@@ -230,10 +240,84 @@ import Testing
         let near = MapLayers.Reference.Line(kind: .road, points: [park, east], closed: false)
         let far = MapLayers.Reference.Line(kind: .road, points: [east, park], closed: false)
         let reference = MapLayers.Reference(canopies: [], lines: [near, far])
-        let layers = MapLayers(state: CensusState(), region: region(tiles: 2, at: park), reference: reference)
+        let shown = MapLayers.Visibility(vectors: true)
+        let layers = MapLayers(
+            state: CensusState(), visibility: shown, region: region(tiles: 2, at: park), reference: reference)
         #expect(layers.detailedLines.map(\.tile) == [park.tile])
-        let everything = MapLayers(state: CensusState(), reference: reference)
+        let everything = MapLayers(state: CensusState(), visibility: shown, reference: reference)
         #expect(everything.detailedLines.count == 2)
+    }
+
+    @Test func gerardusVectorsAreOffUnlessThePlayerShowsThem() {
+        #expect(!MapLayers.Visibility().vectors)
+        let line = MapLayers.Reference.Line(kind: .road, points: [park, a], closed: false)
+        let reference = MapLayers.Reference(canopies: [], lines: [line])
+        let hidden = MapLayers(state: CensusState(), reference: reference)
+        #expect(hidden.reference == nil, "neither the lines nor the sites reach a renderer")
+        #expect(hidden.detailedLines.isEmpty && hidden.detailedSites.isEmpty)
+        let shown = MapLayers(state: CensusState(), visibility: .init(vectors: true), reference: reference)
+        #expect(shown.reference === reference)
+        #expect(shown.detailedLines.count == 1)
+    }
+
+    @Test func zoomedOutTheMapIsOnlyPatchesShadedFromEachTilesCounts() throws {
+        let east = try shadedTileCentre()
+        let trees =
+            (0..<30).map { _ in tree(.detected, at: east) } + [tree(.proposed, at: east), tree(.removed, at: east)]
+        let state = CensusState(trees: trees)
+        let tiles = CensusTiles(state)
+        #expect(tiles.counts[east.tile]?.detected == 30)
+        #expect(tiles.counts[east.tile]?.proposed == 1)
+        #expect(tiles.total.removed == 1)
+        let wide = MapLayers(state: state, region: region(tiles: 10, at: park), censusTiles: tiles)
+        #expect(!wide.detail.drawsAnyDetail)
+        #expect(wide.trees.isEmpty && wide.tags.isEmpty && wide.reference == nil)
+        let patch = try #require(wide.summaries.first { $0.id == east.tile })
+        #expect((patch.detected, patch.reviewed) == (30, 1), "removed trees are not counted")
+        // The counts are what shades a patch: the trees themselves are not looked at.
+        let countsOnly = MapLayers(state: CensusState(), region: region(tiles: 10, at: park), censusTiles: tiles)
+        #expect(countsOnly.summaries == wide.summaries)
+    }
+
+    @Test func tilesDetectedInFullAreMarkedApart() throws {
+        let east = try shadedTileCentre()
+        let view = region(tiles: 10, at: park)
+        let state = CensusState(trees: [tree(.detected, at: east), tree(.detected, at: park)])
+        let layers = MapLayers(state: state, region: view, detectedTiles: [east.tile])
+        #expect(layers.summaries.first { $0.id == east.tile }?.detectedInFull == true)
+        #expect(layers.summaries.first { $0.id == park.tile }?.detectedInFull == false)
+        // A tile detected in full that holds no trees still shows its outline.
+        let empty = MapLayers(state: CensusState(), region: view, detectedTiles: [east.tile])
+        let outline = try #require(empty.summaries.first { $0.id == east.tile })
+        #expect(outline.detectedInFull && outline.trees == 0 && outline.density == 0)
+        // A level-13 cell is marked only when every tile in it with trees was detected in full.
+        let city = region(tiles: 20, at: park)
+        let cell = east.tile.parent(level: 13)
+        let partly = MapLayers(state: state, region: city, detectedTiles: [east.tile])
+        let whole = MapLayers(state: state, region: city, detectedTiles: [east.tile, park.tile])
+        if park.tile.parent(level: 13) == cell {
+            #expect(partly.summaries.first { $0.id == cell }?.detectedInFull == false)
+        }
+        #expect(whole.summaries.first { $0.id == cell }?.detectedInFull == true)
+    }
+
+    @Test func thePlayersOwnTreesAreDrawnAtEveryZoomAndOtherTreesOnlyInFull() throws {
+        let east = try shadedTileCentre()
+        let mine = tree(.proposed, at: east)
+        let theirs = tree(.confirmed, at: east)
+        let far = tree(.confirmed, at: GeoPoint(latitude: 37.80, longitude: -122.40))
+        let state = CensusState(trees: [mine, theirs, far])
+        let own: Set<UUID> = [mine.id, far.id]
+        let neighbourhood = MapLayers(state: state, region: region(tiles: 2, at: park), own: own)
+        #expect(neighbourhood.trees.map(\.id) == [mine.id], "in a tile not drawn in full, only the player's own")
+        let wide = MapLayers(state: state, region: region(tiles: 10, at: park), own: own)
+        #expect(wide.trees.map(\.id) == [mine.id], "zoomed out too, and not when far from the view")
+        let none = MapLayers(state: state, region: region(tiles: 10, at: park), own: own, ownLimit: 0)
+        #expect(none.trees.isEmpty)
+        // Hiding a status hides the player's trees of that status too.
+        let hidden = MapLayers(
+            state: state, visibility: .init(statuses: [.confirmed]), region: region(tiles: 2, at: park), own: own)
+        #expect(hidden.trees.isEmpty)
     }
 
     @Test func everyStatusHasAWordAnIconAndATone() {

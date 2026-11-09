@@ -72,4 +72,54 @@ import Testing
         notGLB[0] = 0x00
         #expect(throws: GLB.Error.notGLB) { try GLB.File(notGLB) }
     }
+
+    /// A scan from another device is read before anything indexes into it, so a file that points outside itself is
+    /// refused rather than read.
+    @Test func refusesAMeshThatPointsOutsideItself() throws {
+        // A triangle corner past the last vertex.
+        var bytes = [UInt8](try GLB.data(for: mesh))
+        let binStart = 20 + Int(bytes.readUInt32(at: 12)) + 8
+        bytes[binStart + 4 * 12 + 5 * 4] = 99
+        #expect(throws: GLB.Error.indexOutOfRange) { try GLB.File(Data(bytes)).mesh() }
+
+        // A document naming what is not there, or bytes outside its buffer.
+        let file = try GLB.File(GLB.data(for: mesh))
+        func refused(_ change: (inout GLB.Document) -> Void) throws -> GLB.Error? {
+            var document = file.document
+            change(&document)
+            let json = try JSONEncoder().encode(document)
+            do {
+                _ = try GLB.File(Self.glb(json: json, bin: file.bin)).mesh()
+                return nil
+            } catch let error as GLB.Error {
+                return error
+            }
+        }
+        #expect(try refused { _ in } == nil)
+        #expect(try refused { $0.meshes[0].primitives[0].attributes["POSITION"] = 7 } == .indexOutOfRange)
+        #expect(try refused { $0.accessors[1].bufferView = 5 } == .indexOutOfRange)
+        #expect(try refused { $0.accessors[0].count = -1 } == .truncated)
+        #expect(try refused { $0.accessors[1].count = .max / 2 } == .truncated)
+        #expect(try refused { $0.bufferViews[1].byteOffset = -8 } == .truncated)
+        #expect(try refused { $0.bufferViews[0].byteOffset = 1 << 40 } == .truncated)
+    }
+
+    /// A GLB of the given chunks, as another writer might lay one out.
+    static func glb(json: Data, bin: Data) -> Data {
+        var json = json
+        json.pad(to: 4, with: 0x20)
+        var bin = bin
+        bin.pad(to: 4, with: 0)
+        var out = Data()
+        out.appendLittleEndian(GLB.magic)
+        out.appendLittleEndian(GLB.version)
+        out.appendLittleEndian(UInt32(12 + 8 + json.count + 8 + bin.count))
+        out.appendLittleEndian(UInt32(json.count))
+        out.appendLittleEndian(GLB.jsonChunk)
+        out.append(json)
+        out.appendLittleEndian(UInt32(bin.count))
+        out.appendLittleEndian(GLB.binChunk)
+        out.append(bin)
+        return out
+    }
 }

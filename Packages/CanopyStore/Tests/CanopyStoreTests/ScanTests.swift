@@ -188,13 +188,14 @@ import Testing
 }
 
 extension LocalStore {
-    /// Takes the database back to schema 5, which had no unique index on `evidence.blob`, and writes rows as a second
-    /// save of a scan wrote them then.
+    /// Takes the database back to schema 5, which had no unique index on `evidence.blob` and no scan alignments, and
+    /// writes rows as a second save of a scan wrote them then.
     func rewindToVersion5(adding records: [Evidence], observations: [(FieldObservation, Changeset)]) throws {
         let db = databaseForTesting
         try db.execute(
             """
             DROP INDEX evidence_blob;
+            DROP TABLE scan_alignments;
             PRAGMA user_version = 5;
             UPDATE store_meta SET value = 'schema 5, derivation \(Schema.derivation)' WHERE key = 'derived';
             """)

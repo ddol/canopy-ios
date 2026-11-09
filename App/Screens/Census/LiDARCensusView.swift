@@ -101,7 +101,7 @@ struct LiDARCensusView: View {
             VStack(spacing: Spacing.s) {
                 SelectedTreeCard(
                     focus: focus, tracker: tracker,
-                    placeholder: location.geoPoint == nil ? "Waiting for GPS…" : "No tree within 60 m",
+                    placeholder: placeholder,
                     choices: nearby, onChoose: choose)
                 overlayStatusRow
                 if let notice {
@@ -244,6 +244,13 @@ struct LiDARCensusView: View {
         return TrackerTargets(
             focus: focus.map { target($0.id, geo: $0.geo) },
             nearby: nearby.map { target(ARTreeSelection.censusPrefix + $0.0.id.uuidString, geo: $0.0.position.geo) })
+    }
+
+    /// What the tree card says with no tree to show. Until the store has been read at launch the census is empty, which
+    /// is not the same as no tree near by: saying so keeps a player from adding trees that are there.
+    private var placeholder: String {
+        if model.phase == .loading { return "Reading the trees on this phone…" }
+        return location.geoPoint == nil ? "Waiting for GPS…" : "No tree within 60 m"
     }
 
     /// What changes the trees near by besides the fix: trees arriving, and every change the player records.
@@ -603,6 +610,8 @@ struct LiDARCensusView: View {
         guard var fit, let id = fit.selectedSection, let section = fit.profile.section(id) else { return }
         do {
             fit.profile[id] = try fit.capture.snapping(section)
+            // Fitted to the scan now: the camera no longer sets it.
+            capture.stopAligning(ring: id)
             self.fit = fit
             showFit(fit)
             notice =
@@ -654,7 +663,8 @@ struct LiDARCensusView: View {
         showFit(fit)
     }
 
-    /// Stops aligning the rings the player moved by hand, confirmed or took out.
+    /// Stops aligning the rings the player moved by hand, confirmed or took out. (Snapping one to the scan stops it in
+    /// `snapSelectedSection`.)
     private func stopAligningEdited(from old: TreeProfile, to new: TreeProfile) {
         for id in capture.aligningRings {
             guard let ring = new.section(id) else {

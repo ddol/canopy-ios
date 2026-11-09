@@ -1,6 +1,7 @@
 import CanopyMap
 import CanopyModel
 import CanopyReference
+import CanopyStore
 import Foundation
 import Testing
 
@@ -63,12 +64,86 @@ import Testing
         #expect(Set(city).count == city.count)
     }
 
-    @Test func onlyTilesWithTreesStandingAreFollowed() {
-        var removed = GerardusMapClient.TileCounts(tile: b)
-        removed.removed = 4
-        var proposed = GerardusMapClient.TileCounts(tile: c)
-        proposed.proposed = 1
-        let summaries = [a: counts(a, latest: 1), b: removed, c: proposed, d: GerardusMapClient.TileCounts(tile: d)]
-        #expect(AppModel.tilesWithTrees(summaries) == [a, c])
+    @Test func aViewPullsOnlyTheTilesItDrawsInFull() {
+        let park = GeoPoint(latitude: 37.7694, longitude: -122.4770)
+        let close = MapViewport(center: park, radius: 200)
+        #expect(AppModel.drawnTiles(in: close) == MapDetail(region: close).detailed)
+        #expect(AppModel.drawnTiles(in: close).count <= MapDetail.detailedTileLimit)
+        #expect(AppModel.drawnTiles(in: .goldenGatePark).isEmpty)
+        #expect(AppModel.drawnTiles(in: .sanFrancisco).isEmpty)
+    }
+
+    /// A sync follows the tiles drawn in full now and the pulled tiles the player has been to; a tile pulled only because
+    /// an earlier version followed the whole city is left as it is.
+    @MainActor
+    @Test func aSyncFollowsTheTilesDrawnInFullAndThoseVisitedBefore() async throws {
+        let model = AppModel(
+            store: try LocalStore.inMemory(),
+            player: Player(id: PlayerID(rawValue: "T:_test"), alias: "Test", source: .gameCenter))
+        try await model.store.applyShared(
+            [a, b, c].map { LocalStore.SharedTileUpdate(tile: $0, sequence: 1, content: .snapshot([])) })
+        model.visitedTiles = [a]
+        #expect(try await model.followedTiles() == [a])
+        model.mapViewport = MapViewport(center: d.center, radius: 60)
+        let followed = try await model.followedTiles()
+        #expect(followed.contains(a) && followed.contains(d))
+        #expect(!followed.contains(b) && !followed.contains(c))
+        #expect(model.visitedTiles.contains(d), "a tile drawn in full is remembered as visited")
+        model.mapViewport = .sanFrancisco
+        let city = try await model.followedTiles()
+        #expect(!city.contains(b), "the whole city is shaded, not pulled")
+
+        // The tiles pulled only for the whole city are forgotten; those the player has been to stay.
+        try await model.forgetUnfollowed(city)
+        #expect(Set(try await model.store.sharedTiles().keys) == [a])
+    }
+
+    /// The tiles this phone recorded something in stay followed whoever recorded it: work done under the local id
+    /// before a Game Center sign-in, or while it is still signing in at launch, is the same player's. And they count
+    /// before the model has read the store's changesets.
+    @MainActor
+    @Test func aSyncFollowsTheTilesThisPhoneRecordedInWhoeverWasSignedIn() async throws {
+        let model = AppModel(
+            store: try LocalStore.inMemory(),
+            player: Player(id: PlayerID(rawValue: "T:_test"), alias: "Test", source: .gameCenter))
+        let theirs = TreeCandidate(id: UUID(), location: b.center, confidence: 1, isSynthetic: false).makeTree()
+        var fields = try #require(try JSONValue(encoding: theirs).objectValue)
+        fields["meta"] = nil
+        fields["proposedStatus"] = nil
+        fields["s2_l19_token"] = .string(theirs.position.chunk.token)
+        let record = SharedRecord(
+            kind: .tree, id: theirs.id, version: 1, tile: b, createdBy: .aerialSurvey,
+            createdAt: Date(timeIntervalSince1970: 1_761_200_000), fields: fields)
+        try await model.store.applyShared([
+            .init(tile: b, sequence: 1, content: .snapshot([record])),
+            .init(tile: c, sequence: 1, content: .snapshot([])),
+        ])
+        model.visitedTiles = []
+        try await model.store.record(.treeConfirmed(treeID: theirs.id), by: .local(UUID()))
+
+        let followed = try await model.followedTiles()
+        #expect(followed == [b])
+        try await model.forgetUnfollowed(followed)
+        #expect(Set(try await model.store.sharedTiles().keys) == [b])
+        await model.refresh()
+        #expect(model.ownTrees == [theirs.id], "drawn at every zoom as the player's own")
+        #expect(model.tree(theirs.id)?.displayStatus == .proposed)
+    }
+
+    /// Only the tiles drawn in full lately are kept as visited, so what a sync follows (each tile kept up to date and
+    /// asked about for the review queue) does not grow with every place the map has been.
+    @Test func visitedTilesAreTheMostRecentFew() throws {
+        let many = Array(AppModel.wholeCity.prefix(AppModel.visitedTileLimit + 40))
+        var visited: [S2CellID] = []
+        for tile in many { visited = AppModel.visiting([tile], after: visited) }
+        #expect(visited.count == AppModel.visitedTileLimit)
+        #expect(visited.last == many.last)
+        #expect(!visited.contains(many[0]))
+        // A tile visited again is the most recent.
+        let again = visited[0]
+        visited = AppModel.visiting([again], after: visited)
+        #expect(visited.last == again)
+        #expect(visited.count == AppModel.visitedTileLimit)
+        #expect(AppModel.visiting([], after: visited) == visited)
     }
 }
