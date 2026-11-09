@@ -1,3 +1,4 @@
+import CanopyMap
 import CanopyModel
 import Foundation
 
@@ -9,10 +10,12 @@ extension AppModel {
         CellCensus.byCell(census.trees.values)
     }
 
-    /// What the census holds in one cell.
+    /// What the census holds in one cell, from the census by tile: the AR view shows this twice an update, and finding
+    /// every tree's cell instead took a tenth of a second each time with the whole city loaded.
     func cellCensus(_ cell: S2CellID) -> CellCensus {
         var result = CellCensus(cell: cell, detected: 0, confirmed: 0, rejected: 0)
-        for tree in census.trees.values where tree.position.tile == cell {
+        for id in censusTiles.trees[cell] ?? [] {
+            guard let tree = census.trees[id] else { continue }
             switch tree.effectiveStatus {
             case .detected: result.detected += 1
             case .proposed, .confirmed, .verified: result.confirmed += 1

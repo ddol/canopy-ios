@@ -141,12 +141,19 @@ extension AppModel {
     /// The level-16 tiles a view could shade from the server's summaries, nearest the centre first and at most one
     /// call's worth: every tile round it (with the map's margin), or every tile in the level-13 cells round it when it
     /// is zoomed out that far. None for a view close enough to draw every tile in full.
+    ///
+    /// Only the tiles within `summaryBatch`'s square root of tiles of the centre can be among the nearest, so no more
+    /// than that is looked at: a map zoomed out to the Bay Area used to list a million tiles here, on the main thread,
+    /// and one zoomed out further tens of millions, until the app was stopped for its memory.
     nonisolated static func summaryTiles(around viewport: MapViewport) -> [S2CellID] {
         let detail = MapDetail(region: viewport)
         guard detail.tilesInView > MapDetail.detailedTileLimit else { return [] }
+        let tileEdge = TileSummary(id: viewport.center.tile).areaHectares.squareRoot() * 100
+        let reach = MapViewport(
+            center: viewport.center, radius: tileEdge * Double(GerardusMapClient.summaryBatch).squareRoot())
         let padded = MapViewport(
-            center: viewport.center, latitudeDelta: viewport.latitudeDelta * 1.3,
-            longitudeDelta: viewport.longitudeDelta * 1.3)
+            center: viewport.center, latitudeDelta: min(viewport.latitudeDelta * 1.3, reach.latitudeDelta),
+            longitudeDelta: min(viewport.longitudeDelta * 1.3, reach.longitudeDelta))
         let tiles: Set<S2CellID> =
             detail.summaryLevel < S2CellID.tileLevel
             ? Set(

@@ -49,6 +49,23 @@ import Testing
         #expect(city.contains(park.tile))
     }
 
+    @Test func aMapZoomedOutPastTheCityAsksAboutTheSameTilesWithoutListingEveryTileInView() {
+        // The Bay Area, the state and the whole globe: each listed every tile in view on the main thread (a million
+        // for the Bay Area), which froze the map and ran the app out of memory. The nearest tiles are the city's.
+        let park = GeoPoint(latitude: 37.7694, longitude: -122.4770)
+        let city = AppModel.summaryTiles(around: MapViewport(center: park, radius: 8000))
+        let zoomedOut = [
+            MapViewport(center: park, radius: 60_000), MapViewport(center: park, radius: 600_000),
+            MapViewport(center: park, latitudeDelta: 150, longitudeDelta: 360),
+        ]
+        for viewport in zoomedOut {
+            let start = ContinuousClock.now
+            let tiles = AppModel.summaryTiles(around: viewport)
+            #expect(ContinuousClock.now - start < .seconds(10))
+            #expect(tiles == city)
+        }
+    }
+
     @Test func theWholeCityIsEveryTileFromLandsEndToTheBayInAFewCalls() {
         let city = AppModel.wholeCity
         let landsEnd = GeoPoint(latitude: 37.7875, longitude: -122.5055).tile

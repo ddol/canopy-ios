@@ -60,11 +60,25 @@ public struct CanopyMapView<Renderer: MapRenderer>: View {
         return copy
     }
 
-    /// Calls `action` with the visible region whenever the map stops moving (and once when it first appears).
+    /// Calls `action` with the visible region whenever the map stops moving (and once when it first appears). A region
+    /// that is not a place on the map (`MapViewport.isUsable`) is not passed on.
     public func onViewportChange(_ action: @escaping @MainActor (MapViewport) -> Void) -> Self {
         var copy = self
-        copy.onViewportChange = action
+        copy.onViewportChange = { viewport in
+            guard viewport.isUsable else { return }
+            action(viewport)
+        }
         return copy
+    }
+}
+
+extension MapViewport {
+    /// Whether the region is a place on the map: a finite centre and spans that are finite and more than nothing. Should
+    /// a map ever report one that is not, finding the S2 cell of a centre that is not a number would stop the app, as
+    /// would counting the tiles of a span that is not.
+    public var isUsable: Bool {
+        center.latitude.isFinite && center.longitude.isFinite && abs(center.latitude) <= 90
+            && latitudeDelta.isFinite && longitudeDelta.isFinite && latitudeDelta > 0 && longitudeDelta > 0
     }
 }
 
