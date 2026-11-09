@@ -128,4 +128,49 @@ import Testing
         await #expect(throws: GLB.Error.notGLB) { try await cache.preview(for: ref) { junk } }
         #expect(cache.cached(ref) == nil)
     }
+
+    @Test func aRenderThatDrawsNothingLeavesNoPreview() async throws {
+        // Triangles with no area draw no pixels, as does a render the GPU does not do (Metal turns away an app in the
+        // background). A clear picture kept under the hash would stand for the scan until Caches is emptied.
+        let flat = Mesh(positions: [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(2, 0, 0)], indices: [0, 1, 2])
+        let glb = try GLB.data(for: flat)
+        let ref = Self.reference(glb)
+        let cache = ScanPreviewCache.temporary(pixels: 48)
+        await #expect(throws: ScanPreview.Error.nothingDrawn) { try await cache.preview(for: ref) { glb } }
+        #expect(cache.cached(ref) == nil)
+    }
+
+    @Test func aRequestCancelledWhileItWaitsIsNotDrawn() async throws {
+        // A row scrolled out of the list cancels its request, so the rows still in view do not wait behind its render.
+        let cache = ScanPreviewCache.temporary(pixels: 48)
+        let (first, second) = (try Self.glb(radius: 0.25), try Self.glb(radius: 0.5))
+        let reads = Mutex(0)
+        let started = DispatchSemaphore(value: 0)
+        let gate = DispatchSemaphore(value: 0)
+        let readFirst: @Sendable () throws -> Data = {
+            started.signal()
+            gate.wait()
+            reads.withLock { $0 += 1 }
+            return first
+        }
+        let readSecond: @Sendable () throws -> Data = {
+            reads.withLock { $0 += 1 }
+            return second
+        }
+        let drawing = Task { try await cache.preview(for: Self.reference(first), glb: readFirst) }
+        // While the first is being drawn, a second request waits for the cache, and is cancelled.
+        await withCheckedContinuation { done in
+            DispatchQueue.global().async {
+                started.wait()
+                done.resume()
+            }
+        }
+        let waiting = Task { try await cache.preview(for: Self.reference(second), glb: readSecond) }
+        waiting.cancel()
+        gate.signal()
+        _ = try await drawing.value
+        await #expect(throws: CancellationError.self) { try await waiting.value }
+        #expect(reads.withLock { $0 } == 1)
+        #expect(cache.cached(Self.reference(second)) == nil)
+    }
 }

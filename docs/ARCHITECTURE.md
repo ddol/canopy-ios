@@ -363,6 +363,11 @@ Share, and **Show on map**. Scans uploaded for registration are not kept on the 
   previews the scan, as Preview does. A mesh from another device is drawn once it has been downloaded. iOS may empty
   Caches; a picture it removes is drawn again. Bump `ScanPreview.version` when the look changes, so old pictures are
   drawn again. Resetting local data deletes them.
+  - A request from a row scrolled out of the list is dropped if it is still waiting, so the rows in view are not
+    kept waiting behind it.
+  - A render that comes back with nothing drawn is not kept, so it is drawn again next time.
+  - Each render runs in its own autorelease pool: without one, what SceneKit autoreleased piled up on the concurrency
+    thread, about 10 MB for each 200,000-triangle mesh.
 - **Show on map** (`AppModel.showOnMap`) switches to the Map tab, which centres on the scan's tree, shows its status
   if the chips hide it, and selects it, opening its sheet. Debug and TestFlight builds launched with
   `-canopy.sampleScan YES` record a synthetic scan on the first fixture tree when Your scans opens with none, for UI

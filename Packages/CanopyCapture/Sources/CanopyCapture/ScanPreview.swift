@@ -26,6 +26,9 @@ public enum ScanPreview {
         case emptyMesh
         case noGPU
         case renderFailed
+        /// The render came back with nothing drawn: the triangles have no area, or the GPU did not do the work (Metal
+        /// turns away command buffers from an app in the background). It is not kept, so it is drawn again next time.
+        case nothingDrawn
     }
 
     /// Where the camera looks from: the south-east (ARKit's +x is east and +z south), 30° above the horizon. Every
@@ -38,15 +41,39 @@ public enum ScanPreview {
 
     /// Renders `mesh` and encodes it as PNG on a transparent background. The work happens on the calling thread, so
     /// call it off the main actor.
+    ///
+    /// SceneKit autoreleases objects as it renders, and on a Swift concurrency thread they were not let go between
+    /// renders: without a pool of its own here, each render of a 200,000-triangle mesh left about 10 MB behind.
     public static func png(for mesh: Mesh, pixels: Int = pixels) throws -> Data {
-        let image = try render(mesh, pixels: pixels)
-        let data = NSMutableData()
-        guard
-            let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
-        else { throw Error.renderFailed }
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else { throw Error.renderFailed }
-        return data as Data
+        try autoreleasepool {
+            let image = try render(mesh, pixels: pixels)
+            guard try hasDrawnPixels(image) else { throw Error.nothingDrawn }
+            let data = NSMutableData()
+            guard
+                let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
+            else { throw Error.renderFailed }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else { throw Error.renderFailed }
+            return data as Data
+        }
+    }
+
+    /// Whether any pixel of `image` is drawn (not fully transparent).
+    static func hasDrawnPixels(_ image: CGImage) throws -> Bool {
+        let (width, height) = (image.width, image.height)
+        var rgba = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = rgba.withUnsafeMutableBytes { buffer -> Bool in
+            guard
+                let context = CGContext(
+                    data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                    bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { throw Error.renderFailed }
+        return stride(from: 3, to: rgba.count, by: 4).contains { rgba[$0] > 0 }
     }
 
     /// Renders `mesh` square, `pixels` wide, with an orthographic camera fitted to it.
@@ -197,9 +224,11 @@ public actor ScanPreviewCache {
     }
 
     /// The preview of `ref`, rendered from `glb` (the blob's bytes, read only when there is no preview yet) the first
-    /// time it is asked for.
+    /// time it is asked for. A request cancelled while it waited its turn (a row scrolled out of the list) throws
+    /// `CancellationError` without drawing, so the rows still in view are not kept waiting behind it.
     public func preview(for ref: BlobRef, glb: @Sendable () throws -> Data) throws -> URL {
         if let cached = cached(ref) { return cached }
+        try Task.checkCancellation()
         let png = try ScanPreview.png(for: try GLB.File(try glb()).mesh(), pixels: pixels)
         let url = url(for: ref)
         try FileManager.default.createDirectory(
