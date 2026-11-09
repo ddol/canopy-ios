@@ -232,6 +232,11 @@ final class AppModel {
         await record(.treeRejected(treeID: tree.id))
     }
 
+    /// "Move": `tree` stands at `position`, placed in AR the way a new tree is; this also says it is a tree.
+    func move(_ tree: Tree, to position: Position) async {
+        await record(.treeMoved(treeID: tree.id, position: position))
+    }
+
     /// "New tree here": a tree the aerial survey missed, at `position`.
     func addTree(at position: Position) async {
         let tree = Tree(

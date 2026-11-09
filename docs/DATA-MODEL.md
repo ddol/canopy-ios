@@ -165,9 +165,10 @@ shares it, and a `kind`:
 
 | Kind | From |
 |---|---|
-| `treeConfirmed(treeID)` | Census → Confirm tree |
+| `treeConfirmed(treeID)` | Confirm tree, on a tree's sheet and in the list without LiDAR |
 | `treeAdded(Tree)` | Census → New tree here |
 | `treeRejected(treeID)` | Census → Not a tree |
+| `treeMoved(treeID, position)` | Census → Move → Place here: the tree's true spot, placed in AR |
 | `trunkMeasured(treeID, dbh, lean, evidence)` | Census → Scan trunk |
 | `tagPlaced(Tag)` | Tag |
 
@@ -187,7 +188,9 @@ drop out of both folds, which is how a rejected change disappears. An applied ob
 shared map already has is skipped, since the server's copy (with its version) already includes it.
 
 Folding an observation sets the status it argues for: confirm → `confirmed`, add → `confirmed`, not a tree →
-`removed`, measure → `verified`; a placed tag → `confirmed`.
+`removed`, move → `confirmed` (a verified tree stays verified), measure → `verified`; a placed tag → `confirmed`. A
+move also sets the tree's position and its L19 chunk; its changeset names the tile it left as well as the one it
+moved to when they differ.
 
 ## Changesets
 
