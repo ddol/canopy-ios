@@ -9,6 +9,17 @@ import Testing
 @Suite struct ViewportTests {
     let park = MapViewport.goldenGatePark
 
+    @Test func theMapOpensWhereThePlayerIsWhenThatIsOutsideTheCity() throws {
+        let muirWoods = GeoPoint(latitude: 37.8970, longitude: -122.5811)
+        let region = try #require(MapViewport.opening(at: muirWoods))
+        #expect(region.center == muirWoods)
+        #expect(region.contains(muirWoods))
+        #expect(!MapViewport.sanFrancisco.contains(muirWoods))
+        #expect(region.isUsable)
+        // In the city, the map keeps its own start.
+        #expect(MapViewport.opening(at: park.center) == nil)
+    }
+
     @Test func aRegionOnTheMapIsUsable() {
         #expect(park.isUsable)
         #expect(MapViewport.sanFrancisco.isUsable)

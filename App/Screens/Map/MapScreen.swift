@@ -32,6 +32,9 @@ struct MapScreen: View {
     @AppStorage("canopy.baseMap") private var baseMap = BaseMap.apple
     /// Whether the data credit under the map is open: closed, it is a small "Data" tag.
     @State private var showsAttribution = false
+    /// Where the player is, asked for once so the map can open there when that is not San Francisco.
+    @State private var location = LocationProvider()
+    @State private var openedAtPlayer = false
 
     private let format = QuantityFormat()
 
@@ -106,6 +109,9 @@ struct MapScreen: View {
                         .presentationDetents([.medium, .large])
                 }
                 .onChange(of: model.mapTarget, initial: true) { showMapTarget() }
+                .onAppear { if !openedAtPlayer { location.start() } }
+                .onDisappear { location.stop() }
+                .onChange(of: location.geoPoint) { _, fix in openAtPlayer(fix) }
                 #if DEBUG || TESTING_TOOLS
                     // For profiling a load with Instruments without UI automation: launch with
                     // `-canopy.loadTreesAtLaunch YES` (and a server) to load the trees in view once the app is ready.
@@ -186,6 +192,17 @@ struct MapScreen: View {
             }
         #endif
         return .goldenGatePark
+    }
+
+    /// Opens the map where the player is, once, when the first fix is outside the city: the map starts on Golden Gate
+    /// Park, and the app places no limit on where trees can be scanned. A map the player has already moved, or sent
+    /// to a tree, is left alone.
+    private func openAtPlayer(_ fix: GeoPoint?) {
+        guard !openedAtPlayer, let fix else { return }
+        openedAtPlayer = true
+        location.stop()
+        guard let region = MapViewport.opening(at: fix), viewport == nil, model.mapTarget == nil else { return }
+        focus = MapFocus(region)
     }
 
     /// The middle of the map in view.

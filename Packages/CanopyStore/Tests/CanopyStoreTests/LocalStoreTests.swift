@@ -116,6 +116,24 @@ import Testing
         #expect(try await store.candidates().first { $0.id == real[1].id }?.source == "USGS 3DEP")
     }
 
+    /// Nothing limits where a tree can be recorded: Muir Woods, Sydney and a point on the date line all keep theirs.
+    @Test(arguments: [(37.8970, -122.5811), (-33.8688, 151.2093), (0.0, 179.9999)])
+    func aTreeCanBeRecordedAnywhere(latitude: Double, longitude: Double) async throws {
+        let store = try await makeStore()
+        let point = GeoPoint(latitude: latitude, longitude: longitude)
+        let tree = Tree(
+            meta: RecordMeta(playerID: player, chunk: point.chunk),
+            position: Position(geo: point, covariance: .isotropic(horizontal: 5, vertical: 5)),
+            countStatus: .proposed
+        )
+        let (_, changeset) = try await store.record(.treeAdded(tree), by: player)
+        #expect(changeset.meta.chunk.tile == point.tile)
+        let state = await store.state()
+        #expect(state.trees[tree.id]?.position.geo == point)
+        try await store.execute("DELETE FROM trees")
+        #expect(try await store.rebuild() == state)
+    }
+
     @Test func observationsAreAppendOnly() async throws {
         let store = try await makeStore()
         _ = try await store.record(.treeRejected(treeID: candidates[1].id), by: player)

@@ -495,6 +495,12 @@ public struct MapViewport: Equatable, Sendable {
         longitudeDelta: 0.162
     )
 
+    /// Where to open the map for a player at `point`: a few hundred metres round them when they are outside San
+    /// Francisco, where the map otherwise starts; nil inside the city, which keeps the park.
+    public static func opening(at point: GeoPoint, radius: Double = 400) -> MapViewport? {
+        sanFrancisco.contains(point) ? nil : MapViewport(center: point, radius: radius)
+    }
+
     public func contains(_ point: GeoPoint) -> Bool {
         abs(point.latitude - center.latitude) <= latitudeDelta / 2
             && abs(point.longitude - center.longitude) <= longitudeDelta / 2
