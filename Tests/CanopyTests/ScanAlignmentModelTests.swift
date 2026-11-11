@@ -25,8 +25,8 @@ import simd
         #expect(abs(ground + 1.3) < 1e-6)
 
         let fresh = TreeProfile(form: AppModel.knownForm(tree))
-        let (profile, snapped) = SavedScan(mesh: mesh).snappingTrunk(fresh, groundHeight: ground)
-        // The ground and breast height at least; the crown's base too when it is low enough for the scan to reach.
+        let (profile, snapped, _) = SavedScan(mesh: mesh).snappingTrunk(fresh, groundHeight: ground)
+        // The rings at the ground and a metre up at least, and those above that the scan reaches.
         #expect(snapped >= 2)
         let older = ScanAlignment(
             scan: scan, treeID: tree.id, profile: fresh, groundHeight: ground,

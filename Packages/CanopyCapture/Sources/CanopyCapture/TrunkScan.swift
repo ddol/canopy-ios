@@ -23,17 +23,25 @@ public struct TrunkCapture: Sendable {
     /// A ring fitted to the scan `height` metres above the ground: a circle through the raw depth points in a band
     /// there when it holds enough of them, else through the evidence mesh's slice. The centre is from the trunk's
     /// base (x, z). Throws when the scan has too little of the trunk at that height.
-    public func fitSection(at height: Double, halfWidth: Float = 0.05) throws -> FittedCircle {
+    ///
+    /// The mesh's slice is of its steep triangles only, split into the trunks it crosses (`TrunkStems`): the ring is
+    /// the one nearest `near`, so a ring at the ground leaves the ground out and one above a fork fits one stem.
+    public func fitSection(
+        at height: Double, near: SIMD2<Double> = .zero, halfWidth: Float = 0.05
+    ) throws -> FittedCircle {
         let band = points.slice(atHeight: Float(height), halfWidth: halfWidth)
-        let slice =
-            band.count >= TrunkAnalysis().minimumDepthPoints
-            ? band : evidence.sectionSlices(atHeight: groundHeight + height)
-        return try Self.ring(through: slice)
+        if band.count >= TrunkAnalysis().minimumDepthPoints {
+            return try TrunkStems.ring(through: band, nearest: near)
+        }
+        return try TrunkStems.ring(through: evidence.trunkSlices(atHeight: groundHeight + height), nearest: near)
     }
 
-    /// `fitSection` applied to a profile's ring: its radius and centre from the scan, marked as fitted.
-    public func snapping(_ section: TreeSection) throws -> TreeSection {
-        section.snapped(to: try fitSection(at: section.height))
+    /// `fitSection` applied to a profile's ring, near its centre: its radius and centre from the scan, marked as
+    /// fitted.
+    public func snapping(_ section: TreeSection, lean: Lean? = nil) throws -> TreeSection {
+        let centre = WireframeTree.centre(of: section, lean: lean)
+        return section.snapped(
+            to: try fitSection(at: section.height, near: SIMD2(Double(centre.x), Double(centre.z))))
     }
 
     /// A trunk's ring through the points of a slice: a robust circle fit, refused when the points are too few, cover

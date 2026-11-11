@@ -43,14 +43,14 @@ import simd
     @Test func theStepsTheScanReachesAreFittedToIt() throws {
         let profile = TrunkSteps.fitted(TreeProfile(form: form), to: capture(), below: form.crownBase)
         let steps = profile.trunk.filter { $0.source == .scan }
-        // The breast-height ring is fitted with the steps.
-        #expect(steps.map(\.height) == [1, 1.37, 2, 3])
+        #expect(steps.map(\.height) == [1, 2, 3])
         for ring in steps {
             #expect(abs(ring.radius - radius(ring.height)) < 0.005)
             #expect(simd_distance(try #require(ring.offset), lean * ring.height) < 0.005)
         }
-        // Above 3.2 m the scan has nothing, so no ring is made up there; the ground and crown-base rings stay.
-        #expect(profile.trunk.map(\.height) == [0, 1, 1.37, 2, 3, 6])
+        // Above 3.2 m the scan has nothing, so the ring at 4 m stays as it was drawn, as do the ground and crown-base
+        // rings.
+        #expect(profile.trunk.map(\.height) == [0, 1, 2, 3, 4, 6])
     }
 
     @Test func theStepsAboveArePredictedFromTheRingsBelow() throws {
@@ -61,7 +61,7 @@ import simd
         #expect(taper.top == 3)
 
         let profile = TrunkSteps.predicted(fitted, below: form.crownBase)
-        #expect(profile.trunk.map(\.height) == [0, 1, 1.37, 2, 3, 4, 5, 6])
+        #expect(profile.trunk.map(\.height) == [0, 1, 2, 3, 4, 5, 6])
         for height in [4.0, 5.0] {
             let ring = try #require(profile.trunk.first { $0.height == height })
             #expect(ring.source == .eye)

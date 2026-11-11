@@ -64,7 +64,8 @@ import simd
             TreeSection(part: .trunk, height: 2, radius: 0.5),
             high, crown,
         ])
-        let (snapped, count) = scan.snappingTrunk(profile, groundHeight: capture.groundHeight)
+        let (snapped, count, stems) = scan.snappingTrunk(profile, groundHeight: capture.groundHeight)
+        #expect(stems == 0)
         #expect(count == 2)
         #expect(snapped.section(confirmed.id) == confirmed)
         #expect(snapped.section(high.id) == high)
@@ -76,7 +77,7 @@ import simd
 
     @Test func anAlignmentRoundTripsThroughTheStoresJSON() throws {
         var profile = TreeProfile(form: TreeForm(trunkDiameter: 0.6, height: 12, crownHeight: 8, crownWidth: 7))
-        let breast = try #require(profile.trunk.first { $0.height == DBH.standardHeight })
+        let breast = try #require(profile.trunk.first { $0.height == 1 })
         profile[breast.id] = TreeSection(
             id: breast.id, part: .trunk, height: DBH.standardHeight, radius: 0.31, source: .scan,
             offset: SIMD2(0.012, -0.004), radiusUncertainty: 0.002)

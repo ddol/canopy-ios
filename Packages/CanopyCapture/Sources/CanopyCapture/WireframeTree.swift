@@ -99,7 +99,7 @@ public enum WireframeTree {
                     lines += ring
                 }
             }
-            for (lower, upper) in zip(rings, rings.dropFirst()) {
+            for (lower, upper) in joins(rings) {
                 lines += uprights(
                     from: centre(lower), to: centre(upper), radius: Float(lower.radius),
                     topRadius: Float(upper.radius), count: uprightCount)
@@ -110,6 +110,27 @@ public enum WireframeTree {
             }
         }
         return figure
+    }
+
+    /// Which rings of one part are joined by uprights, lower first: each ring to the next on the same stem (or on
+    /// the trunk below the fork), and the lowest ring of each stem down to the trunk's ring below it, so a forked
+    /// trunk funnels into one. A ring on no stem is not joined across a stem's rings to one above the fork.
+    static func joins(_ rings: [TreeSection]) -> [(TreeSection, TreeSection)] {
+        let main = rings.filter { $0.stem == nil }
+        let forked = rings.filter { $0.stem != nil }
+        var joins: [(TreeSection, TreeSection)] = []
+        for (lower, upper) in zip(main, main.dropFirst())
+        where !forked.contains(where: { $0.height > lower.height + 1e-6 && $0.height < upper.height - 1e-6 }) {
+            joins.append((lower, upper))
+        }
+        for stem in Set(forked.compactMap(\.stem)).sorted() {
+            let up = forked.filter { $0.stem == stem }
+            if let first = up.first, let below = main.last(where: { $0.height < first.height - 1e-6 }) {
+                joins.append((below, first))
+            }
+            joins += zip(up, up.dropFirst()).map { ($0, $1) }
+        }
+        return joins
     }
 
     /// Points around each ring.

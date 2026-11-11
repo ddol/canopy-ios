@@ -43,10 +43,14 @@ public struct TreeSection: Equatable, Sendable, Codable, Identifiable {
     public var offset: SIMD2<Double>?
     /// Standard uncertainty of the radius when it was fitted.
     public var radiusUncertainty: Double?
+    /// Which stem of a forked trunk the ring is on, numbered from 0 at the fork; nil below the fork, and on a trunk
+    /// that does not fork. The rings of a stem are joined to each other, and its lowest to the trunk's ring below the
+    /// fork, so the stems funnel into one trunk.
+    public var stem: Int?
 
     public init(
         id: UUID = UUID(), part: Part, height: Double, radius: Double, source: Source = .eye,
-        offset: SIMD2<Double>? = nil, radiusUncertainty: Double? = nil
+        offset: SIMD2<Double>? = nil, radiusUncertainty: Double? = nil, stem: Int? = nil
     ) {
         self.id = id
         self.part = part
@@ -55,6 +59,7 @@ public struct TreeSection: Equatable, Sendable, Codable, Identifiable {
         self.source = source
         self.offset = offset
         self.radiusUncertainty = radiusUncertainty
+        self.stem = stem
     }
 
     /// Whether the ring stays when the shape sliders redraw the rest: a snapped, aligned or confirmed ring does.
@@ -75,16 +80,18 @@ public struct TreeProfile: Equatable, Sendable, Codable {
         sort()
     }
 
-    /// The rings a four-slider shape stands for: the trunk at the ground, at breast height and at the crown's base;
-    /// the crown at its base, its middle and its top.
+    /// Where a new trunk's rings start, in metres above the ground: a ring a metre, from the ground to 4 m.
+    public static let trunkHeights: [Double] = [0, 1, 2, 3, 4]
+
+    /// The rings a four-slider shape stands for: the trunk at the ground and every metre to 4 m (`trunkHeights`), and
+    /// at the crown's base when that is higher; the crown at its base, its middle and its top.
     public init(form: TreeForm) {
         let form = form.clamped
         let trunkRadius = form.trunkDiameter / 2
-        var sections = [TreeSection(part: .trunk, height: 0, radius: trunkRadius)]
-        if form.crownBase > DBH.standardHeight {
-            sections.append(TreeSection(part: .trunk, height: DBH.standardHeight, radius: trunkRadius))
+        var sections = Self.trunkHeights.map { TreeSection(part: .trunk, height: $0, radius: trunkRadius) }
+        if form.crownBase > Self.trunkHeights.last! + 0.05 {
+            sections.append(TreeSection(part: .trunk, height: form.crownBase, radius: trunkRadius))
         }
-        sections.append(TreeSection(part: .trunk, height: form.crownBase, radius: trunkRadius))
         let crownRadius = form.crownWidth / 2
         sections.append(TreeSection(part: .crown, height: form.crownBase, radius: crownRadius))
         if form.crownHeight > 1 {
@@ -96,6 +103,26 @@ public struct TreeProfile: Equatable, Sendable, Codable {
     }
 
     public var trunk: [TreeSection] { sections.filter { $0.part == .trunk } }
+    /// The trunk's rings below any fork: those on no stem.
+    public var mainTrunk: [TreeSection] { sections.filter { $0.part == .trunk && $0.stem == nil } }
+    /// The stems a forked trunk splits into, by number, each with its rings from the bottom up.
+    public var stems: [Int: [TreeSection]] {
+        Dictionary(grouping: trunk.filter { $0.stem != nil }) { $0.stem! }
+    }
+
+    /// The trunk's radius at `height` on the main trunk: between the rings either side of it, or the nearest one
+    /// beyond the end.
+    public func trunkRadius(at height: Double) -> Double? {
+        let rings = mainTrunk
+        switch (rings.last { $0.height <= height }, rings.first { $0.height >= height }) {
+        case (let lower?, let upper?) where upper.height > lower.height:
+            let t = (height - lower.height) / (upper.height - lower.height)
+            return lower.radius + (upper.radius - lower.radius) * t
+        case (let lower?, _): return lower.radius
+        case (nil, let upper?): return upper.radius
+        case (nil, nil): return nil
+        }
+    }
     public var crown: [TreeSection] { sections.filter { $0.part == .crown } }
 
     /// The four-slider shape this profile sums to: the trunk's diameter at the ring nearest breast height, the top
@@ -104,13 +131,11 @@ public struct TreeProfile: Equatable, Sendable, Codable {
         let trunk = trunk
         let crown = crown
         let height = max(sections.map(\.height).max() ?? 1, TreeForm.heights.lowerBound)
-        let breast =
-            trunk.min { abs($0.height - DBH.standardHeight) < abs($1.height - DBH.standardHeight) }
-            ?? trunk.first
+        let breast = trunkRadius(at: DBH.standardHeight) ?? trunk.first?.radius
         let crownBase = crown.first?.height ?? trunk.last?.height ?? height * 2 / 3
         let crownWidth = (crown.map(\.radius).max() ?? trunk.last?.radius ?? 0.5) * 2
         return TreeForm(
-            trunkDiameter: (breast?.radius ?? 0.15) * 2, height: height, crownHeight: height - crownBase,
+            trunkDiameter: (breast ?? 0.15) * 2, height: height, crownHeight: height - crownBase,
             crownWidth: crownWidth
         ).clamped
     }
@@ -147,11 +172,14 @@ public struct TreeProfile: Equatable, Sendable, Codable {
     @discardableResult
     public mutating func addSection(above id: TreeSection.ID) -> TreeSection.ID? {
         guard let ring = section(id) else { return nil }
-        let same = sections.filter { $0.part == ring.part }
+        let same = sections.filter { $0.part == ring.part && $0.stem == ring.stem }
         let next = same.first { $0.height > ring.height + 0.01 }
         let height = next.map { (ring.height + $0.height) / 2 } ?? min(ring.height + 1, Self.heights.upperBound)
         let radius = next.map { (ring.radius + $0.radius) / 2 } ?? ring.radius
-        let added = TreeSection(part: ring.part, height: height, radius: radius)
+        // A ring on a stem goes up that stem, from its centre.
+        let added = TreeSection(
+            part: ring.part, height: height, radius: radius, offset: ring.stem == nil ? nil : ring.offset,
+            stem: ring.stem)
         sections.append(added)
         sort()
         return added.id
@@ -165,7 +193,9 @@ public struct TreeProfile: Equatable, Sendable, Codable {
 
     private mutating func sort() {
         sections.sort { a, b in
-            a.height != b.height ? a.height < b.height : (a.part == .trunk && b.part == .crown)
+            if a.height != b.height { return a.height < b.height }
+            if a.part != b.part { return a.part == .trunk }
+            return (a.stem ?? -1) < (b.stem ?? -1)
         }
     }
 }

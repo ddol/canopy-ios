@@ -40,7 +40,8 @@ public struct TrunkTaper: Equatable, Sendable {
         let tilt = WireframeTree.tilt(lean)
         let leanFromScan = SIMD2(Double(tilt.x), Double(tilt.z))
         let fitted = rings.filter {
-            $0.part == .trunk && ($0.source == .scan || $0.source == .confirmed) && $0.height >= Self.flare
+            $0.part == .trunk && $0.stem == nil && ($0.source == .scan || $0.source == .confirmed)
+                && $0.height >= Self.flare
         }
         guard !fitted.isEmpty else { return nil }
         let samples = fitted.map { ring in

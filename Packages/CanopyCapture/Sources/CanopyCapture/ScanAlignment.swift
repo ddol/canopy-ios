@@ -22,11 +22,13 @@ public struct ScanAlignment: Codable, Equatable, Sendable {
     /// The trunk's map position as Gerardus's tree, moved onto the trunk, puts it: the census tree's position when
     /// the alignment was saved, corrected by `vectorTree.correction`.
     public var correctedPosition: GeoPoint?
+    /// The crown's shape as set against the aerial points, when it was; the profile's crown rings are drawn from it.
+    public var crown: CrownShape?
     public var savedAt: Date
 
     public init(
         scan: BlobRef, treeID: UUID, profile: TreeProfile, groundHeight: Double, vectorTree: VectorTreePlacement? = nil,
-        correctedPosition: GeoPoint? = nil, savedAt: Date = .now
+        correctedPosition: GeoPoint? = nil, crown: CrownShape? = nil, savedAt: Date = .now
     ) {
         self.scan = scan
         self.treeID = treeID
@@ -34,6 +36,7 @@ public struct ScanAlignment: Codable, Equatable, Sendable {
         self.groundHeight = groundHeight
         self.vectorTree = vectorTree
         self.correctedPosition = correctedPosition
+        self.crown = crown
         self.savedAt = savedAt.roundedToMilliseconds
     }
 
@@ -104,28 +107,113 @@ public struct SavedScan: Sendable {
         mesh.bounds.map { Double($0.max.y) - groundHeight }
     }
 
-    /// A circle fitted to the mesh's slices `height` metres above the ground, centred from the trunk's base (x, z).
-    /// Throws when the mesh has too little of the trunk there.
-    public func fitSection(at height: Double, groundHeight: Double) throws -> FittedCircle {
-        try TrunkCapture.ring(through: mesh.sectionSlices(atHeight: groundHeight + height))
+    /// A circle fitted to the mesh's walls `height` metres above the ground, round the trunk nearest `near` (from the
+    /// trunk's base, x and z): the ground and anything flat are left out, and above a fork it is one stem. Throws
+    /// when the mesh has too little of a trunk there.
+    public func fitSection(at height: Double, groundHeight: Double, near: SIMD2<Double> = .zero) throws -> FittedCircle
+    {
+        try TrunkStems.ring(through: mesh.trunkSlices(atHeight: groundHeight + height), nearest: near)
     }
 
-    /// A ring snapped to the mesh at its height: its radius and centre from `fitSection`, marked as fitted.
-    public func snapping(_ section: TreeSection, groundHeight: Double) throws -> TreeSection {
-        section.snapped(to: try fitSection(at: section.height, groundHeight: groundHeight))
+    /// Rings round every trunk the mesh crosses `height` metres above the ground within `radius` of `near`: one below
+    /// a fork, a ring per stem above it. Largest first.
+    public func stems(
+        at height: Double, groundHeight: Double, near: SIMD2<Double>, within radius: Double
+    ) -> [FittedCircle] {
+        TrunkStems.rings(through: mesh.trunkSlices(atHeight: groundHeight + height), near: near, within: radius)
+    }
+
+    /// A ring snapped to the mesh at its height, round the trunk nearest its centre: its radius and centre from
+    /// `fitSection`, marked as fitted.
+    public func snapping(_ section: TreeSection, groundHeight: Double, lean: Lean? = nil) throws -> TreeSection {
+        section.snapped(
+            to: try fitSection(at: section.height, groundHeight: groundHeight, near: Self.centre(of: section, lean)))
+    }
+
+    static func centre(of section: TreeSection, _ lean: Lean?) -> SIMD2<Double> {
+        let centre = WireframeTree.centre(of: section, lean: lean)
+        return SIMD2(Double(centre.x), Double(centre.z))
     }
 
     /// Every trunk ring the mesh can fit snapped to it, except those confirmed against the tree; the rest stay as
-    /// they were. Returns the profile and how many rings snapped.
-    public func snappingTrunk(_ profile: TreeProfile, groundHeight: Double) -> (profile: TreeProfile, snapped: Int) {
+    /// they were. Where the trunk forks, a ring below the fork that the mesh shows as two stems or more becomes a
+    /// ring on each (`TreeSection.stem`), numbered to follow the stems below. Returns the profile, how many rings
+    /// snapped, and how many stems the trunk forks into (0 when it does not).
+    public func snappingTrunk(
+        _ profile: TreeProfile, groundHeight: Double, lean: Lean? = nil
+    ) -> (profile: TreeProfile, snapped: Int, stems: Int) {
         var profile = profile
         var snapped = 0
         for ring in profile.trunk where ring.source != .confirmed {
-            guard let fitted = try? snapping(ring, groundHeight: groundHeight) else { continue }
+            let centre = Self.centre(of: ring, lean)
+            if ring.stem == nil, ring.height >= Self.lowestFork {
+                let found = stems(
+                    at: ring.height, groundHeight: groundHeight, near: centre, within: Self.forkReach(ring))
+                if found.count >= 2 {
+                    snapped += profile.splitting(ring.id, into: found).count
+                    continue
+                }
+            }
+            guard let fitted = try? snapping(ring, groundHeight: groundHeight, lean: lean) else { continue }
             profile[ring.id] = fitted
             snapped += 1
         }
-        return (profile, snapped)
+        return (profile, snapped, profile.stems.count)
+    }
+
+    /// No trunk forks lower than this, in metres: below it, two pieces are roots or a buttress.
+    public static let lowestFork = 0.8
+
+    /// How far from a ring's centre its stems are looked for: two metres, or three times its radius.
+    static func forkReach(_ ring: TreeSection) -> Double { max(2, 3 * ring.radius) }
+
+    /// Splits the ring nearest `height` on the main trunk into a ring per stem the mesh shows there, as
+    /// `snappingTrunk` does; nil when the mesh shows one trunk or none there. Returns the profile and the stems'
+    /// ring ids.
+    public func splitting(
+        _ profile: TreeProfile, at id: TreeSection.ID, groundHeight: Double, lean: Lean? = nil
+    ) -> (profile: TreeProfile, rings: [TreeSection.ID])? {
+        guard let ring = profile.section(id), ring.part == .trunk else { return nil }
+        let found = stems(
+            at: ring.height, groundHeight: groundHeight, near: Self.centre(of: ring, lean),
+            within: Self.forkReach(ring))
+        guard found.count >= 2 else { return nil }
+        var profile = profile
+        let rings = profile.splitting(id, into: found)
+        return (profile, rings)
+    }
+}
+
+extension TreeProfile {
+    /// Replaces a trunk ring with one ring per circle, each on a stem (`TreeSection.stem`), fitted to the scan. A
+    /// circle takes the number of the stem whose ring below is nearest it, so a stem keeps its number up the tree;
+    /// the rest take numbers not yet used. Returns the new rings' ids, in the circles' order.
+    @discardableResult
+    public mutating func splitting(_ id: TreeSection.ID, into circles: [FittedCircle]) -> [TreeSection.ID] {
+        guard let ring = section(id) else { return [] }
+        let below = stems.compactMapValues { rings in rings.last { $0.height < ring.height - 0.01 } }
+        var free = below.keys.sorted()
+        var next = (stems.keys.max() ?? -1) + 1
+        var ids: [TreeSection.ID] = []
+        self[id] = nil
+        for circle in circles {
+            let stem: Int
+            if let nearest = free.min(by: { a, b in
+                simd_distance(below[a]?.offset ?? .zero, circle.center)
+                    < simd_distance(below[b]?.offset ?? .zero, circle.center)
+            }) {
+                stem = nearest
+                free.removeAll { $0 == nearest }
+            } else {
+                stem = next
+                next += 1
+            }
+            let added = TreeSection(part: .trunk, height: ring.height, radius: ring.radius, stem: stem)
+                .snapped(to: circle)
+            self[added.id] = added
+            ids.append(added.id)
+        }
+        return ids
     }
 }
 
