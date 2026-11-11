@@ -12,9 +12,9 @@ import simd
 /// Geometry is kept in anchor coordinates and placed with each anchor's latest transform, so when ARKit corrects
 /// drift by moving an anchor, the kept detail moves with it.
 public struct MeshAccumulator: Sendable {
-    public let center: SIMD3<Float>
+    public private(set) var center: SIMD3<Float>
     /// Horizontal radius of the region of interest, in metres.
-    public let radius: Float
+    public private(set) var radius: Float
     /// How far below and above `center` the region reaches, in metres.
     public let below: Float
     public let above: Float
@@ -75,6 +75,29 @@ public struct MeshAccumulator: Sendable {
             }
             cells[key] = Cell(corners: corners)
         }
+    }
+
+    /// Moves or resizes the region: what was kept inside the new region stays, the rest is dropped. Anchors added
+    /// again afterwards fill in what the new region takes in that the old one did not (`CaptureSession` adds every
+    /// anchor again straight away).
+    public mutating func reframe(center: SIMD3<Float>, radius: Float) {
+        self.center = center
+        self.radius = radius
+        cells = cells.filter { key, _ in
+            guard let transform = transforms[key.anchor] else { return false }
+            return contains(world(transform, (SIMD3<Float>(key.cell) + 0.5) * cellSize))
+        }
+        for (anchor, points) in floorPoints {
+            guard let transform = transforms[anchor] else { continue }
+            floorPoints[anchor] = points.filter { contains(world(transform, $0)) }
+        }
+    }
+
+    /// Forgets everything kept, keeping the region: as when tracking jumped and the kept detail no longer lines up
+    /// with the world. Anchors added again afterwards start it afresh from ARKit's current mesh.
+    public mutating func clear() {
+        cells = [:]
+        floorPoints = [:]
     }
 
     public var isEmpty: Bool { cells.isEmpty }

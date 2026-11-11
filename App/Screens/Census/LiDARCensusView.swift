@@ -32,6 +32,14 @@ struct LiDARCensusView: View {
     @State private var sessionOriginAccuracy = Double.infinity
     /// The tile whose site was last asked for on arrival, so a slow server is asked once.
     @State private var autoLoadTile: S2CellID?
+    /// When a load of the site under the player last failed on its own: it is not tried again for a while, and
+    /// not at all while the phone is offline, so a walk in the woods is not a stream of failed connections.
+    @State private var autoLoadFailedAt: Date?
+    /// Why the scan could not measure, shown with the scan until it changes: kept apart from the notice, which other
+    /// news would replace before it is read.
+    @State private var scanIssue: String?
+    /// Moves the dashes round the rings of a tree being moved, so they read as moving ("marching ants").
+    @State private var antsPhase: Float = 0
     @State private var loadingVectors = false
     /// The tree picked by tapping; the shapes the player adjusts live on the model, shared with the map.
     @State private var selection: ARTreeSelection?
@@ -44,6 +52,8 @@ struct LiDARCensusView: View {
     @State private var tracker = TreeTracker()
     /// The selected tree while it is being moved to its true spot.
     @State private var move: TreeMove?
+    /// Whether the site load running was asked for on its own (`autoLoadVectors`), so says nothing.
+    @State private var loadingQuietly = false
     private let format = QuantityFormat()
 
     var body: some View {
@@ -106,7 +116,7 @@ struct LiDARCensusView: View {
                 overlayStatusRow
                 if let notice {
                     HStack(spacing: Spacing.xs) {
-                        if loadingVectors { ProgressView().controlSize(.small) }
+                        if loadingVectors, !loadingQuietly { ProgressView().controlSize(.small) }
                         Text(notice)
                     }
                     .font(.footnote)
@@ -122,7 +132,23 @@ struct LiDARCensusView: View {
                     }
                 }
                 if let scan = capture.scan, fit == nil {
-                    ScanProgressCard(progress: scan.progress)
+                    if scan.trackingJumped {
+                        TrackingJumpCard(
+                            onRestart: {
+                                capture.restartScanAfterJump()
+                                scanIssue = nil
+                            },
+                            onKeep: { capture.keepScanAfterJump() })
+                    }
+                    ScanProgressCard(progress: scan.progress, regionRadius: scan.regionRadius)
+                    if let scanIssue {
+                        Label(scanIssue, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .padding(Spacing.xs)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.small))
+                            .accessibilityIdentifier("scan-issue")
+                    }
                 }
                 bottomPanel
             }
@@ -194,8 +220,15 @@ struct LiDARCensusView: View {
             .onChange(of: model.treeForms) { old, new in rebuildOverlay(OverlayParts(reshaping: old, new)) }
             .onChange(of: capture.ringFits) { applyRingFits() }
             .onChange(of: model.aerial) {
-                guard loadingVectors, case .working(let message) = model.aerial else { return }
+                guard loadingVectors, !loadingQuietly, case .working(let message) = model.aerial else { return }
                 notice = message
+            }
+            .onChange(of: model.isOnline) {
+                // Back online: the site under the player can be asked for again.
+                if model.isOnline {
+                    autoLoadFailedAt = nil
+                    autoLoadVectors()
+                }
             }
     }
 
@@ -210,6 +243,7 @@ struct LiDARCensusView: View {
             .onChange(of: capture.lastDrag) {
                 if let drag = capture.lastDrag { dragTree(drag) }
             }
+            .task(id: move?.treeID) { await marchAnts() }
     }
 
     // MARK: The selected tree
@@ -407,8 +441,12 @@ struct LiDARCensusView: View {
             Button("Cancel", systemImage: "xmark") {
                 capture.cancelScan()
                 notice = nil
+                scanIssue = nil
             }
             .buttonStyle(.canopySecondary)
+            Button("Aim here", systemImage: "scope") { reaimScan() }
+                .buttonStyle(.canopySecondary)
+                .accessibilityIdentifier("scan-reaim")
 
             Button {
                 Task { await finishScan() }
@@ -506,17 +544,32 @@ struct LiDARCensusView: View {
     }
 
     private func startScan() {
+        scanIssue = nil
         do {
             try capture.startScan()
-            notice = "Walk slowly round the trunk, keeping it in view."
+            notice =
+                "Walk slowly round the trunk, keeping it in view. If the lime takes in something else, point at the "
+                + "trunk and tap Aim here."
         } catch {
             notice = Self.describe(error)
+        }
+    }
+
+    /// Aims the scan at the trunk under the reticle instead, keeping what it kept there.
+    private func reaimScan() {
+        do {
+            try capture.reaimScan()
+            scanIssue = nil
+            notice = "Aimed at the trunk in the middle of the screen. Keep walking round it."
+        } catch {
+            scanIssue = Self.describe(error)
         }
     }
 
     private func finishScan() async {
         isMeasuring = true
         defer { isMeasuring = false }
+        scanIssue = nil
         do {
             let result = try await capture.finishScan()
             let position: Position
@@ -548,7 +601,8 @@ struct LiDARCensusView: View {
                 (steps.map { "Rings are fitted to the scan up to " + format.length($0, fractionDigits: 1) + ". " } ?? "")
                 + "Step back and set the shape with the sliders, then Rings → Align steps to fit the rest to the camera."
         } catch {
-            notice = Self.describe(error)
+            // Kept with the scan, so it is there to read and the scan can go on.
+            scanIssue = Self.describe(error)
         }
     }
 
@@ -560,9 +614,11 @@ struct LiDARCensusView: View {
         case CaptureError.notScanning: "Start a scan on the trunk first."
         case TrunkAnalysisError.notEnoughPoints:
             "Not enough of the trunk 1.37 m above the ground yet. Scan it from closer."
-        case TrunkAnalysisError.arcTooShort: "Scan more of the trunk: keep walking round it."
-        case TrunkAnalysisError.implausibleDiameter:
-            "That does not look like a trunk. Start the scan on the trunk, about 1.37 m above the ground."
+        case TrunkAnalysisError.arcTooShort(let degrees):
+            "The scan covers \(Int(degrees.rounded()))° of the trunk 1.37 m up, and needs 75°. Keep walking round it."
+        case TrunkAnalysisError.implausibleDiameter(let diameter):
+            "The scan 1.37 m up fits a circle " + QuantityFormat().length(diameter, fractionDigits: 1)
+                + " across, which is no trunk. Point at the trunk, tap Aim here, then walk round it."
         default: "Could not measure: \(error.localizedDescription)"
         }
     }
@@ -739,25 +795,39 @@ struct LiDARCensusView: View {
     }
 
     /// Asks for the site under the player once per tile arrived at, when a server is set and it is not loaded yet.
+    /// Asked for on its own, a site load is quiet: it is not tried while the phone is offline, a failure says
+    /// nothing and waits `autoLoadPatience` before the next try, and nothing it says covers what the player is doing.
     private func autoLoadVectors() {
-        guard let fix = location.geoPoint, model.alignClient != nil else { return }
+        guard let fix = location.geoPoint, model.alignClient != nil, model.isOnline else { return }
+        if let failed = autoLoadFailedAt, Date.now.timeIntervalSince(failed) < Self.autoLoadPatience { return }
         let tile = fix.tile
         guard tile != autoLoadTile, !model.hasVectors(at: fix), !model.aerial.isWorking else { return }
         autoLoadTile = tile
-        loadVectors(around: fix)
+        loadVectors(around: fix, quietly: true)
     }
 
-    private func loadVectors(around point: GeoPoint) {
+    /// How long a failed load of the site under the player waits before it is tried again, in seconds.
+    static let autoLoadPatience: TimeInterval = 180
+
+    private func loadVectors(around point: GeoPoint, quietly: Bool = false) {
         guard !loadingVectors else { return }
         loadingVectors = true
+        loadingQuietly = quietly
         Task {
             await model.loadVectors(around: point)
             loadingVectors = false
+            loadingQuietly = false
             switch model.aerial {
-            case .done(let message): notice = message
+            case .done(let message):
+                autoLoadFailedAt = nil
+                if !quietly || (capture.scan == nil && move == nil) { notice = message }
             case .failed(let message):
-                notice = message
-                autoLoadTile = nil
+                if quietly {
+                    autoLoadFailedAt = .now
+                    autoLoadTile = nil
+                } else {
+                    notice = message
+                }
             default: break
             }
             rebuildOverlay()
@@ -904,7 +974,8 @@ struct LiDARCensusView: View {
         var items: [WireframeItem] = []
         // Detections in a surveyed cell were looked over and left: drawn faint and thin.
         var surveyed: [WireframeItem] = []
-        for (tree, _) in model.census.trees(near: here, within: 120, limit: 400, tiles: model.censusTiles) {
+        for (tree, _) in model.census.trees(near: here, within: 120, limit: 400, tiles: model.censusTiles)
+        where tree.id != move?.treeID {
             guard let base = arGroundPoint(tree.position.geo, sites: sites, arGround: arGround) else { continue }
             let id = ARTreeSelection.censusPrefix + tree.id.uuidString
             var item = SiteWireframes.treeItem(
@@ -1057,6 +1128,8 @@ struct LiDARCensusView: View {
         if let base = reticleTrunkBase(radius: move.radius) { move.base = base }
         self.move = move
         capture.acceptsDrags = true
+        // Only the tree being moved is drawn for it, not its old copy too.
+        rebuildOverlay([.census])
         showMove(move)
         notice = nil
     }
@@ -1101,26 +1174,55 @@ struct LiDARCensusView: View {
         showMove(move)
     }
 
-    /// Draws the tree being moved where it stands now, with a line on the ground back to where it was drawn.
+    /// Draws the tree being moved where it stands now, with marching ants round its foot and a dashed line back to a
+    /// grey ring where it was: the orange tree is where Place here puts it, the grey ring where it is now.
     private func showMove(_ move: TreeMove) {
         if let profile = move.profile {
             capture.showTree(profile, lean: move.lean, at: move.base)
         } else {
             capture.showTree(move.form, lean: move.lean, at: move.base)
         }
+        drawAnts(move)
+    }
+
+    /// The moving parts of a move: dashes that march round the new foot and along the line back, a little further
+    /// each time (`antsPhase`).
+    private func drawAnts(_ move: TreeMove) {
         let lift = SIMD3<Float>(0, 0.05, 0)
+        let footRadius = max(move.radius + 0.35, 0.6)
         capture.showWireframes(
             WireframeLayer(
                 name: Self.moveLineLayer,
                 items: [
                     WireframeItem(
                         id: Self.moveLineLayer,
-                        segments: [Wireframe.Segment(from: move.from + lift, to: move.base + lift)])
+                        segments: Wireframe.dashedRing(
+                            centre: move.base + lift, radius: footRadius, dashes: 18, phase: antsPhase)
+                            + Wireframe.dashedLine(
+                                from: move.base + lift, to: move.from + lift, dash: 0.25, phase: antsPhase))
                 ],
-                color: CaptureSession.highlightColor, lineWidth: 0.02, throughWalls: true))
+                color: CaptureSession.highlightColor, lineWidth: 0.025, throughWalls: true))
+        capture.showWireframes(
+            WireframeLayer(
+                name: Self.moveLineLayer + "-from",
+                items: [
+                    WireframeItem(
+                        id: Self.moveLineLayer + "-from",
+                        segments: Wireframe.ring(centre: move.from + lift, radius: footRadius, count: 32))
+                ],
+                color: SIMD4(0.8, 0.8, 0.8, 0.7), lineWidth: 0.015, throughWalls: true))
     }
 
     static let moveLineLayer = "move-line"
+
+    /// Marches the ants round a tree being moved, a few times a second, while it is.
+    private func marchAnts() async {
+        while !Task.isCancelled, let move {
+            antsPhase += 0.12
+            drawAnts(move)
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+    }
 
     /// Stops moving the tree, leaving it where it was.
     private func endMove() {
@@ -1128,7 +1230,9 @@ struct LiDARCensusView: View {
         guard move != nil else { return }
         capture.hideTree()
         capture.hideWireframes(named: Self.moveLineLayer)
+        capture.hideWireframes(named: Self.moveLineLayer + "-from")
         move = nil
+        rebuildOverlay([.census])
     }
 
     /// "1.8 m NE of where it was drawn".
@@ -1181,6 +1285,8 @@ extension ARTreeSelection {
 /// Live feedback while scanning a trunk: how much of its circumference 1.37 m above the ground is covered.
 struct ScanProgressCard: View {
     let progress: ScanProgress
+    /// How far round where the scan started it keeps the mesh: grown for a big trunk.
+    var regionRadius: Float = TrunkScan.radius
     private let format = QuantityFormat()
 
     var body: some View {
@@ -1232,7 +1338,41 @@ struct ScanProgressCard: View {
         } else {
             parts.append("no trunk found " + height + " up yet")
         }
+        if regionRadius > TrunkScan.radius {
+            parts.append("keeping " + format.length(Double(regionRadius), fractionDigits: 1) + " round")
+        }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Shown when tracking jumped while scanning: what the scan kept from before may be doubled or out of line.
+struct TrackingJumpCard: View {
+    var onRestart: () -> Void
+    var onKeep: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Label("Tracking jumped", systemImage: "arrow.triangle.2.circlepath")
+                .font(.subheadline.weight(.semibold))
+            Text(
+                "The phone lost its place and found it again, so the lime may be doubled where you came back round. "
+                    + "Start again here to keep only what lines up now (ARKit's mesh stays), or keep going."
+            )
+            .font(.footnote)
+            .foregroundStyle(Color.canopyInkMuted)
+            HStack(spacing: Spacing.s) {
+                Button("Keep going", action: onKeep)
+                    .buttonStyle(.canopySecondary)
+                Button("Start again here", systemImage: "arrow.counterclockwise", action: onRestart)
+                    .buttonStyle(.canopyPrimary)
+                    .accessibilityIdentifier("scan-restart")
+            }
+            .font(.footnote)
+        }
+        .padding(Spacing.s)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.large))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("tracking-jump")
     }
 }
 

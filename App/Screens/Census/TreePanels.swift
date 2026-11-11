@@ -419,9 +419,12 @@ struct MovePanel: View {
             Text("Move " + name)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
-            Text("Point the reticle at the foot of its trunk and tap To reticle, or drag the tree with a finger.")
-                .font(.footnote)
-                .foregroundStyle(Color.canopyInkMuted)
+            Text(
+                "The orange tree with marching ants is where it goes; the grey ring is where it is now. Point at the "
+                    + "foot of its trunk and tap To reticle, or drag it, then Place here."
+            )
+            .font(.footnote)
+            .foregroundStyle(Color.canopyInkMuted)
             if let offset {
                 Text(offset)
                     .font(CanopyFont.mono(.caption))
