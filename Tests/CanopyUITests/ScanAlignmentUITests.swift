@@ -29,11 +29,20 @@ final class ScanAlignmentUITests: XCTestCase {
         XCTAssertTrue(app.buttons["align-ring-menu"].firstMatch.label.contains("0.50"))
 
         app.buttons["align-snap"].firstMatch.tap()
-        wait(for: note, toSay: "Fitted to the scan 1.37")
+        wait(for: note, toSay: "Fitted to the scan 1.00")
         // The mesh's slices cross some triangles' diagonals, a little inside the trunk: within a millimetre of 0.5 m.
         let diameter = note.label.ranges(of: /\d\.\d{3}/).last.flatMap { Double(note.label[$0]) }
         XCTAssertEqual(diameter ?? 0, 0.5, accuracy: 0.0015, note.label)
         attachScreenshot(app, named: "Rings on a saved scan")
+
+        // The crown has a few controls of its own; with no server set there are no aerial points to set it against.
+        app.buttons["Canopy"].firstMatch.tap()
+        XCTAssertTrue(app.segmentedControls["align-crown-outline"].firstMatch.waitForExistence(timeout: 10))
+        // Each of its numbers can be typed as well as stepped.
+        XCTAssertTrue(app.textFields["field-foliage-height"].firstMatch.exists)
+        let status = app.staticTexts["align-crown-status"].firstMatch
+        XCTAssertTrue(status.label.contains("Set a server"), status.label)
+        app.buttons["Rings"].firstMatch.tap()
 
         app.buttons["align-save"].firstMatch.tap()
         wait(for: note, toSay: "Saved on this phone")

@@ -16,10 +16,23 @@ struct ScanAlignmentOverlay: Equatable {
     var dbh: Double?
     var vectorForm: TreeForm?
     var vectorBase: SIMD3<Float>?
+    /// The aerial lidar points round the tree.
+    var cloud: CanopyCloud?
+    /// The crown the points are set against, while it is being set: points inside it are drawn apart.
+    var crown: CrownShape?
 
     var trunkBase: SIMD3<Float> { SIMD3(0, Float(groundHeight), 0) }
     /// What the camera turns about: the trunk's axis at breast height.
     var target: SIMD3<Float> { trunkBase + SIMD3(0, Float(DBH.standardHeight), 0) }
+}
+
+/// Aerial lidar points in a scan's frame, compared by identity: a few tens of thousands of points are not compared
+/// point by point each time the view updates.
+struct CanopyCloud: Equatable, Sendable {
+    let id = UUID()
+    let points: [SIMD3<Float>]
+
+    static func == (a: CanopyCloud, b: CanopyCloud) -> Bool { a.id == b.id }
 }
 
 /// The view's camera, for the controls: where the screen's right and "away" point on the ground, so a ring moves the
@@ -28,6 +41,8 @@ struct ScanAlignmentOverlay: Equatable {
 final class ScanAlignmentCamera {
     fileprivate weak var view: SCNView?
     fileprivate var home: SCNNode?
+    /// What the view turns about when it opens: the trunk at breast height.
+    fileprivate var homeTarget: SIMD3<Float>?
 
     /// The screen's right and the direction into the screen, on the ground (scene x and z), each a unit vector.
     var groundAxes: (right: SIMD2<Float>, away: SIMD2<Float>) {
@@ -57,7 +72,23 @@ final class ScanAlignmentCamera {
         SCNTransaction.begin()
         SCNTransaction.animationDuration = 0.3
         view.pointOfView = home
-        home.simdTransform = ScanAlignmentSceneView.homeTransform(target: SIMD3(view.defaultCameraController.target))
+        let target = homeTarget ?? SIMD3(view.defaultCameraController.target)
+        view.defaultCameraController.target = SCNVector3(target)
+        home.simdTransform = ScanAlignmentSceneView.homeTransform(target: target)
+        SCNTransaction.commit()
+    }
+
+    /// Turns the view about `target` from `distance` metres away on the south side, a little above it: to take in a
+    /// whole crown.
+    func frame(_ target: SIMD3<Float>, distance: Float) {
+        guard let view, let pov = view.pointOfView else { return }
+        let node = SCNNode()
+        node.simdPosition = target + SIMD3(0, distance * 0.3, distance)
+        node.simdLook(at: target)
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = 0.4
+        view.defaultCameraController.target = SCNVector3(target)
+        pov.simdTransform = node.simdTransform
         SCNTransaction.commit()
     }
 }
@@ -148,6 +179,7 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
         view.defaultCameraController.target = SCNVector3(overlay.target)
         camera.view = view
         camera.home = pov
+        camera.homeTarget = overlay.target
 
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
         view.addGestureRecognizer(tap)
@@ -253,7 +285,46 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
             ]
             nodes.append(lines(segments, color: vectorColor, width: width))
         }
+        if let cloud = overlay.cloud, !cloud.points.isEmpty {
+            nodes.append(pointsNode(cloud.points, crown: overlay.crown, groundHeight: overlay.groundHeight))
+        }
         return nodes
+    }
+
+    static let pointColor = SIMD4<Float>(0.62, 0.66, 0.72, 0.8)
+    static let insideColor = SIMD4<Float>(0.45, 0.85, 0.40, 1)
+
+    /// The aerial points as dots a few pixels across, those inside the crown being set in green.
+    static func pointsNode(_ points: [SIMD3<Float>], crown: CrownShape?, groundHeight: Double) -> SCNNode {
+        let colours = points.map { point in
+            crown.map { $0.distance(to: point, groundHeight: groundHeight) <= 0.25 } == true
+                ? insideColor : pointColor
+        }
+        let geometry = SCNGeometry(
+            sources: [
+                source(points, semantic: .vertex),
+                SCNGeometrySource(
+                    data: colours.withUnsafeBytes { Data($0) }, semantic: .color, vectorCount: colours.count,
+                    usesFloatComponents: true, componentsPerVector: 4, bytesPerComponent: MemoryLayout<Float>.size,
+                    dataOffset: 0, dataStride: MemoryLayout<SIMD4<Float>>.stride),
+            ],
+            elements: [
+                {
+                    let element = SCNGeometryElement(
+                        indices: Array(0..<UInt32(points.count)), primitiveType: .point)
+                    element.pointSize = 4
+                    element.minimumPointScreenSpaceRadius = 1.5
+                    element.maximumPointScreenSpaceRadius = 4
+                    return element
+                }()
+            ])
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.white
+        geometry.materials = [material]
+        let node = SCNNode(geometry: geometry)
+        node.accessibilityLabel = "Aerial points"
+        return node
     }
 
     /// Lines as thin tubes: drawn where they are, and faintly through the scan, so a ring inside the trunk still
