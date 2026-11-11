@@ -3,6 +3,7 @@ import CanopyDesign
 import CanopyMap
 import CanopyModel
 import CanopyReference
+import CanopyStore
 import SwiftUI
 import simd
 
@@ -572,6 +573,8 @@ struct LiDARCensusView: View {
         scanIssue = nil
         do {
             let result = try await capture.finishScan()
+            // The tree the scan measures, read before the selection is cleared below.
+            let measuring = target
             let position: Position
             if let registered {
                 position = registered.position(ofARKit: result.trunkBase)
@@ -591,15 +594,32 @@ struct LiDARCensusView: View {
             // Breast height and the steps a metre apart start fitted to the scan as far up as its points reach, as
             // the DBH was.
             let profile = TrunkSteps.fitted(TreeProfile(form: form), to: result, below: form.crownBase)
-            let fit = TreeFit(
+            // Saved on the phone straight away, mesh and all: nothing more to tap for the scan to be kept, and its rings
+            // can be aligned from Me → Your scans even if nothing else is done here.
+            let saved = await model.saveTrunkMeasurement(
+                dbh: result.analysis.dbh, lean: result.analysis.lean, glb: result.glb,
+                evidenceMesh: (result.evidence.vertexCount, result.evidence.triangleCount),
+                cropRadius: result.cropRadius, tree: measuring, position: position)
+            if let saved {
+                await model.saveAlignment(
+                    ScanAlignment(
+                        scan: BlobStore.reference(for: result.glb), treeID: saved.id, profile: profile,
+                        groundHeight: result.groundHeight))
+                // Measuring again in this scan measures the same tree, not another new one.
+                targetID = saved.id
+            }
+            var fit = TreeFit(
                 capture: result, position: position, fitting: TreeFitting(shape: form, profile: profile),
                 base: result.trunkBase)
+            fit.savedTree = saved
             self.fit = fit
             showFit(fit)
             let steps = profile.trunk.filter { $0.source == .scan }.map(\.height).max()
             notice =
-                (steps.map { "Rings are fitted to the scan up to " + format.length($0, fractionDigits: 1) + ". " } ?? "")
-                + "Step back and set the shape with the sliders, then Rings → Align steps to fit the rest to the camera."
+                (saved.map { "Saved the scan of \($0.name) on this phone. " } ?? "")
+                + (steps.map { "Rings are fitted to the scan up to " + format.length($0, fractionDigits: 1) + ". " }
+                    ?? "")
+                + "Set the shape with the sliders, or align the rings later from Me → Your scans."
         } catch {
             // Kept with the scan, so it is there to read and the scan can go on.
             scanIssue = Self.describe(error)
@@ -777,7 +797,8 @@ struct LiDARCensusView: View {
         capture.stopAligning()
         capture.pause()
         measurement = Measurement(
-            capture: fit.capture, position: fit.position, target: target, form: fit.form, profile: fit.profile)
+            capture: fit.capture, position: fit.position, target: fit.savedTree ?? target, form: fit.form,
+            profile: fit.profile, saved: fit.savedTree)
     }
 
     // MARK: Placing the session
@@ -1386,6 +1407,8 @@ struct Measurement: Identifiable {
     var form: TreeForm?
     /// The rings of that shape, with the ones fitted to the scan and checked against the tree marked.
     var profile: TreeProfile?
+    /// The tree the scan was saved on when it was measured, if it was.
+    var saved: Tree?
 }
 
 /// A measured trunk with the wireframe tree the player is fitting over it.
@@ -1398,6 +1421,8 @@ struct TreeFit {
     var base: SIMD3<Float>
     /// The ring being edited, drawn in the highlight colour.
     var selectedSection: TreeSection.ID?
+    /// The tree the scan was saved on as soon as it was measured.
+    var savedTree: Tree?
 
     /// The rings of the tree, from the ground up.
     var profile: TreeProfile {
