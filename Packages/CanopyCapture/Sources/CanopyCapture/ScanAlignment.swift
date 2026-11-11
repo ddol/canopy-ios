@@ -24,11 +24,15 @@ public struct ScanAlignment: Codable, Equatable, Sendable {
     public var correctedPosition: GeoPoint?
     /// The crown's shape as set against the aerial points, when it was; the profile's crown rings are drawn from it.
     public var crown: CrownShape?
+    /// How far the aerial points were moved on the ground to sit on the scanned trunk (x east, z south), when they
+    /// were lined up with it with no Gerardus tree to carry the move (`AerialRegistration`).
+    public var aerialShift: SIMD2<Double>?
     public var savedAt: Date
 
     public init(
         scan: BlobRef, treeID: UUID, profile: TreeProfile, groundHeight: Double, vectorTree: VectorTreePlacement? = nil,
-        correctedPosition: GeoPoint? = nil, crown: CrownShape? = nil, savedAt: Date = .now
+        correctedPosition: GeoPoint? = nil, crown: CrownShape? = nil, aerialShift: SIMD2<Double>? = nil,
+        savedAt: Date = .now
     ) {
         self.scan = scan
         self.treeID = treeID
@@ -37,6 +41,7 @@ public struct ScanAlignment: Codable, Equatable, Sendable {
         self.vectorTree = vectorTree
         self.correctedPosition = correctedPosition
         self.crown = crown
+        self.aerialShift = aerialShift
         self.savedAt = savedAt.roundedToMilliseconds
     }
 
@@ -137,7 +142,9 @@ public struct SavedScan: Sendable {
 
     /// Every trunk ring the mesh can fit snapped to it, except those confirmed against the tree; the rest stay as
     /// they were. Where the trunk forks, a ring below the fork that the mesh shows as two stems or more becomes a
-    /// ring on each (`TreeSection.stem`), numbered to follow the stems below. Returns the profile, how many rings
+    /// ring on each (`TreeSection.stem`), numbered to follow the stems below; above the fork, a ring on no stem that
+    /// the mesh shows as one trunk joins the stem it fits, and one it cannot fit goes. The trunk, or each stem, is
+    /// then carried up to the crown's base (`TreeProfile.reachingCrown`). Returns the profile, how many rings
     /// snapped, and how many stems the trunk forks into (0 when it does not).
     public func snappingTrunk(
         _ profile: TreeProfile, groundHeight: Double, lean: Lean? = nil
@@ -146,6 +153,7 @@ public struct SavedScan: Sendable {
         var snapped = 0
         for ring in profile.trunk where ring.source != .confirmed {
             let centre = Self.centre(of: ring, lean)
+            let forked = !profile.stems.isEmpty
             if ring.stem == nil, ring.height >= Self.lowestFork {
                 let found = stems(
                     at: ring.height, groundHeight: groundHeight, near: centre, within: Self.forkReach(ring))
@@ -154,11 +162,25 @@ public struct SavedScan: Sendable {
                     continue
                 }
             }
+            if forked, ring.stem == nil {
+                // Above the fork: on one of the stems, or nowhere.
+                if let fitted = try? snapping(ring, groundHeight: groundHeight, lean: lean),
+                    let stem = profile.nearestStem(to: fitted.offset ?? .zero, below: ring.height)
+                {
+                    var onStem = fitted
+                    onStem.stem = stem
+                    profile[ring.id] = onStem
+                    snapped += 1
+                } else {
+                    profile[ring.id] = nil
+                }
+                continue
+            }
             guard let fitted = try? snapping(ring, groundHeight: groundHeight, lean: lean) else { continue }
             profile[ring.id] = fitted
             snapped += 1
         }
-        return (profile, snapped, profile.stems.count)
+        return (profile.reachingCrown(lean: lean), snapped, profile.stems.count)
     }
 
     /// No trunk forks lower than this, in metres: below it, two pieces are roots or a buttress.
@@ -180,11 +202,88 @@ public struct SavedScan: Sendable {
         guard found.count >= 2 else { return nil }
         var profile = profile
         let rings = profile.splitting(id, into: found)
-        return (profile, rings)
+        // The trunk's rings above the split go on to the stems, or go, as when the whole trunk is snapped.
+        for above in profile.mainTrunk where above.height > ring.height + 0.01 && above.source != .confirmed {
+            if let fitted = try? snapping(above, groundHeight: groundHeight, lean: lean),
+                let stem = profile.nearestStem(to: fitted.offset ?? .zero, below: above.height)
+            {
+                var onStem = fitted
+                onStem.stem = stem
+                profile[above.id] = onStem
+            } else {
+                profile[above.id] = nil
+            }
+        }
+        return (profile.reachingCrown(lean: lean), rings)
     }
 }
 
 extension TreeProfile {
+    /// The stem whose highest ring below `height` is nearest `centre` (x, z from the trunk's base); nil on a trunk
+    /// that does not fork there.
+    public func nearestStem(to centre: SIMD2<Double>, below height: Double) -> Int? {
+        stems.compactMap { stem, rings -> (Int, Double)? in
+            guard let ring = rings.last(where: { $0.height < height - 0.01 }) else { return nil }
+            return (stem, simd_distance(ring.offset ?? .zero, centre))
+        }
+        .min { $0.1 < $1.1 }?.0
+    }
+
+    /// The trunk carried up to the crown's base: a ring a metre (`TrunkSteps.heights`) and one at the crown's base
+    /// added where none is, up the trunk or up each stem of a forked one, continuing the line and the taper of the
+    /// rings below (`TrunkTaper`; a stem with one ring leaves the fork along the line from the trunk's ring below
+    /// it). Rings already there are left as they are; rings set by eye above the crown's base go.
+    public func reachingCrown(lean: Lean? = nil) -> TreeProfile {
+        guard let top = crown.first?.height, top >= 1 else { return self }
+        var profile = self
+        for ring in profile.trunk where !ring.isKept && ring.height > top + 0.05 { profile[ring.id] = nil }
+        let heights = TrunkSteps.heights(below: top) + [top]
+        func missing(_ rings: [TreeSection], above floor: Double) -> [Double] {
+            heights.filter { h in h > floor + 0.25 && !rings.contains { abs($0.height - h) < 0.25 } }
+        }
+        let stems = profile.stems
+        if stems.isEmpty {
+            let main = profile.mainTrunk
+            guard let highest = main.last else { return profile }
+            let taper = TrunkTaper(main, lean: lean)
+            for h in missing(main, above: highest.height) {
+                let ring = TreeSection(
+                    part: .trunk, height: h, radius: taper?.radius(at: h) ?? highest.radius,
+                    offset: taper?.centre(at: h) ?? highest.offset)
+                profile[ring.id] = ring
+            }
+            return profile
+        }
+        for (stem, rings) in stems {
+            guard let highest = rings.last else { continue }
+            let line = Self.stemLine(rings, below: profile.mainTrunk.last { $0.height < (rings.first?.height ?? 0) })
+            for h in missing(rings, above: highest.height) {
+                let ring = TreeSection(part: .trunk, height: h, radius: highest.radius, offset: line(h), stem: stem)
+                profile[ring.id] = ring
+            }
+        }
+        return profile
+    }
+
+    /// Where a stem's axis is at a height: the line through its rings' centres, or, with its rings too close in
+    /// height for a slope, through the trunk's ring below the fork and its own. Never leaning more than 40°.
+    static func stemLine(_ rings: [TreeSection], below fork: TreeSection?) -> (Double) -> SIMD2<Double> {
+        var samples = rings.map { (h: $0.height, c: $0.offset ?? .zero) }
+        let spread = (samples.map(\.h).max() ?? 0) - (samples.map(\.h).min() ?? 0)
+        if spread < 0.2, let fork { samples.insert((fork.height, fork.offset ?? .zero), at: 0) }
+        let n = Double(samples.count)
+        let meanH = samples.reduce(0) { $0 + $1.h } / n
+        let meanC = samples.reduce(SIMD2<Double>.zero) { $0 + $1.c } / n
+        let shh = samples.reduce(0) { $0 + ($1.h - meanH) * ($1.h - meanH) }
+        var slope = SIMD2<Double>.zero
+        if shh > 1e-6 {
+            slope = samples.reduce(SIMD2<Double>.zero) { $0 + ($1.h - meanH) * ($1.c - meanC) } / shh
+        }
+        let maximum = tan(40 * Double.pi / 180)
+        if simd_length(slope) > maximum { slope *= maximum / simd_length(slope) }
+        return { h in meanC + slope * (h - meanH) }
+    }
+
     /// Replaces a trunk ring with one ring per circle, each on a stem (`TreeSection.stem`), fitted to the scan. A
     /// circle takes the number of the stem whose ring below is nearest it, so a stem keeps its number up the tree;
     /// the rest take numbers not yet used. Returns the new rings' ids, in the circles' order.

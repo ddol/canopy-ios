@@ -38,6 +38,8 @@ final class ScanAlignmentUITests: XCTestCase {
         // The crown has a few controls of its own; with no server set there are no aerial points to set it against.
         app.buttons["Canopy"].firstMatch.tap()
         XCTAssertTrue(app.segmentedControls["align-crown-outline"].firstMatch.waitForExistence(timeout: 10))
+        // Each of its numbers can be typed as well as stepped.
+        XCTAssertTrue(app.textFields["field-foliage-height"].firstMatch.exists)
         let status = app.staticTexts["align-crown-status"].firstMatch
         XCTAssertTrue(status.label.contains("Set a server"), status.label)
         app.buttons["Rings"].firstMatch.tap()

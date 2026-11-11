@@ -170,3 +170,91 @@ enum StemMesh {
         #expect(ring.offset == SIMD2(0.25, 0))
     }
 }
+
+@Suite struct ReachingTheCrownTests {
+    @Test func aForkedTrunksStemsGoOnUpToTheCrown() throws {
+        // The forked scan only reaches 4.5 m; the crown starts at 7 m.
+        let scan = SavedScan(mesh: StemMesh.forked())
+        let profile = TreeProfile(form: TreeForm(trunkDiameter: 0.5, height: 15, crownHeight: 8, crownWidth: 6))
+        let (snapped, _, stems) = scan.snappingTrunk(profile, groundHeight: 0)
+        #expect(stems == 2)
+        // No ring on no stem above the fork.
+        #expect(snapped.mainTrunk.allSatisfy { $0.height < 1.8 })
+        for (_, rings) in snapped.stems {
+            #expect(rings.map(\.height) == [2, 3, 4, 5, 6, 7])
+            // Each carries on up its own side.
+            let side = rings.map { $0.offset!.x.sign }
+            #expect(Set(side).count == 1)
+            let added = rings.filter { $0.height > 4.5 }
+            #expect(added.allSatisfy { $0.source == .eye && abs($0.radius - 0.15) < 0.01 })
+            #expect(abs(added.last!.offset!.x) - 0.25 < 0.05)
+        }
+    }
+
+    @Test func aTrunkWithNoForkGoesUpToTheCrownsBase() {
+        let profile = TreeProfile(sections: [
+            TreeSection(part: .trunk, height: 0, radius: 0.3, source: .scan, offset: .zero),
+            TreeSection(part: .trunk, height: 1, radius: 0.29, source: .scan, offset: SIMD2(0.02, 0)),
+            TreeSection(part: .trunk, height: 2, radius: 0.28, source: .scan, offset: SIMD2(0.04, 0)),
+            TreeSection(part: .trunk, height: 9, radius: 0.5),
+            TreeSection(part: .crown, height: 6.5, radius: 3),
+            TreeSection(part: .crown, height: 12, radius: 3),
+        ])
+        let reached = profile.reachingCrown()
+        // The ring set by eye above the crown's base goes; the steps and the crown's base are added on the line.
+        #expect(reached.trunk.map(\.height) == [0, 1, 2, 3, 4, 5, 6, 6.5])
+        let top = reached.trunk.last!
+        #expect(abs(top.offset!.x - 0.13) < 0.005)
+        #expect(abs(top.radius - 0.235) < 0.005)
+    }
+}
+
+@Suite struct AerialRegistrationTests {
+    /// Aerial returns off the forked trunk's bark and the crown, as the census position misplaces them.
+    func aerial(shift: SIMD2<Double>) -> [SIMD3<Float>] {
+        var random = SeededRandom(state: 5)
+        var points: [SIMD3<Float>] = []
+        func bark(centre: SIMD2<Double>, radius: Double, from bottom: Double, to top: Double, count: Int) {
+            for _ in 0..<count {
+                let angle = random.unit() * 2 * .pi
+                let h = bottom + (top - bottom) * random.unit()
+                points.append(
+                    SIMD3(
+                        Float(centre.x + cos(angle) * radius + shift.x), Float(h),
+                        Float(centre.y + sin(angle) * radius + shift.y)))
+            }
+        }
+        bark(centre: .zero, radius: 0.3, from: 0.6, to: 1.8, count: 15)
+        bark(centre: SIMD2(-0.25, 0), radius: 0.15, from: 1.8, to: 4.4, count: 15)
+        bark(centre: SIMD2(0.25, 0), radius: 0.15, from: 1.8, to: 4.4, count: 15)
+        // Leaves and branches all round, mostly above the scan.
+        for _ in 0..<800 {
+            points.append(
+                SIMD3(Float(random.unit() * 12 - 6), Float(2 + random.unit() * 10), Float(random.unit() * 12 - 6)))
+        }
+        return points
+    }
+
+    @Test func theAerialPointsMoveOntoTheScannedStems() throws {
+        let mesh = StemMesh.forked()
+        let registration = try #require(
+            AerialRegistration.register(aerial(shift: SIMD2(1.3, -0.8)), to: mesh, groundHeight: 0))
+        #expect(simd_distance(registration.shift, SIMD2(-1.3, 0.8)) < 0.1, "\(registration)")
+        #expect(registration.matched >= 35)
+        #expect(registration.matched > registration.matchedBefore)
+    }
+
+    @Test func pointsAlreadyOnTheTrunkStay() throws {
+        let registration = try #require(
+            AerialRegistration.register(aerial(shift: .zero), to: StemMesh.forked(), groundHeight: 0))
+        #expect(simd_length(registration.shift) < 0.1)
+    }
+
+    @Test func noTrunkReturnsNoRegistration() {
+        var random = SeededRandom(state: 9)
+        let leaves = (0..<300).map { _ in
+            SIMD3(Float(random.unit() * 12 - 6), Float(6 + random.unit() * 6), Float(random.unit() * 12 - 6))
+        }
+        #expect(AerialRegistration.register(leaves, to: StemMesh.forked(), groundHeight: 0) == nil)
+    }
+}

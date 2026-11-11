@@ -58,7 +58,7 @@ import simd
         let scan = SavedScan(mesh: capture.evidence)
         let confirmed = TreeSection(part: .trunk, height: 1.37, radius: 0.25, source: .confirmed)
         let high = TreeSection(part: .trunk, height: 6, radius: 0.2)
-        let crown = TreeSection(part: .crown, height: 2, radius: 3)
+        let crown = TreeSection(part: .crown, height: 7, radius: 3)
         let profile = TreeProfile(sections: [
             TreeSection(part: .trunk, height: 1, radius: 0.1), confirmed,
             TreeSection(part: .trunk, height: 2, radius: 0.5),

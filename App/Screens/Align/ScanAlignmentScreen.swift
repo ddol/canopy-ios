@@ -56,6 +56,10 @@ struct ScanAlignmentScreen: View {
     @State private var isLoadingPoints = false
     /// Whether the crown was saved set against the aerial points, so loading them leaves it as it is.
     @State private var crownSaved = false
+    /// How far the aerial points were moved to sit on the scanned trunk (x east, z south), when they were lined up
+    /// with it and there is no Gerardus tree to carry the move.
+    @State private var pointShift: SIMD2<Double>?
+    @State private var isRegistering = false
     private let format = QuantityFormat()
 
     private var tree: Tree? { model.tree(treeID) }
@@ -112,6 +116,15 @@ struct ScanAlignmentScreen: View {
             }
         }
         .interactiveDismissDisabled()
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+            }
+        }
         .task { await open() }
         .onChange(of: mode) { _, mode in
             guard mode == .canopy else { return }
@@ -176,12 +189,11 @@ struct ScanAlignmentScreen: View {
 
     @ViewBuilder
     private func ringEditor(_ ring: TreeSection) -> some View {
-        Stepper(value: heightBinding(ring), in: TreeProfile.heights, step: 0.05) {
-            LabeledContent("Height", value: format.length(ring.height, fractionDigits: 2))
-        }
-        Stepper(value: diameterBinding(ring), in: 0.03...35, step: 0.01) {
-            LabeledContent("Diameter", value: diameterText(ring))
-        }
+        MetreField(
+            title: "Height", value: heightBinding(ring), range: TreeProfile.heights, step: 0.05, digits: 2)
+        MetreField(
+            title: "Diameter", value: diameterBinding(ring), range: 0.03...35, step: 0.01, digits: 3,
+            detail: diameterDetail(ring))
         HStack {
             Text("Centre")
             Spacer()
@@ -218,21 +230,18 @@ struct ScanAlignmentScreen: View {
     /// is and where it is centred.
     @ViewBuilder
     private var canopyControls: some View {
-        if let crown {
+        if crown != nil {
             Picker("Outline", selection: crownBinding(\.outline)) {
                 ForEach(CrownShape.Outline.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("align-crown-outline")
-            Stepper(value: crownBinding(\.base), in: 0...44, step: 0.25) {
-                LabeledContent("Crown base", value: format.length(crown.base, fractionDigits: 1))
-            }
-            Stepper(value: crownBinding(\.top), in: 1...45, step: 0.25) {
-                LabeledContent("Top", value: format.length(crown.top, fractionDigits: 1))
-            }
-            Stepper(value: crownWidthBinding, in: 0.4...35, step: 0.2) {
-                LabeledContent("Width", value: format.length(crown.radius * 2, fractionDigits: 1))
-            }
+            MetreField(title: "Crown base", value: crownBinding(\.base), range: 0...44, step: 0.25, digits: 2)
+            MetreField(title: "Top", value: crownBinding(\.top), range: 1...45, step: 0.25, digits: 2)
+            MetreField(
+                title: "Foliage height", value: foliageBinding, range: 0.5...45, step: 0.25, digits: 2,
+                detail: "base to top")
+            MetreField(title: "Width", value: crownWidthBinding, range: 0.4...35, step: 0.2, digits: 2)
             HStack {
                 Text("Centre")
                 Spacer()
@@ -249,8 +258,12 @@ struct ScanAlignmentScreen: View {
             }
             .buttonStyle(.canopySecondary)
             .disabled(isLoadingPoints || model.alignClient == nil)
-            if isLoadingPoints { ProgressView() }
+            if isLoadingPoints || isRegistering { ProgressView() }
         }
+        Button("Line the points up with the scan", systemImage: "scope") { Task { await registerPoints() } }
+            .buttonStyle(.canopySecondary)
+            .disabled(cloud == nil || isRegistering)
+            .accessibilityIdentifier("align-crown-register")
         Text(canopyStatus)
             .font(.footnote)
             .foregroundStyle(Color.canopyInkMuted)
@@ -386,12 +399,14 @@ struct ScanAlignmentScreen: View {
             + format.length(ring.diameter, fractionDigits: 2) + MeasurementSheet.mark(ring.source)
     }
 
-    private func diameterText(_ ring: TreeSection) -> String {
-        let diameter = format.length(ring.diameter, uncertainty: ring.radiusUncertainty.map { 2 * $0 })
-        guard ring.part == .trunk, abs(ring.height - DBH.standardHeight) < 0.03, let dbh = tree?.dbh else {
-            return diameter
+    /// The diameter's uncertainty when fitted, and the DBH on record beside a ring at breast height.
+    private func diameterDetail(_ ring: TreeSection) -> String? {
+        var parts: [String] = []
+        if let sigma = ring.radiusUncertainty { parts.append("± " + format.length(2 * sigma, fractionDigits: 3)) }
+        if ring.part == .trunk, abs(ring.height - DBH.standardHeight) < 0.03, let dbh = tree?.dbh {
+            parts.append("DBH " + format.length(dbh.diameter.value, fractionDigits: 3))
         }
-        return diameter + " (DBH " + format.length(dbh.diameter.value, fractionDigits: 3) + ")"
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func describe(_ tree: GerardusTree) -> String {
@@ -591,6 +606,17 @@ struct ScanAlignmentScreen: View {
             })
     }
 
+    /// The crown's height from its base to its top: changing it moves the top.
+    private var foliageBinding: Binding<Double> {
+        Binding(
+            get: { (crown?.top ?? 0) - (crown?.base ?? 0) },
+            set: { height in
+                guard var shape = crown else { return }
+                shape.top = shape.base + height
+                setCrown(shape)
+            })
+    }
+
     private var crownWidthBinding: Binding<Double> {
         Binding(
             get: { (crown?.radius ?? 0) * 2 },
@@ -605,7 +631,8 @@ struct ScanAlignmentScreen: View {
     private func setCrown(_ shape: CrownShape) {
         let shape = shape.clamped
         crown = shape
-        profile = profile.withCrown(shape)
+        // The trunk, or each stem, goes on up to the crown's base.
+        profile = profile.withCrown(shape).reachingCrown(lean: tree?.lean)
         if let id = selected, profile.section(id) == nil { selected = profile.trunk.first?.id }
         changed()
     }
@@ -649,6 +676,8 @@ struct ScanAlignmentScreen: View {
                 around: tree.position.geo, groundHeight: groundHeight, correction: .zero, client: client,
                 cache: model.referenceCache)
             moveCloud()
+            // Points not yet lined up with the scan are lined up with it first, where the trunk shows in them.
+            if pointShift == nil, placement?.isMoved != true { await registerPoints(quietly: true) }
             // A crown already set against the points stays; otherwise it starts fitted to them.
             if !crownSaved { fitCrown() }
         } catch let error as AerialTrees.Failure {
@@ -662,8 +691,54 @@ struct ScanAlignmentScreen: View {
     private func moveCloud() {
         guard let aerialPoints else { return }
         let correction = placement?.correction ?? .zero
-        let shift = SIMD3(Float(-correction.x), 0, Float(correction.y))
+        let moved = pointShift ?? SIMD2(-correction.x, correction.y)
+        let shift = SIMD3(Float(moved.x), 0, Float(moved.y))
         cloud = CanopyCloud(points: shift == .zero ? aerialPoints : aerialPoints.map { $0 + shift })
+    }
+
+    /// Moves the aerial points so the returns off the trunk sit on the scan (`AerialRegistration`). Gerardus's tree,
+    /// from the same lidar, moves with them, which records how far out the census position is; without one the move
+    /// is kept with the points. The crown moves with them too.
+    private func registerPoints(quietly: Bool = false) async {
+        guard let aerialPoints, let saved else { return }
+        let ground = groundHeight
+        isRegistering = true
+        defer { isRegistering = false }
+        let found = await Task.detached {
+            AerialRegistration.register(aerialPoints, to: saved.mesh, groundHeight: ground)
+        }.value
+        guard let found else {
+            if !quietly {
+                note =
+                    "Too few aerial returns off the trunk to line the points up with the scan. Move Gerardus's "
+                    + "tree onto the trunk to move them by hand."
+            }
+            return
+        }
+        let before = cloudShift
+        if var moved = placement {
+            moved.placed = moved.drawn + SIMD2(found.shift.x, -found.shift.y)
+            placement = moved
+            pointShift = nil
+        } else {
+            pointShift = found.shift
+        }
+        moveCloud()
+        if var shape = crown {
+            shape.centre += found.shift - before
+            setCrown(shape)
+        }
+        changed()
+        note =
+            "Lined the aerial points up with the scan: moved "
+            + format.length(simd_length(found.shift), fractionDigits: 2)
+            + ", \(found.matched) of \(found.candidates) returns beside the trunk now on it (\(found.matchedBefore) before)."
+    }
+
+    /// How far the points are drawn from where the census position puts them, x and z.
+    private var cloudShift: SIMD2<Double> {
+        let correction = placement?.correction ?? .zero
+        return pointShift ?? SIMD2(-correction.x, correction.y)
     }
 
     /// Turns the view to take in the whole crown.
@@ -703,6 +778,7 @@ struct ScanAlignmentScreen: View {
             profile = start ?? profile
             crown = alignment?.crown ?? CrownShape(profile)
             crownSaved = alignment?.crown != nil
+            pointShift = alignment?.aerialShift
             groundHeight = ground
             selected =
                 profile.trunk.min {
@@ -743,7 +819,7 @@ struct ScanAlignmentScreen: View {
         }
         let alignment = ScanAlignment(
             scan: scan, treeID: treeID, profile: profile, groundHeight: groundHeight, vectorTree: placement,
-            correctedPosition: corrected, crown: cloud == nil && !crownSaved ? nil : crown)
+            correctedPosition: corrected, crown: cloud == nil && !crownSaved ? nil : crown, aerialShift: pointShift)
         if await model.saveAlignment(alignment) {
             isSaved = true
             crownSaved = alignment.crown != nil
@@ -764,5 +840,43 @@ struct AlignScanButton: View {
             .fullScreenCover(isPresented: $isPresented) {
                 ScanAlignmentScreen(scan: scan, treeID: treeID)
             }
+    }
+}
+
+/// A length in metres, typed or stepped: the number can be edited, and the stepper beside it moves it by `step`.
+struct MetreField: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let digits: Int
+    var detail: String?
+
+    var body: some View {
+        HStack(spacing: Spacing.xs) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                if let detail {
+                    Text(detail).font(.caption).foregroundStyle(Color.canopyInkMuted)
+                }
+            }
+            Spacer(minLength: Spacing.xs)
+            TextField(
+                title,
+                value: Binding(get: { value }, set: { value = min(max($0, range.lowerBound), range.upperBound) }),
+                format: .number.precision(.fractionLength(digits))
+            )
+            .keyboardType(.decimalPad)
+            .multilineTextAlignment(.trailing)
+            .monospacedDigit()
+            .frame(width: 76)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .background(Color.canopyLine.opacity(0.35), in: RoundedRectangle(cornerRadius: Radius.small))
+            .accessibilityIdentifier("field-" + title.lowercased().replacingOccurrences(of: " ", with: "-"))
+            Text("m").foregroundStyle(Color.canopyInkMuted)
+            Stepper(title, value: $value, in: range, step: step)
+                .labelsHidden()
+        }
     }
 }
