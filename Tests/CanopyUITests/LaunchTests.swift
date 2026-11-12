@@ -206,7 +206,10 @@ final class LaunchTests: XCTestCase {
         app.buttons["scan-show-on-map"].firstMatch.tap()
         XCTAssertTrue(app.buttons["Done"].firstMatch.waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["Map"].firstMatch.isSelected)
-        XCTAssertTrue(app.staticTexts["Evidence scans"].firstMatch.exists)
+        // The sheet is a list, and on an iPad it is short enough that this row is below the fold, so not drawn yet.
+        let evidence = app.staticTexts["Evidence scans"].firstMatch
+        scroll(app, toReveal: evidence)
+        XCTAssertTrue(evidence.exists)
         let onMap = XCTAttachment(screenshot: app.screenshot())
         onMap.name = "Show on map"
         onMap.lifetime = .keepAlways
