@@ -229,6 +229,10 @@ struct MapScreen: View {
                 }
             }
             .buttonStyle(.plain)
+            // The tag is 13 pt tall: grow what answers a touch to a thumb's size without growing the tag.
+            .padding(Spacing.m)
+            .contentShape(Rectangle())
+            .padding(-Spacing.m)
             .accessibilityIdentifier("aerial-attribution-toggle")
             .accessibilityValue(showsAttribution ? "Open" : "Closed")
             if showsAttribution {
