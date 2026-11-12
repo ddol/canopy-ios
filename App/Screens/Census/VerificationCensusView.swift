@@ -63,6 +63,7 @@ struct VerificationCensusView: View {
                 }
             }
         }
+        .readableColumn()
         .onAppear { location.start() }
         .onDisappear { location.stop() }
     }

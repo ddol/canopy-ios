@@ -68,6 +68,7 @@ struct ProposalsScreen: View {
                     historySection(model.closedProposals)
                 }
             }
+            .readableColumn()
             .navigationTitle("Proposals")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

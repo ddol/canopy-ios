@@ -38,7 +38,8 @@ public struct TrunkAnalysis: Sendable {
     public var systematicDiameterUncertainty = 0.005
     /// The fit needs at least this much of the circumference.
     public var minimumArcDegrees = 75.0
-    public var plausibleDiameters: ClosedRange<Double> = 0.03...4
+    /// From a sapling to the biggest coast redwood.
+    public var plausibleDiameters: ClosedRange<Double> = 0.03...9
     /// Half the height of the band of raw depth points pooled for the DBH fit, in metres: the same reach as the
     /// mesh's slice offsets.
     public var depthBandHalfWidth: Float = 0.05
@@ -58,7 +59,9 @@ public struct TrunkAnalysis: Sendable {
         let dbhHeight = groundHeight + DBH.standardHeight
         let band = depthPoints.slice(atHeight: Float(dbhHeight), halfWidth: depthBandHalfWidth)
         let fromDepth = band.count >= minimumDepthPoints
-        let points = fromDepth ? band : sliceOffsets.flatMap { mesh.slice(atHeight: Float(dbhHeight + $0)) }
+        let slice = fromDepth ? band : sliceOffsets.flatMap { mesh.slice(atHeight: Float(dbhHeight + $0)) }
+        // The trunk the scan started on, not a stump or a shrub beside it, nor the ground.
+        let points = Self.trunk(in: slice, touching: .zero)
         guard points.count >= 12 else { throw TrunkAnalysisError.notEnoughPoints(points.count) }
         let circle: FittedCircle
         do {
@@ -75,8 +78,10 @@ public struct TrunkAnalysis: Sendable {
         let stemCenters: [SIMD3<Double>] = leanHeights.compactMap { height in
             let y = Float(groundHeight + height)
             let band = depthPoints.slice(atHeight: y, halfWidth: 0.03)
-            let slice = band.count >= minimumDepthPoints ? band : mesh.slice(atHeight: y)
-            guard slice.count >= 8, let fit = try? CircleFit.robustFit(slice),
+            let near = (band.count >= minimumDepthPoints ? band : mesh.slice(atHeight: y)).filter {
+                simd_distance($0, circle.center) <= circle.radius * 1.5 + 0.1
+            }
+            guard near.count >= 8, let fit = try? CircleFit.robustFit(near),
                 abs(fit.radius - circle.radius) < 0.5 * circle.radius
             else { return nil }
             return SIMD3(height, fit.center.x, fit.center.y)
@@ -90,6 +95,26 @@ public struct TrunkAnalysis: Sendable {
             stemCenters: stemCenters,
             depthPointCount: fromDepth ? band.count : 0
         )
+    }
+
+    /// The points of a slice on the trunk whose surface passes nearest `point` (the scan's start, on the bark): the
+    /// slice is split into the trunks it crosses (`TrunkStems`), and the points within 15 cm of that trunk's ring are
+    /// kept. With no piece large enough to fit yet, the piece holding the point nearest `point`; with nothing to
+    /// split, the slice as it is.
+    static func trunk(in slice: [SIMD2<Double>], touching point: SIMD2<Double>) -> [SIMD2<Double>] {
+        guard slice.count >= 12 else { return slice }
+        let rings = TrunkStems.rings(through: slice)
+        if let ring = rings.min(by: { a, b in
+            abs(simd_distance(a.center, point) - a.radius) < abs(simd_distance(b.center, point) - b.radius)
+        }) {
+            return slice.filter { abs(simd_distance($0, ring.center) - ring.radius) <= 0.15 }
+        }
+        let pieces = TrunkStems.pieces(slice)
+        guard
+            let nearest = slice.min(by: { simd_distance($0, point) < simd_distance($1, point) }),
+            let piece = pieces.first(where: { $0.contains(nearest) })
+        else { return slice }
+        return piece.count >= 12 ? piece : slice
     }
 
     /// Fits x = a + b·h and z = c + d·h through the stem centres; the lean is the angle of (b, 1, d) from

@@ -35,6 +35,7 @@ struct ScansScreen: View {
                 }
             }
         }
+        .readableColumn()
         .navigationTitle("Your scans")
         .navigationBarTitleDisplayMode(.inline)
         .task {

@@ -23,6 +23,7 @@ struct MeScreen: View {
                 #endif
                 aboutSection
             }
+            .readableColumn()
             .navigationTitle("Me")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

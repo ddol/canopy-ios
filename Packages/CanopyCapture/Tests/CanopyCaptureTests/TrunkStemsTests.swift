@@ -9,7 +9,8 @@ import simd
 enum StemMesh {
     /// A trunk of `radius` round `centre` (x, z) from `bottom` to `top`, triangles about 3 cm across.
     static func cylinder(
-        centre: SIMD2<Double>, radius: Double, from bottom: Double, to top: Double, arcDegrees: Double = 360
+        centre: SIMD2<Double>, radius: Double, from bottom: Double, to top: Double, arcDegrees: Double = 360,
+        startDegrees: Double = 0
     ) -> Mesh {
         var mesh = Mesh.empty
         let rows = max(1, Int((top - bottom) / 0.03))
@@ -17,7 +18,7 @@ enum StemMesh {
         for row in 0...rows {
             let y = bottom + (top - bottom) * Double(row) / Double(rows)
             for column in 0...columns {
-                let angle = arcDegrees * .pi / 180 * Double(column) / Double(columns)
+                let angle = (startDegrees + arcDegrees * Double(column) / Double(columns)) * .pi / 180
                 mesh.positions.append(
                     SIMD3(Float(centre.x + cos(angle) * radius), Float(y), Float(centre.y + sin(angle) * radius)))
             }
