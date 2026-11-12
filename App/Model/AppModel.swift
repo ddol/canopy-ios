@@ -6,6 +6,7 @@ import CanopyReference
 import CanopyStore
 import CanopySync
 import Foundation
+import Network
 import Observation
 import SwiftUI
 import os
@@ -90,6 +91,9 @@ final class AppModel {
     }
     /// The loaded sites' vectors as sent, per site, for the AR overlay. In memory only.
     var loadedVectors: [String: LoadedVectors] = [:]
+    /// Whether the phone has a network path (`watchConnectivity`); assumed until told otherwise.
+    var isOnline = true
+    @ObservationIgnored var pathMonitor: NWPathMonitor?
     /// The tiles the loaded vector sites cover.
     var vectorTiles: Set<S2CellID> = []
     /// A level-13 cell being prepared on the server site by site, if any (Map → Layers → Server cells).
@@ -220,6 +224,7 @@ final class AppModel {
                 await seedScanIfAsked()
             #endif
             await seedServer()
+            if !Self.isTesting() { watchConnectivity() }
             phase = .ready
             Self.loadLog.notice(
                 """
@@ -427,6 +432,8 @@ extension AppModel {
             }
             lastSync = report
             await refresh()
+        } catch  where Self.isOffline(error) {
+            // Offline: the changes wait on the phone and go when it is back online.
         } catch {
             self.error = "Sync failed: \(error.localizedDescription)"
         }

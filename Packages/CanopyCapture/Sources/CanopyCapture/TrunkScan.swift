@@ -65,6 +65,19 @@ public struct TrunkCapture: Sendable {
 }
 
 extension Mesh {
+    /// The indices of every nth triangle, so at most `limit` are left: an even share of a mesh too big to draw whole.
+    public func thinnedIndices(to limit: Int) -> [UInt32] {
+        let count = indices.count / 3
+        guard count > limit, limit > 0 else { return indices }
+        let step = Int((Double(count) / Double(limit)).rounded(.up))
+        var kept: [UInt32] = []
+        kept.reserveCapacity((count / step + 1) * 3)
+        for t in stride(from: 0, to: count, by: step) {
+            kept += indices[(t * 3)..<(t * 3 + 3)]
+        }
+        return kept
+    }
+
     /// Where the mesh crosses five horizontal planes 2 cm apart round `height` (in the mesh's frame), pooled: what a
     /// ring is fitted to when there are no depth points there.
     public func sectionSlices(atHeight height: Double) -> [SIMD2<Double>] {
@@ -115,12 +128,21 @@ public struct ScanProgress: Equatable, Sendable {
 /// Measuring a trunk from a scan: the region around the trunk that is accumulated, the analysis, and the evidence
 /// crop. Pure geometry; the ARKit side is `CaptureSession`.
 public enum TrunkScan {
-    /// Horizontal radius around the scan centre (a point on the trunk's surface) that is kept and analysed. The far
-    /// side of the trunk must fall inside it, so this covers trunks up to 2 m across.
+    /// Horizontal radius around the scan centre (a point on the trunk's surface) that is kept and analysed when a
+    /// scan starts. The far side of the trunk must fall inside it, so this covers trunks up to 2 m across; the region
+    /// grows to `radius(forDiameter:)` once the scan shows a bigger trunk.
     public static let radius: Float = 2.0
-    /// How far below and above the scan centre the region reaches, in metres.
+    /// The most the region grows to: a redwood 6 m across, scanned from one side.
+    public static let maximumRadius: Float = 7
+    /// How far below and above the scan centre the region reaches, in metres: as high as the LiDAR reaches up a
+    /// trunk from the ground.
     public static let below: Float = 3
-    public static let above: Float = 4
+    public static let above: Float = 6
+
+    /// The region that takes in a trunk `diameter` across from a point on its surface, with a metre round it.
+    public static func radius(forDiameter diameter: Double) -> Float {
+        min(max(Float(diameter) + 1.2, radius), maximumRadius)
+    }
     /// The evidence keeps the trunk and this much around it, in metres.
     public static let evidenceMargin = 0.6
 
@@ -135,16 +157,17 @@ public enum TrunkScan {
     ///   - northAligned: true when world −z is true north, so the lean's direction can be given.
     public static func analyse(
         world: Mesh, points: [SIMD3<Float>] = [], floorHeights: [Float], center: SIMD3<Float>,
-        camera: SIMD3<Float>, northAligned: Bool
+        camera: SIMD3<Float>, northAligned: Bool, regionRadius: Float = radius
     ) throws -> TrunkCapture {
-        let (region, ground) = try prepare(world: world, floorHeights: floorHeights, center: center)
-        let local = points.cropped(around: center, radius: radius, below: below, above: above)
+        let (region, ground) = try prepare(
+            world: world, floorHeights: floorHeights, center: center, radius: regionRadius)
+        let local = points.cropped(around: center, radius: regionRadius, below: below, above: above)
         let analysis = try TrunkAnalysis().measure(
             region, points: local, groundHeight: ground, northAligned: northAligned)
 
         // Keep only the trunk and a margin around it as evidence, centred on the trunk.
         let trunkCenter = center + SIMD3(Float(analysis.center.x), 0, Float(analysis.center.y))
-        let cropRadius = min(Double(radius), analysis.circle.radius + evidenceMargin)
+        let cropRadius = min(Double(regionRadius), analysis.circle.radius + evidenceMargin)
         let evidence = world.cropped(around: trunkCenter, radius: Float(cropRadius), below: below, above: above)
         let trunkBase = trunkCenter + SIMD3(0, Float(ground), 0)
         return TrunkCapture(
@@ -154,7 +177,7 @@ public enum TrunkScan {
             cropRadius: cropRadius,
             trunkBase: trunkBase,
             cameraPosition: camera,
-            points: points.cropped(around: trunkBase, radius: radius, below: 0.5, above: below + above),
+            points: points.cropped(around: trunkBase, radius: regionRadius, below: 0.5, above: below + above),
             groundHeight: ground
         )
     }
@@ -162,15 +185,19 @@ public enum TrunkScan {
     /// A quick look at how much of the trunk the scan covers so far. Never throws: an incomplete scan just has no
     /// arc or diameter yet.
     public static func progress(
-        world: Mesh, points: [SIMD3<Float>] = [], floorHeights: [Float], center: SIMD3<Float>
+        world: Mesh, points: [SIMD3<Float>] = [], floorHeights: [Float], center: SIMD3<Float>,
+        regionRadius: Float = radius
     ) -> ScanProgress {
-        guard let (region, ground) = try? prepare(world: world, floorHeights: floorHeights, center: center) else {
+        guard
+            let (region, ground) = try? prepare(
+                world: world, floorHeights: floorHeights, center: center, radius: regionRadius)
+        else {
             return ScanProgress(triangleCount: world.triangleCount, pointCount: points.count)
         }
         var analysis = TrunkAnalysis()
         analysis.minimumArcDegrees = 0
         analysis.leanHeights = []
-        let local = points.cropped(around: center, radius: radius, below: below, above: above)
+        let local = points.cropped(around: center, radius: regionRadius, below: below, above: above)
         guard let result = try? analysis.measure(region, points: local, groundHeight: ground) else {
             return ScanProgress(triangleCount: world.triangleCount, pointCount: points.count)
         }
@@ -184,7 +211,9 @@ public enum TrunkScan {
     }
 
     /// The region around the scan centre (in coordinates centred on it) and the ground height in that frame.
-    static func prepare(world: Mesh, floorHeights: [Float], center: SIMD3<Float>) throws -> (Mesh, Double) {
+    static func prepare(
+        world: Mesh, floorHeights: [Float], center: SIMD3<Float>, radius: Float = radius
+    ) throws -> (Mesh, Double) {
         let region = world.cropped(around: center, radius: radius, below: below, above: above)
         guard region.triangleCount > 50 else { throw CaptureError.notEnoughMesh }
         if !floorHeights.isEmpty {

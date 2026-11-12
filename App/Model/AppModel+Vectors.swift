@@ -73,6 +73,8 @@ extension AppModel {
             aerial = .failed(error.localizedDescription)
         } catch let error as VectorReference.Failure {
             aerial = .failed(error.localizedDescription)
+        } catch  where Self.isOffline(error) {
+            aerial = .failed("Offline: the site loads once the phone is back online.")
         } catch {
             aerial = .failed("Could not load vectors: \(error.localizedDescription)")
         }

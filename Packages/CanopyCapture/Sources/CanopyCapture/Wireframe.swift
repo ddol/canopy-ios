@@ -24,6 +24,41 @@ public enum Wireframe {
         return (0..<count).map { Segment(from: points[$0], to: points[($0 + 1) % count]) }
     }
 
+    /// A horizontal circle drawn as `dashes` dashes with gaps as long between them, turned by `phase` (0 to 1, a
+    /// dash and a gap): moving `phase` makes the dashes march round ("marching ants").
+    public static func dashedRing(centre: SIMD3<Float>, radius: Float, dashes: Int, phase: Float) -> [Segment] {
+        let step = 2 * Float.pi / Float(dashes)
+        let offset = (phase - phase.rounded(.down)) * step
+        return (0..<dashes).flatMap { i -> [Segment] in
+            let start = Float(i) * step + offset
+            // Each dash of a few short pieces, so it follows the circle.
+            return (0..<3).map { k in
+                let a = start + Float(k) / 6 * step
+                let b = start + Float(k + 1) / 6 * step
+                return Segment(
+                    from: centre + SIMD3(cos(a) * radius, 0, sin(a) * radius),
+                    to: centre + SIMD3(cos(b) * radius, 0, sin(b) * radius))
+            }
+        }
+    }
+
+    /// A straight line drawn as dashes `dash` metres long with gaps as long, moved along it by `phase` (0 to 1, a
+    /// dash and a gap) from `from` towards `to`.
+    public static func dashedLine(from: SIMD3<Float>, to: SIMD3<Float>, dash: Float, phase: Float) -> [Segment] {
+        let length = simd_distance(from, to)
+        guard length > 0.01, dash > 0 else { return [] }
+        let direction = (to - from) / length
+        var segments: [Segment] = []
+        var start = ((phase - phase.rounded(.down)) - 1) * 2 * dash
+        while start < length {
+            let a = max(start, 0)
+            let b = min(start + dash, length)
+            if b > a { segments.append(Segment(from: from + direction * a, to: from + direction * b)) }
+            start += 2 * dash
+        }
+        return segments
+    }
+
     /// The segments along a run of points, closed back to the start when asked.
     public static func polyline(_ points: [SIMD3<Float>], closed: Bool) -> [Segment] {
         guard points.count >= 2 else { return [] }

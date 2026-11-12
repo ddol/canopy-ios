@@ -108,6 +108,15 @@ struct MeasurementSheet: View {
                     if saved != nil {
                         Label("Saved. Shared when you sync.", systemImage: "checkmark.circle")
                             .foregroundStyle(Color.canopyBrand)
+                    } else if measurement.saved != nil {
+                        Label("The scan was saved when it was measured.", systemImage: "checkmark.circle")
+                            .foregroundStyle(Color.canopyBrand)
+                        Button("Save the fitted shape and rings", systemImage: "square.and.arrow.down") {
+                            Task { await save() }
+                        }
+                        Button("Keep scanning", systemImage: "arrow.counterclockwise", role: .cancel) {
+                            dismiss()
+                        }
                     } else {
                         Button(
                             measurement.target == nil ? "Save as a new tree" : "Save measurement",
@@ -161,15 +170,20 @@ struct MeasurementSheet: View {
 
     private func save() async {
         let capture = measurement.capture
-        saved = await model.saveTrunkMeasurement(
-            dbh: capture.analysis.dbh,
-            lean: capture.analysis.lean,
-            glb: capture.glb,
-            evidenceMesh: (capture.evidence.vertexCount, capture.evidence.triangleCount),
-            cropRadius: capture.cropRadius,
-            tree: measurement.target,
-            position: measurement.position
-        )
+        // Saved when it was measured: only the shape and rings fitted since are left to keep.
+        if let already = measurement.saved {
+            saved = already
+        } else {
+            saved = await model.saveTrunkMeasurement(
+                dbh: capture.analysis.dbh,
+                lean: capture.analysis.lean,
+                glb: capture.glb,
+                evidenceMesh: (capture.evidence.vertexCount, capture.evidence.triangleCount),
+                cropRadius: capture.cropRadius,
+                tree: measurement.target,
+                position: measurement.position
+            )
+        }
         if let saved {
             // The wireframe drawn for this tree, in AR and on the map, is now the one fitted to it.
             let key = MapLayers.censusWireframeID(saved.id)
