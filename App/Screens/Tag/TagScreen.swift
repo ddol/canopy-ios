@@ -39,6 +39,7 @@ struct TagScreen: View {
                     existingTags(tree)
                 }
             }
+            .readableColumn()
             .navigationTitle("Tag")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -24,6 +24,7 @@ struct SettingsScreen: View {
             savedSection
             adminSection
         }
+        .readableColumn()
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { address = settings.endpoint?.url.absoluteString ?? "" }
