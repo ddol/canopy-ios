@@ -278,7 +278,7 @@ extension AppModel {
     /// after a load, and when the app comes to the front. Requests in a row become one sync. Off under tests, which
     /// sync when they say.
     func syncSoon(after delay: Duration = .seconds(2)) {
-        guard mapClient != nil, phase == .ready, !Self.isTesting() else { return }
+        guard mapClient != nil, phase == .ready, !Self.isTesting(), isOnline else { return }
         pendingSync?.cancel()
         pendingSync = Task { [weak self] in
             try? await Task.sleep(for: delay)

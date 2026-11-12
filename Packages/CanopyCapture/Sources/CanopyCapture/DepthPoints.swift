@@ -63,14 +63,17 @@ public enum DepthFrame {
 /// Keeps the depth points that fall in a region round a subject, one per small voxel, averaged, so a surface seen
 /// from many frames settles toward its true position instead of piling up noise.
 public struct DepthAccumulator: Sendable {
-    public let center: SIMD3<Float>
+    public private(set) var center: SIMD3<Float>
     /// Horizontal radius of the region, in metres.
-    public let radius: Float
+    public private(set) var radius: Float
     /// How far below and above `center` the region reaches, in metres.
     public let below: Float
     public let above: Float
-    /// Voxel edge, in metres.
-    public var voxelSize: Float = 0.01
+    /// Voxel edge, in metres: a centimetre, made coarser when the voxels would pass `maximumVoxels`.
+    public private(set) var voxelSize: Float = 0.01
+    /// The most voxels kept: a big trunk scanned all the way round at a centimetre runs past a million points, which
+    /// is more memory than a scan should take, so past this the voxels are merged into coarser ones.
+    public var maximumVoxels = 500_000
 
     private struct Sum: Sendable {
         var total: SIMD3<Float>
@@ -107,6 +110,41 @@ public struct DepthAccumulator: Sendable {
                 voxels[key] = Sum(total: p, count: 1)
             }
         }
+        while voxels.count > maximumVoxels { coarsen() }
+    }
+
+    /// Merges the voxels into ones half as large again, keeping each point's average.
+    mutating func coarsen() {
+        voxelSize *= 1.5
+        var merged: [SIMD3<Int32>: Sum] = [:]
+        merged.reserveCapacity(voxels.count / 2)
+        for sum in voxels.values {
+            let key = SIMD3<Int32>((sum.total / sum.count / voxelSize).rounded(.down))
+            if var kept = merged[key] {
+                kept.total += sum.total
+                kept.count += sum.count
+                merged[key] = kept
+            } else {
+                merged[key] = sum
+            }
+        }
+        voxels = merged
+    }
+
+    /// Moves or resizes the region, dropping the points outside the new one.
+    public mutating func reframe(center: SIMD3<Float>, radius: Float) {
+        self.center = center
+        self.radius = radius
+        let r2 = radius * radius
+        voxels = voxels.filter { _, sum in
+            let d = sum.total / sum.count - center
+            return d.x * d.x + d.z * d.z <= r2 && d.y >= -below && d.y <= above
+        }
+    }
+
+    /// Forgets every point, keeping the region.
+    public mutating func clear() {
+        voxels = [:]
     }
 
     public var isEmpty: Bool { voxels.isEmpty }

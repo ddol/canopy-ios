@@ -35,9 +35,14 @@
     public final class CaptureSession: NSObject, ARSessionDelegate {
         /// A trunk scan in progress.
         public struct Scan: Equatable, Sendable {
-            /// The point on the trunk where the scan started.
+            /// The point on the trunk where the scan started, or was aimed again (`reaimScan`).
             public var center: SIMD3<Float>
             public var progress: ScanProgress
+            /// How far round `center` the scan keeps the mesh: grown for a big trunk.
+            public var regionRadius: Float = TrunkScan.radius
+            /// Set when tracking jumped while scanning (ARKit relocalised, the session was interrupted, or the camera
+            /// leapt): the detail kept from before may no longer line up with the world.
+            public var trackingJumped = false
         }
 
         @ObservationIgnored public let view: ARView
@@ -68,6 +73,8 @@
         public private(set) var ringFits: [UUID: RingAligner.Fit] = [:]
         @ObservationIgnored private var aligner: RingAligner?
         @ObservationIgnored private var lastAlignment: TimeInterval = 0
+        /// The camera's last position and time while scanning, to catch it leaping.
+        @ObservationIgnored private var lastCamera: (position: SIMD3<Float>, time: TimeInterval)?
 
         /// Minimum time between two ingests of the same mesh anchor, in seconds.
         static let ingestInterval: TimeInterval = 0.3
@@ -169,19 +176,61 @@
                 center: hit.position, radius: TrunkScan.radius, below: TrunkScan.below, above: TrunkScan.above)
             lastDepthIngest = 0
             scan = Scan(center: hit.position, progress: ScanProgress(triangleCount: 0))
+            lastCamera = nil
+            ingestAll()
+            refreshTask?.cancel()
+            refreshTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    await self?.refresh()
+                    // A big scan takes longer to look over: less often, so the phone keeps up.
+                    let big = (self?.scan?.progress.triangleCount ?? 0) > 100_000
+                    try? await Task.sleep(for: .seconds(big ? 2 : 1))
+                }
+            }
+        }
+
+        /// Adds every mesh anchor ARKit holds now, and the current depth frame, to the scan.
+        private func ingestAll() {
             for anchor in view.session.currentFrame?.anchors ?? [] {
                 if let mesh = anchor as? ARMeshAnchor {
                     ingest(mesh, force: true)
                 }
             }
             if let frame = view.session.currentFrame { ingestDepth(frame) }
-            refreshTask?.cancel()
-            refreshTask = Task { [weak self] in
-                while !Task.isCancelled {
-                    await self?.refresh()
-                    try? await Task.sleep(for: .seconds(1))
-                }
-            }
+        }
+
+        /// Aims the scan again at the trunk under the centre of the view, as when it started on a stump or a shrub in
+        /// front of the tree: the region moves there, what was kept inside it stays and the rest is dropped, and
+        /// ARKit's mesh fills in the rest.
+        public func reaimScan() throws {
+            guard scan != nil else { throw CaptureError.notScanning }
+            guard let hit = raycastCenter(maxDistance: 8) else { throw CaptureError.noSurface }
+            accumulator?.reframe(center: hit.position, radius: TrunkScan.radius)
+            depth?.reframe(center: hit.position, radius: TrunkScan.radius)
+            scan?.center = hit.position
+            scan?.regionRadius = TrunkScan.radius
+            scan?.progress = ScanProgress(triangleCount: 0)
+            lastIngest = [:]
+            ingestAll()
+        }
+
+        /// Starts the scan's kept detail again from ARKit's mesh as it is now, in the same place: after tracking
+        /// jumped, when what was kept from before no longer lines up. The world mesh ARKit holds is not lost.
+        public func restartScanAfterJump() {
+            guard scan != nil else { return }
+            accumulator?.clear()
+            depth?.clear()
+            scan?.trackingJumped = false
+            scan?.progress = ScanProgress(triangleCount: 0)
+            lastIngest = [:]
+            lastCamera = nil
+            ingestAll()
+        }
+
+        /// Carries on with what the scan kept, after tracking jumped.
+        public func keepScanAfterJump() {
+            scan?.trackingJumped = false
+            lastCamera = nil
         }
 
         /// Stops the scan and forgets what it captured.
@@ -204,7 +253,7 @@
             return try await Task.detached(priority: .userInitiated) {
                 try TrunkScan.analyse(
                     world: accumulator.mesh(), points: depth?.points() ?? [], floorHeights: accumulator.floorHeights(),
-                    center: scan.center, camera: camera, northAligned: aligned)
+                    center: scan.center, camera: camera, northAligned: aligned, regionRadius: accumulator.radius)
             }.value
         }
 
@@ -218,19 +267,34 @@
                     mesh,
                     TrunkScan.progress(
                         world: mesh, points: depth?.points() ?? [], floorHeights: accumulator.floorHeights(),
-                        center: center)
+                        center: center, regionRadius: accumulator.radius)
                 )
             }.value
             guard self.scan?.center == center else { return }  // cancelled or restarted meanwhile
             self.scan?.progress = progress
             drawOverlay(mesh)
+            // A trunk bigger than the region: grow it to take the far side in, keeping what was kept.
+            if let diameter = progress.diameter {
+                let needed = TrunkScan.radius(forDiameter: diameter)
+                if needed > (self.accumulator?.radius ?? needed) + 0.25 {
+                    self.accumulator?.reframe(center: center, radius: needed)
+                    self.depth?.reframe(center: center, radius: needed)
+                    self.scan?.regionRadius = needed
+                    ingestAll()
+                }
+            }
         }
 
+        /// The most triangles the lime overlay draws: past this it draws an even share of them, so it still shows
+        /// everything the scan keeps rather than stopping where it was.
+        static let overlayTriangles = 120_000
+
         private func drawOverlay(_ mesh: Mesh) {
-            guard !mesh.isEmpty, mesh.triangleCount <= 150_000 else { return }
+            guard !mesh.isEmpty else { return }
+            let indices = mesh.thinnedIndices(to: Self.overlayTriangles)
             var descriptor = MeshDescriptor(name: "scan")
             descriptor.positions = MeshBuffer(mesh.positions)
-            descriptor.primitives = .triangles(mesh.indices)
+            descriptor.primitives = .triangles(indices)
             guard let resource = try? MeshResource.generate(from: [descriptor]) else { return }
             var material = UnlitMaterial(color: UIColor(red: 0.61, green: 0.82, blue: 0.29, alpha: 1))
             material.blending = .transparent(opacity: 0.45)
@@ -505,6 +569,29 @@
 
         // MARK: Session delegate
 
+        public nonisolated func sessionWasInterrupted(_ session: ARSession) {
+            MainActor.assumeIsolated { if scan != nil { scan?.trackingJumped = true } }
+        }
+
+        /// Notes tracking jumping while scanning: ARKit relocalising, or the camera moving further between two frames
+        /// than a hand does.
+        private func watchTracking(_ frame: ARFrame) {
+            guard scan != nil, scan?.trackingJumped == false else { return }
+            if case .limited(.relocalizing) = frame.camera.trackingState {
+                scan?.trackingJumped = true
+                return
+            }
+            guard case .normal = frame.camera.trackingState else { return }
+            let t = frame.camera.transform.columns.3
+            let position = SIMD3(t.x, t.y, t.z)
+            defer { lastCamera = (position, frame.timestamp) }
+            guard let last = lastCamera else { return }
+            let elapsed = frame.timestamp - last.time
+            if elapsed > 0, elapsed < 0.5, Double(simd_distance(position, last.position)) > 0.6 + 2 * elapsed {
+                scan?.trackingJumped = true
+            }
+        }
+
         public nonisolated func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
             MainActor.assumeIsolated { receive(anchors) }
         }
@@ -515,6 +602,7 @@
 
         public nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
             MainActor.assumeIsolated {
+                watchTracking(frame)
                 ingestDepth(frame)
                 align(frame)
             }
@@ -618,7 +706,7 @@
             guard var accumulator, let center = scan?.center else { return }
             let origin = anchor.transform.columns.3
             // Mesh anchors cover a few metres; skip ones that cannot reach the region.
-            guard simd_distance(SIMD3(origin.x, origin.y, origin.z), center) < TrunkScan.radius + 5 else { return }
+            guard simd_distance(SIMD3(origin.x, origin.y, origin.z), center) < accumulator.radius + 5 else { return }
             let now = Date.timeIntervalSinceReferenceDate
             if !force, let last = lastIngest[anchor.identifier], now - last < Self.ingestInterval { return }
             lastIngest[anchor.identifier] = now
