@@ -9,16 +9,21 @@ struct ScansScreen: View {
     @Environment(AppModel.self) private var model
     @State private var scans: [Evidence] = []
     @State private var loaded = false
+    /// This player's scans from their other devices, from the server; nil until asked.
+    @State private var elsewhere: [AccountScan]?
+    @State private var elsewhereFailure: String?
     private let format = QuantityFormat()
 
     var body: some View {
         List {
-            if loaded, scans.isEmpty {
+            if loaded, scans.isEmpty, elsewhere?.isEmpty ?? true {
                 ContentUnavailableView(
                     "No scans yet", systemImage: "cube",
                     description: Text(
-                        "Scan a trunk from the Census tab. Its mesh is kept here, and shared when you sync."))
+                        "Scan a trunk from the Census tab on a phone or iPad with LiDAR. Its mesh is kept here, and "
+                            + "shared when you sync, so your other devices list it too."))
             }
+            otherDevices
             ForEach(scans, id: \.blob) { scan in
                 Section {
                     details(scan)
@@ -46,6 +51,78 @@ struct ScansScreen: View {
             #endif
             scans = (try? await model.store.allEvidence()) ?? []
             loaded = true
+            await askServer()
+        }
+        .refreshable {
+            await model.sync()
+            scans = (try? await model.store.allEvidence()) ?? []
+            await askServer()
+        }
+    }
+
+    private func askServer() async {
+        guard model.mapClient != nil else { return }
+        do {
+            elsewhere = try await model.scansFromOtherDevices()
+            elsewhereFailure = nil
+        } catch {
+            elsewhereFailure =
+                AppModel.isOffline(error)
+                ? "Offline: your scans from other devices are listed when the server can be reached."
+                : "Could not ask the server for your other scans: \(error.localizedDescription)"
+        }
+    }
+
+    /// The scans this player took on their other devices: listed from the server, each downloaded when opened.
+    @ViewBuilder
+    private var otherDevices: some View {
+        if model.mapClient != nil {
+            Section {
+                if let elsewhere {
+                    if elsewhere.isEmpty {
+                        Text("None yet. Scans you take on another device show here once it has synced.")
+                            .foregroundStyle(Color.canopyInkMuted)
+                    }
+                    ForEach(elsewhere) { scan in
+                        otherDeviceRow(scan)
+                    }
+                } else if let elsewhereFailure {
+                    Text(elsewhereFailure).foregroundStyle(Color.canopyInkMuted)
+                } else {
+                    HStack(spacing: Spacing.xs) {
+                        ProgressView()
+                        Text("Asking the server for your scans…")
+                    }
+                }
+            } header: {
+                Text("From your other devices")
+            } footer: {
+                Text(
+                    "Scans your Game Center account took on another phone or iPad, as the server has them. Each "
+                        + "downloads when you open it; aligning its rings works here without LiDAR.")
+            }
+            .accessibilityIdentifier("other-device-scans")
+        }
+    }
+
+    @ViewBuilder
+    private func otherDeviceRow(_ scan: AccountScan) -> some View {
+        let tree = model.tree(scan.subject) ?? model.census.tags[scan.subject].flatMap { model.tree($0.treeID) }
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            Text(tree?.name ?? "A tree not on this device's map yet").font(.headline)
+            Text(scan.date, format: .dateTime.day().month().year().hour().minute()).font(.subheadline)
+            Text(scan.state == .waiting ? "Waiting for a second player to agree" : "On the shared map")
+                .font(.caption)
+                .foregroundStyle(Color.canopyInkMuted)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("other-device-scan-row")
+        EvidenceRow(ref: scan.blob, title: scan.entity == .tag ? "Limb scan" : "Trunk scan")
+        if let tree {
+            Button("Show on map", systemImage: "map") { model.showOnMap(tree) }
+            if scan.entity == .tree {
+                AlignScanButton(scan: scan.blob, treeID: tree.id)
+            }
         }
     }
 

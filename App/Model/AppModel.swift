@@ -79,6 +79,10 @@ final class AppModel {
     @ObservationIgnored var syncAgain = false
     /// Other players' open changesets near the tiles this device follows, for the player to agree with or reject.
     var reviewQueue: [GerardusMapClient.OpenChangeset] = []
+    /// The tree being moved on the map (`MapScreen`): the map centres on it and its new place is under the crosshair.
+    var mapMove: UUID?
+    /// This player's own changes waiting for agreement, made on this device or another, from the last sync.
+    var ownOpenChangesets: [Changeset] = []
     /// The player as the Gerardus server sees them (trusted, admin), after a sync.
     var serverPlayer: GerardusMapClient.PlayerInfo?
     /// The last loaded area's own data (canopy heights, outlines), for the Gerardus map. In memory only.

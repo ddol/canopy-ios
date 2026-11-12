@@ -92,6 +92,14 @@ public struct GerardusMapClient: GerardusClient {
         public var isAdmin: Bool
         /// Whether the align service sends OpenStreetMap to this player.
         public var isOSMAllowed: Bool
+
+        public init(id: String, alias: String, isTrusted: Bool, isAdmin: Bool, isOSMAllowed: Bool) {
+            self.id = id
+            self.alias = alias
+            self.isTrusted = isTrusted
+            self.isAdmin = isAdmin
+            self.isOSMAllowed = isOSMAllowed
+        }
     }
 
     public func player() async throws -> PlayerInfo {

@@ -44,6 +44,24 @@ final class ScanAlignmentCamera {
     /// What the view turns about when it opens: the trunk at breast height.
     fileprivate var homeTarget: SIMD3<Float>?
 
+    /// How far the camera may look down on the trunk (90°: from straight above) or up at it from below the point it
+    /// turns about, in degrees.
+    nonisolated static let verticalAngles: ClosedRange<Float> = -20...89
+
+    /// A camera transform carried round the upright line through `pole` by `angle` radians: positive for fingers
+    /// twisting clockwise on screen, which turns the scene clockwise as seen from above (the camera going round it
+    /// the other way). The camera's up stays as it was, so a level view stays level.
+    nonisolated static func turned(
+        _ transform: simd_float4x4, by angle: Float, about pole: SIMD3<Float>
+    ) -> simd_float4x4 {
+        let rotation = simd_float4x4(simd_quatf(angle: angle, axis: SIMD3(0, 1, 0)))
+        var toPole = matrix_identity_float4x4
+        toPole.columns.3 = SIMD4(pole, 1)
+        var fromPole = matrix_identity_float4x4
+        fromPole.columns.3 = SIMD4(-pole, 1)
+        return toPole * rotation * fromPole * transform
+    }
+
     /// The screen's right and the direction into the screen, on the ground (scene x and z), each a unit vector.
     var groundAxes: (right: SIMD2<Float>, away: SIMD2<Float>) {
         guard let pov = view?.pointOfView else { return (SIMD2(1, 0), SIMD2(0, -1)) }
@@ -177,6 +195,18 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
         view.defaultCameraController.interactionMode = .orbitTurntable
         view.defaultCameraController.inertiaEnabled = true
         view.defaultCameraController.target = SCNVector3(overlay.target)
+        // Never over the top or far under the ground, so the ground stays down (`ScanAlignmentCamera.verticalAngles`).
+        view.defaultCameraController.minimumVerticalAngle = ScanAlignmentCamera.verticalAngles.lowerBound
+        view.defaultCameraController.maximumVerticalAngle = ScanAlignmentCamera.verticalAngles.upperBound
+        // SceneKit's own two-finger twist rolls the camera about its line of sight, which turns the ground over. As
+        // on Apple's maps, a twist turns the view about an upright pole through what it looks at instead.
+        for recogniser in view.gestureRecognizers ?? [] where recogniser is UIRotationGestureRecognizer {
+            recogniser.isEnabled = false
+        }
+        let twist = UIRotationGestureRecognizer(
+            target: context.coordinator, action: #selector(Coordinator.twisted(_:)))
+        twist.delegate = context.coordinator
+        view.addGestureRecognizer(twist)
         camera.view = view
         camera.home = pov
         camera.homeTarget = overlay.target
@@ -204,7 +234,7 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onPick: (TreeSection.ID) -> Void
         var overlayNode: SCNNode?
         private var drawn: ScanAlignmentOverlay?
@@ -223,6 +253,22 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
                 node.addChildNode(child)
             }
         }
+
+        /// Two fingers twisting: the camera goes round the upright pole through the point it turns about, the scene
+        /// turning with the fingers and the ground staying level and down.
+        @objc func twisted(_ recogniser: UIRotationGestureRecognizer) {
+            guard let view = recogniser.view as? SCNView, let pov = view.pointOfView else { return }
+            let angle = Float(recogniser.rotation)
+            recogniser.rotation = 0
+            pov.simdTransform = ScanAlignmentCamera.turned(
+                pov.simdTransform, by: angle, about: SIMD3(view.defaultCameraController.target))
+        }
+
+        /// The twist goes with SceneKit's pinch and two-finger pan, as on a map.
+        nonisolated func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool { true }
 
         /// Picks the ring whose outline, on screen, passes nearest the tap, within a finger's width.
         @objc func tapped(_ recogniser: UITapGestureRecognizer) {

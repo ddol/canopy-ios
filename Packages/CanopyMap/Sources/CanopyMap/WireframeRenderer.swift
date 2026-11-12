@@ -290,7 +290,7 @@ struct WireframeMap: UIViewRepresentable {
             self.anchor = LocalFrame(origin: anchor)
             super.init()
             camera.camera = SCNCamera()
-            camera.camera?.zNear = 0.5
+            camera.camera?.zNear = 0.1
             camera.camera?.zFar = 60000
             camera.camera?.automaticallyAdjustsZRange = true
             camera.camera?.fieldOfView = CGFloat(rig.fieldOfView)
