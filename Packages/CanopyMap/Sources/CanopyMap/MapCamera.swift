@@ -16,9 +16,11 @@ struct CameraRig: Equatable {
     /// Vertical field of view, in degrees (SceneKit's default projection direction).
     var fieldOfView: Float = 52
 
-    static let distances: ClosedRange<Float> = 12...20000
-    /// From nearly flat to straight down; straight down itself would leave the camera without a heading.
-    static let tilts: ClosedRange<Float> = (10 * .pi / 180)...(88 * .pi / 180)
+    /// From a few metres off a trunk, close enough to move among the trees and buildings, to the whole city.
+    static let distances: ClosedRange<Float> = 3...20000
+    /// From all but level, looking along the street, to straight down; straight down itself would leave the camera
+    /// without a heading.
+    static let tilts: ClosedRange<Float> = (3 * .pi / 180)...(88 * .pi / 180)
 
     var position: SIMD3<Float> {
         target + SIMD3(sin(azimuth) * cos(tilt), sin(tilt), cos(azimuth) * cos(tilt)) * distance

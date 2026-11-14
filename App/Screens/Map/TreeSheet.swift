@@ -44,6 +44,13 @@ struct TreeSheet: View {
                             Task { await model.reject(tree) }
                         }
                     }
+                    if tree.effectiveStatus != .removed {
+                        Button("Move on the map", systemImage: "arrow.up.and.down.and.arrow.left.and.right") {
+                            dismiss()
+                            model.mapMove = tree.id
+                        }
+                        .accessibilityIdentifier("move-on-map")
+                    }
                     if Features.limbTagging, tree.effectiveStatus != .removed {
                         Button("Tag a limb hazard", systemImage: "exclamationmark.triangle") {
                             dismiss()

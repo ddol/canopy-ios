@@ -42,6 +42,11 @@ struct MapScreen: View {
         let layers = layers
         NavigationStack(path: $path) {
             map(layers)
+                .overlay {
+                    if movingTree != nil {
+                        MoveCrosshair().allowsHitTesting(false)
+                    }
+                }
                 .safeAreaInset(edge: .top) {
                     VStack(spacing: Spacing.xs) {
                         SummaryBar([
@@ -58,6 +63,9 @@ struct MapScreen: View {
                 }
                 .safeAreaInset(edge: .bottom) {
                     VStack(alignment: .leading, spacing: Spacing.xs) {
+                        if let tree = movingTree {
+                            moveBar(tree)
+                        }
                         if baseMap == .gerardus, visibility.vectors, model.mapReference == nil, !model.aerial.isWorking
                         {
                             Text("No vectors loaded here yet. Layers → Load vectors in view draws Gerardus's sites.")
@@ -109,6 +117,7 @@ struct MapScreen: View {
                         .presentationDetents([.medium, .large])
                 }
                 .onChange(of: model.mapTarget, initial: true) { showMapTarget() }
+                .onChange(of: model.mapMove, initial: true) { startMove() }
                 .onAppear { if !openedAtPlayer { location.start() } }
                 .onDisappear { location.stop() }
                 .onChange(of: location.geoPoint) { _, fix in openAtPlayer(fix) }
@@ -129,6 +138,61 @@ struct MapScreen: View {
                     }
                 #endif
         }
+    }
+
+    // MARK: Moving a tree
+
+    /// The tree being moved: its new place is wherever the map's middle is, under the crosshair.
+    private var movingTree: Tree? { model.tree(model.mapMove) }
+
+    /// Centres the map close on the tree to move, its sheet closed so the map is free to drag.
+    private func startMove() {
+        guard let tree = movingTree else { return }
+        selection = nil
+        focus = MapFocus(MapViewport(center: tree.position.geo, radius: Self.moveRadius))
+    }
+
+    /// How much of the map is in view round a tree being moved, in metres: close enough to set it within a metre.
+    static let moveRadius = 25.0
+
+    /// How far, in metres, the map's middle is from where `tree` stands now.
+    private func moveDistance(_ tree: Tree) -> Double {
+        let enu = LocalFrame(origin: tree.position.geo).enu(of: centre, altitude: 0)
+        return (enu.east * enu.east + enu.north * enu.north).squareRoot()
+    }
+
+    private func moveBar(_ tree: Tree) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text("Moving \(tree.name)").font(.headline)
+            Text(
+                "Drag the map until the crosshair is on the trunk: "
+                    + format.length(moveDistance(tree), fractionDigits: 1) + " from where it is now."
+            )
+            .font(.footnote)
+            .accessibilityIdentifier("move-distance")
+            HStack {
+                Button("Cancel", role: .cancel) { model.mapMove = nil }
+                    .buttonStyle(.canopySecondary)
+                    .accessibilityIdentifier("move-cancel")
+                Button("Move here", systemImage: "checkmark") {
+                    let geo = centre
+                    // As sure as a finger on the map at this scale: a hundredth of the region in view, half a metre
+                    // at the least.
+                    let sigma = max(0.5, (viewport?.cornerDistance ?? 100) / 100)
+                    model.mapMove = nil
+                    Task {
+                        await model.move(
+                            tree, to: Position(geo: geo, covariance: .isotropic(horizontal: sigma, vertical: 5)))
+                    }
+                }
+                .buttonStyle(.canopyPrimary)
+                .accessibilityIdentifier("move-here")
+            }
+        }
+        .padding(Spacing.s)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.medium))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("move-bar")
     }
 
     /// What the map draws, made once per update and shared by the map and the note under it.
@@ -413,4 +477,19 @@ struct MapScreen: View {
 #Preview {
     MapScreen()
         .environment(AppModel.live(arguments: ["-ui-testing"]))
+}
+
+/// Where a tree being moved will stand: the middle of the map, marked so the trunk can be set under it.
+private struct MoveCrosshair: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.canopyBrand, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                .frame(width: 44, height: 44)
+            Rectangle().fill(Color.canopyBrand).frame(width: 2, height: 18)
+            Rectangle().fill(Color.canopyBrand).frame(width: 18, height: 2)
+        }
+        .shadow(color: .black.opacity(0.35), radius: 2)
+        .accessibilityHidden(true)
+    }
 }

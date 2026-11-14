@@ -237,14 +237,17 @@ extension AppModel {
         serverPlayer = try await asked
         var seen: Set<UUID> = []
         var queue: [GerardusMapClient.OpenChangeset] = []
+        var own: [Changeset] = []
         for open in open.joined() where seen.insert(open.changeset.id).inserted {
             let changeset = open.changeset
+            if changeset.meta.playerID == player.id { own.append(changeset) }
             guard changeset.meta.playerID != player.id,
                 !changeset.approvals.contains(where: { $0.playerID == player.id })
             else { continue }
             queue.append(open)
         }
         reviewQueue = queue.sorted { $0.changeset.meta.createdAt < $1.changeset.meta.createdAt }
+        ownOpenChangesets = own
     }
 
     /// `body` for each item, at most `width` at once (URLSession opens four connections to a server on iOS, and a call

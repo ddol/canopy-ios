@@ -3,6 +3,7 @@ import CanopyMap
 import CanopyModel
 import CanopyStore
 import Foundation
+import SceneKit
 import Testing
 import simd
 
@@ -101,6 +102,29 @@ import simd
         // Straight down with east to the right: the top of the screen, and so away, is north.
         let down = ScanAlignmentCamera.groundAxes(right: SIMD3(1, 0, 0), front: SIMD3(0, -1, 0), up: SIMD3(0, 0, -1))
         #expect(simd_distance(down.right, SIMD2(1, 0)) < 1e-5 && simd_distance(down.away, SIMD2(0, -1)) < 1e-5)
+    }
+
+    /// Two fingers twisting carry the camera round an upright pole through the trunk: the ground stays down and level,
+    /// the camera keeps its distance and height, and a clockwise twist turns the scene clockwise seen from above.
+    @Test func aTwistTurnsTheViewAboutAnUprightPole() {
+        let pole = SIMD3<Float>(0, 1.37, 0)
+        let node = SCNNode()
+        node.simdPosition = pole + SIMD3(0, 0.8, 3.2)
+        node.simdLook(at: pole)
+        let before = node.simdTransform
+        let upright = node.simdWorldUp.y
+        let level = simd_dot(node.simdWorldRight, SIMD3(0, 1, 0))
+        // A quarter turn clockwise: from the south, looking north, to the east, looking west.
+        node.simdTransform = ScanAlignmentCamera.turned(before, by: .pi / 2, about: pole)
+        #expect(simd_distance(node.simdPosition, pole + SIMD3(3.2, 0.8, 0)) < 1e-4)
+        #expect(simd_distance(simd_normalize(SIMD2(node.simdWorldFront.x, node.simdWorldFront.z)), SIMD2(-1, 0)) < 1e-3)
+        // However far it turns, its up keeps the same height above the ground: no roll.
+        for _ in 0..<7 {
+            node.simdTransform = ScanAlignmentCamera.turned(node.simdTransform, by: 1.1, about: pole)
+            #expect(abs(simd_length(node.simdPosition - pole) - simd_length(SIMD3<Float>(0, 0.8, 3.2))) < 1e-3)
+            #expect(abs(node.simdWorldUp.y - upright) < 1e-4)
+            #expect(abs(simd_dot(node.simdWorldRight, SIMD3(0, 1, 0)) - level) < 1e-4)
+        }
     }
 
     /// The scan is readied to draw off the main thread: a unit normal at every vertex and each edge once.

@@ -85,10 +85,14 @@ struct MeScreen: View {
             HStack {
                 StatusBadge(signInPresentation)
                 Spacer()
-                StatusBadge(
-                    model.player.isTrusted
-                        ? StatusPresentation("Trusted", systemImage: "checkmark.shield", tone: .ok)
-                        : StatusPresentation("Not trusted yet", systemImage: "shield", tone: .watch))
+                StatusBadge(trustPresentation)
+                    .accessibilityIdentifier("trust-badge")
+            }
+            if let note = trustNote {
+                Text(note)
+                    .font(.footnote)
+                    .foregroundStyle(Color.canopyInkMuted)
+                    .accessibilityIdentifier("trust-note")
             }
             switch model.players.state {
             case .unavailable(let reason):
@@ -102,6 +106,44 @@ struct MeScreen: View {
                 EmptyView()
             }
         }
+    }
+
+    /// Trust is the server's to give (`GetPlayer`): the badge says what it last said, not a flag on this phone.
+    private var trustPresentation: StatusPresentation {
+        Self.trust(server: model.serverPlayer, adminInThisBuild: model.adminSettings.isAdmin(model.player))
+    }
+
+    static func trust(server: GerardusMapClient.PlayerInfo?, adminInThisBuild: Bool) -> StatusPresentation {
+        if server?.isAdmin == true {
+            return StatusPresentation("Admin", systemImage: "checkmark.shield.fill", tone: .ok)
+        }
+        if server?.isTrusted == true {
+            return StatusPresentation("Trusted", systemImage: "checkmark.shield", tone: .ok)
+        }
+        if adminInThisBuild {
+            return StatusPresentation("Admin on this phone", systemImage: "shield.lefthalf.filled", tone: .proposed)
+        }
+        return StatusPresentation("Not trusted yet", systemImage: "shield", tone: .watch)
+    }
+
+    /// Why the server does not trust a player this build makes an admin, and what fixes it.
+    private var trustNote: String? {
+        Self.trustNote(
+            server: model.serverPlayer, adminInThisBuild: model.adminSettings.isAdmin(model.player),
+            hasServer: model.mapClient != nil, signedIn: model.player.source == .gameCenter)
+    }
+
+    static func trustNote(
+        server: GerardusMapClient.PlayerInfo?, adminInThisBuild: Bool, hasServer: Bool, signedIn: Bool
+    ) -> String? {
+        guard signedIn else {
+            return "Trust and admin go with your Game Center id. Sign in to Game Center to be recognised."
+        }
+        guard server?.isTrusted != true, server?.isAdmin != true else { return nil }
+        guard adminInThisBuild, hasServer else { return nil }
+        guard server != nil else { return "This build lists you as an admin. Sync to ask the server whether it does." }
+        return "This build lists you as an admin, but the server does not trust you yet: it knows admins by the "
+            + "Game Center ids (or their hashes) in GERARDUS_ADMINS. Touch and hold your player id above to copy it."
     }
 
     private var signInPresentation: StatusPresentation {
@@ -163,7 +205,9 @@ struct MeScreen: View {
             }
             .accessibilityIdentifier("scans-link")
         } footer: {
-            Text("Every trunk scan is kept on this phone as a colourless mesh, and shared with the change it backs.")
+            Text(
+                "Every trunk scan is kept on the device that took it as a colourless mesh, and shared with the change "
+                    + "it backs. Your scans from your other devices are listed too.")
         }
     }
 
