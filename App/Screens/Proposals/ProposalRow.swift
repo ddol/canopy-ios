@@ -69,6 +69,10 @@ struct ProposalRow: View {
             if !trees.isEmpty {
                 Text(trees).font(.subheadline)
             }
+            let scans = changeset.scans
+            if !scans.isEmpty {
+                ChangesetScans(refs: scans)
+            }
             Text(ProposalStatus.explain(changeset, in: model))
                 .font(.footnote)
                 .accessibilityIdentifier("proposal-need")

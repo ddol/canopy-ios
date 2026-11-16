@@ -202,7 +202,9 @@ final class ScanAlignmentCamera {
         }
     }
 
-    /// Two fingers: pinch, twist and slide at once, each from where the fingers were when they last landed.
+    /// Two fingers: a pinch and slide until they twist past `TwoFingerTurn.threshold`; from then on a turn about the
+    /// upright pole through the trunk (the target), which stays put on screen and upright while the scan spins round
+    /// it, with the pinch still zooming. The pole is drawn while it turns.
     fileprivate func twoFingers(
         pinch: UIPinchGestureRecognizer, twist: UIRotationGestureRecognizer, slide: UIPanGestureRecognizer
     ) {
@@ -210,32 +212,56 @@ final class ScanAlignmentCamera {
         let states = [pinch.state, twist.state, slide.state]
         if !states.contains(where: { $0 == .began || $0 == .changed }) {
             twistStart = nil
+            turning = false
+            showPole(false)
             return
         }
-        if twistStart == nil {
+        func rebase() {
             twistStart = orbit
             pinch.scale = 1
             twist.rotation = 0
             slide.setTranslation(.zero, in: view)
         }
+        if twistStart == nil { rebase() }
+        if !turning, abs(twist.rotation) > TwoFingerTurn.threshold {
+            turning = true
+            rebase()
+            showPole(true)
+        }
         guard let from = twistStart else { return }
-        let fov = Float(view.pointOfView?.camera?.fieldOfView ?? 50)
-        // As on the 3D map, a small twist leaves the heading alone so a pinch does not turn the view by accident.
-        let angle = Float(TwoFingerTurn.turn(twist.rotation))
-        place(
-            from.pinching(by: pinch.scale).twisting(by: angle)
-                .sliding(by: slide.translation(in: view), height: view.bounds.height, fieldOfView: fov))
+        if turning {
+            place(from.pinching(by: pinch.scale).twisting(by: Float(twist.rotation)))
+        } else {
+            let fov = Float(view.pointOfView?.camera?.fieldOfView ?? 50)
+            place(
+                from.pinching(by: pinch.scale)
+                    .sliding(by: slide.translation(in: view), height: view.bounds.height, fieldOfView: fov))
+        }
+    }
+
+    /// Whether the fingers under way are turning the view.
+    private var turning = false
+    private var pole: SCNNode?
+
+    /// The upright pole a turn goes round: through the target, from the ground at the trunk to 3 m above it.
+    private func showPole(_ shown: Bool) {
+        pole?.removeFromParentNode()
+        pole = nil
+        guard shown, let orbit, let root = view?.scene?.rootNode else { return }
+        let foot = SIMD3(orbit.target.x, (homeTarget?.y ?? orbit.target.y) - Float(DBH.standardHeight), orbit.target.z)
+        let node = ScanAlignmentSceneView.lines(
+            [Wireframe.Segment(from: foot, to: foot + SIMD3(0, Float(DBH.standardHeight) + 3, 0))],
+            color: SIMD4(1, 0.62, 0.1, 1), width: WireframeTree.lineWidth * 1.5)
+        node.renderingOrder = 20
+        node.enumerateHierarchy { child, _ in child.geometry?.firstMaterial?.readsFromDepthBuffer = false }
+        root.addChildNode(node)
+        pole = node
     }
 }
 
-/// A twist smaller than this, in radians (about 6°), leaves the view's heading alone, so a pinch does not turn it by
-/// accident; past it the view turns with the fingers, less this much, so it starts turning smoothly.
+/// Fingers twisted further than this, in radians (about 6°), turn the view; until then they pinch and slide it.
 enum TwoFingerTurn {
     static let threshold: CGFloat = 0.1
-
-    static func turn(_ angle: CGFloat) -> CGFloat {
-        abs(angle) <= threshold ? 0 : angle - (angle > 0 ? threshold : -threshold)
-    }
 }
 
 /// A scan's triangles ready to draw: a normal at each vertex from the faces round it, since the evidence holds none,

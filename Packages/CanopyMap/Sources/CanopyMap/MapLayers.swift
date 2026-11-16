@@ -21,6 +21,9 @@ public struct MapLayers: Equatable, Sendable {
         public var vectors = false
         /// The loaded sites' ground, on the 3D map.
         public var ground = true
+        /// The aerial lidar (USGS 3DEP) points loaded round sites, on the 3D map: to see the vectors and trees
+        /// against what the aircraft saw.
+        public var aerialPoints = true
 
         public init(
             statuses: Set<CountStatus> = Set(treeStatuses), tags: Bool = true, routes: Bool = true, tiles: Bool = false,
@@ -223,10 +226,44 @@ public struct MapLayers: Equatable, Sendable {
         }
     }
 
+    /// Aerial lidar (USGS 3DEP) points round loaded sites, in each site's own frame, thinned on the server. A class,
+    /// so comparing layers does not compare every point.
+    public final class AerialPoints: Equatable, Sendable {
+        public struct Cloud: Sendable {
+            public var token: String
+            public var georeference: SiteGeoreference
+            /// Site x, y and elevation z, in metres.
+            public var points: [SIMD3<Float>]
+            /// The LAS class of each point (2 ground, 3–5 vegetation, 6 building), or empty when the server sent none.
+            public var classes: [UInt8]
+
+            public init(token: String, georeference: SiteGeoreference, points: [SIMD3<Float>], classes: [UInt8]) {
+                self.token = token
+                self.georeference = georeference
+                self.points = points
+                self.classes = classes
+            }
+        }
+
+        public let clouds: [Cloud]
+
+        public init(clouds: [Cloud]) {
+            self.clouds = clouds
+        }
+
+        public var count: Int { clouds.reduce(0) { $0 + $1.points.count } }
+
+        public static func == (lhs: AerialPoints, rhs: AerialPoints) -> Bool { lhs === rhs }
+    }
+
     public var trees: [TreeMarker]
     public var tags: [TagMarker]
     /// Set while a tree is being moved.
     public var moveGuide: MoveGuide?
+    /// The aerial lidar points loaded, for the 3D map; nil when none are, or they are hidden.
+    public var aerialPoints: AerialPoints?
+    /// The region the layers were made for, when known.
+    public var region: MapViewport?
     public var routes: [RouteLine]
     public var tiles: [TileOutline]
     /// Park outline: outer rings of the boundary polygons.
@@ -457,6 +494,7 @@ public struct MapLayers: Equatable, Sendable {
         )
         self.treeProfiles = treeProfiles
         self.detail = detail
+        self.region = region
         self.summaries = patches.values.filter { $0.trees > 0 || $0.surveyed || $0.detectedInFull }
             .sorted { $0.id < $1.id }
     }
@@ -473,6 +511,27 @@ public struct MapLayers: Equatable, Sendable {
         guard let reference else { return [] }
         guard detail.detailed != nil else { return reference.lines }
         return reference.lines.filter { $0.tile.map(detail.isDetailed) ?? true }
+    }
+
+    /// At most this many of Gerardus's vector lines are drawn over Apple's map. Each is a MapKit overlay of its own,
+    /// and sixteen loaded sites' buildings, walls, kerbs and trees run to thousands: going back to Apple's map with
+    /// vectors shown (as they are for the 3D map) stopped the app while MapKit took them in.
+    public static let appleMapLineLimit = 400
+
+    /// The vector lines Apple's map draws: those in the tiles drawn in full, at most `limit` of them, nearest the
+    /// region's middle first.
+    public func appleMapLines(limit: Int = appleMapLineLimit) -> [Reference.Line] {
+        let lines = detailedLines
+        guard lines.count > limit else { return lines }
+        guard let region else { return Array(lines.prefix(limit)) }
+        var nearest: [(index: Int, distance: Double)] = []
+        nearest.reserveCapacity(lines.count)
+        for (index, line) in lines.enumerated() {
+            let distance = line.points.first.map { region.squaredDistance(to: $0) } ?? .infinity
+            nearest.append((index, distance))
+        }
+        nearest.sort { a, b in a.distance != b.distance ? a.distance < b.distance : a.index < b.index }
+        return nearest.prefix(limit).map { lines[$0.index] }
     }
 
     /// The loaded sites to draw in full: those whose own tile is.

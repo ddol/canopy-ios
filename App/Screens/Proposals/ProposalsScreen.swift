@@ -40,8 +40,34 @@ struct ProposalsScreen: View {
         }
     }
 
+    /// Which of other players' changes the Review list shows, by whether they bring a scan.
+    enum ScanFilter: String, CaseIterable, Identifiable {
+        case all
+        case withScan
+        case withoutScan
+
+        var id: Self { self }
+
+        var label: String {
+            switch self {
+            case .all: "All"
+            case .withScan: "With a scan"
+            case .withoutScan: "Without a scan"
+            }
+        }
+
+        func keeps(_ changeset: Changeset) -> Bool {
+            switch self {
+            case .all: true
+            case .withScan: !changeset.scans.isEmpty
+            case .withoutScan: changeset.scans.isEmpty
+            }
+        }
+    }
+
     @Environment(AppModel.self) private var model
     @State private var choice = Choice()
+    @AppStorage("canopy.review.scanFilter") private var scanFilter = ScanFilter.all
     /// The tree of the proposal the player tapped.
     @State private var shownTree: Tree?
 
@@ -119,8 +145,19 @@ struct ProposalsScreen: View {
 
     @ViewBuilder
     private var reviewSection: some View {
-        let queue = model.gerardusURL == nil ? [] : model.reviewQueue
+        let waiting = model.gerardusURL == nil ? [] : model.reviewQueue
+        let queue = waiting.filter { scanFilter.keeps($0.changeset) }
         Section {
+            if !waiting.isEmpty {
+                Picker("Show", selection: $scanFilter) {
+                    ForEach(ScanFilter.allCases) { filter in
+                        let count = waiting.filter { filter.keeps($0.changeset) }.count
+                        Text("\(filter.label) (\(count))").tag(filter)
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("review-scan-filter")
+            }
             if model.gerardusURL == nil {
                 Text("Other players' changes near you show here once a Gerardus server is set in Me → Settings.")
                     .foregroundStyle(Color.canopyInkMuted)
@@ -128,7 +165,9 @@ struct ProposalsScreen: View {
                 Text(
                     model.lastSync == nil
                         ? "Pull down to sync and see other players' changes near you."
-                        : "Nothing waiting near you."
+                        : waiting.isEmpty
+                            ? "Nothing waiting near you."
+                            : "None of the \(waiting.count) waiting matches \"\(scanFilter.label)\"."
                 )
                 .foregroundStyle(Color.canopyInkMuted)
             }

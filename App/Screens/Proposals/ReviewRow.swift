@@ -24,6 +24,10 @@ struct ReviewRow: View {
             if !subjects.isEmpty {
                 Text(subjects).font(.subheadline)
             }
+            let scans = item.changeset.scans
+            if !scans.isEmpty {
+                ChangesetScans(refs: scans)
+            }
             HStack(spacing: Spacing.xs) {
                 Text(item.authorAlias.isEmpty ? "A player" : item.authorAlias)
                 if item.authorTrusted {

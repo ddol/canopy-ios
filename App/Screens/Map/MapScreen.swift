@@ -91,6 +91,7 @@ struct MapScreen: View {
                         }
                         aerialStatus
                         detailNote(layers)
+                        vectorNote(layers)
                         if showsLoadVectors {
                             Button("Load vectors here", systemImage: "square.stack.3d.down.right") {
                                 Task { await model.loadVectors(around: centre) }
@@ -257,6 +258,8 @@ struct MapScreen: View {
     private var layers: MapLayers {
         var layers = baseLayers
         if let tree = movingTree { layers.moveGuide = moveGuide(tree) }
+        // Only the 3D map draws points.
+        if baseMap == .gerardus { layers.aerialPoints = model.mapAerialPoints }
         return layers
     }
 
@@ -398,6 +401,24 @@ struct MapScreen: View {
         }
     }
 
+    /// Says when Apple's map draws only some of the loaded vectors (`MapLayers.appleMapLines`).
+    @ViewBuilder
+    private func vectorNote(_ layers: MapLayers) -> some View {
+        let all = baseMap == .apple && visibility.vectors ? layers.detailedLines.count : 0
+        if all > MapLayers.appleMapLineLimit {
+            Text(
+                "Vectors: the \(format.count(MapLayers.appleMapLineLimit)) lines nearest the middle of "
+                    + "\(format.count(all)). Gerardus 3D draws them all."
+            )
+            .font(.caption)
+            .foregroundStyle(Color.canopyInkMuted)
+            .padding(.horizontal, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.small))
+            .accessibilityIdentifier("map-vector-note")
+        }
+    }
+
     /// How many detected trees to draw in the tiles drawn in full. On Apple's map each marker is a view, and hundreds of
     /// them make it sluggish, so a wide view shows a sample and a neighbourhood view shows more. The Gerardus map batches
     /// its trees and draws every one in those tiles.
@@ -525,6 +546,16 @@ struct MapScreen: View {
                     Task { await model.loadVectors(around: centre) }
                 }
                 .disabled(model.aerial.isWorking)
+                Toggle("3DEP points", systemImage: "circle.grid.3x3", isOn: $visibility.aerialPoints)
+                    .accessibilityIdentifier("show-aerial-points")
+                Button("Load 3DEP points in view", systemImage: "circle.dotted.and.circle") {
+                    // The points are drawn on the 3D map, against its vectors and trees.
+                    baseMap = .gerardus
+                    visibility.aerialPoints = true
+                    Task { await model.loadAerialPoints(around: centre) }
+                }
+                .disabled(model.aerial.isWorking || model.alignClient == nil)
+                .accessibilityIdentifier("load-aerial-points")
                 Button("Server cells (L13)", systemImage: "square.grid.2x2") { path.append(.serverCells) }
             }
             Section("Legend") {

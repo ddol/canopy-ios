@@ -72,11 +72,13 @@ struct CameraRig: Equatable {
     }
 }
 
-/// What two fingers on the map are doing, decided once they have moved a little, as on Apple's map: both moving up or
-/// down together, side by side and keeping their spacing, tilt it; anything else pinches, turns and drags it.
+/// What two fingers on the map are doing, decided once they have moved a little: both moving up or down together,
+/// side by side and keeping their spacing, tilt it; twisting about each other turns it about an upright pole at the
+/// middle of the view; anything else pinches and drags it. A pinch that turns into a clear twist becomes a turn.
 enum TwoFingerIntent: Equatable {
     case undecided
     case tilt
+    case turn
     case transform
 
     /// Points the fingers must move before the intent is decided.
@@ -91,8 +93,14 @@ enum TwoFingerIntent: Equatable {
         let spreadChange = abs(spacing(now) - spacing(start))
         let turned = abs(angle(from: start, to: now))
         let upOrDown = abs(a.y) > 2 * abs(a.x) && abs(b.y) > 2 * abs(b.x) && a.y * b.y > 0
-        return upOrDown && spreadChange < moved * 0.5 && turned < 0.12 ? .tilt : .transform
+        if upOrDown && spreadChange < moved * 0.5 && turned < 0.12 { return .tilt }
+        // Fingers going round each other: they turn the line between them more than they change its length.
+        if turned >= turnThreshold, spreadChange < moved * 0.6 { return .turn }
+        return .transform
     }
+
+    /// A pinch or drag whose fingers turn further than this, in radians (about 17°), becomes a turn.
+    static let turnSwitch: CGFloat = 0.3
 
     static func spacing(_ points: [CGPoint]) -> CGFloat {
         hypot(points[1].x - points[0].x, points[1].y - points[0].y)
@@ -108,14 +116,8 @@ enum TwoFingerIntent: Equatable {
         return turn
     }
 
-    /// A twist smaller than this, in radians (about 8°), leaves the map's heading alone, so a pinch does not turn it
-    /// by accident; past it the map turns with the fingers, less this much, so it starts turning smoothly.
+    /// How far, in radians (about 8°), the fingers must turn before they count as twisting.
     static let turnThreshold: CGFloat = 0.14
-
-    /// How far the map turns for fingers that turned `angle` radians.
-    static func turn(_ angle: CGFloat) -> CGFloat {
-        abs(angle) <= turnThreshold ? 0 : angle - (angle > 0 ? turnThreshold : -turnThreshold)
-    }
 
     static func centroid(_ points: [CGPoint]) -> CGPoint {
         let n = CGFloat(max(points.count, 1))

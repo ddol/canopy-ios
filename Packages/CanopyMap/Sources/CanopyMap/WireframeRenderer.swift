@@ -233,6 +233,12 @@ struct WireframeMap: UIViewRepresentable {
         let highlightRoot = SCNNode()
         let summaryRoot = SCNNode()
         let contextRoot = SCNNode()
+        /// The upright pole a two-finger turn goes round, while one is under way.
+        let poleRoot = SCNNode()
+        /// The aerial lidar points loaded, as one point cloud a site.
+        let pointRoot = SCNNode()
+        private var points: MapLayers.AerialPoints?
+        private var pointBuild: Task<Void, Never>?
         /// The scene's origin on the map.
         let anchor: LocalFrame
         weak var view: SCNView?
@@ -305,6 +311,8 @@ struct WireframeMap: UIViewRepresentable {
             scene.rootNode.addChildNode(highlightRoot)
             scene.rootNode.addChildNode(summaryRoot)
             scene.rootNode.addChildNode(contextRoot)
+            scene.rootNode.addChildNode(poleRoot)
+            scene.rootNode.addChildNode(pointRoot)
             placeCamera()
         }
 
@@ -316,6 +324,11 @@ struct WireframeMap: UIViewRepresentable {
                 for node in siteNodes.values { applyVisibility(to: node) }
                 siteTreeRoot.isHidden = !visibility.vectors
             }
+            defer {
+                // After the sites, whose ground sets the height the scene is drawn about.
+                if layers.aerialPoints !== points { rebuildPoints(layers.aerialPoints) }
+                pointRoot.isHidden = !visibility.aerialPoints
+            }
             let formsChanged = layers.treeForms != treeForms || layers.treeProfiles != treeProfiles
             treeForms = layers.treeForms
             treeProfiles = layers.treeProfiles
@@ -324,6 +337,8 @@ struct WireframeMap: UIViewRepresentable {
             if layers.reference !== reference {
                 reference = layers.reference
                 prepareSites()
+                // The points are drawn about the sites' height, which a new reference can change.
+                points = nil
                 detail = layers.detail
                 showSites(layers.detailedSites)
                 rebuildTrees(layers.trees)
@@ -552,6 +567,42 @@ struct WireframeMap: UIViewRepresentable {
                 siteTreeRoot.addChildNode(node)
                 siteTreeNodes[key] = node
             }
+        }
+
+        /// The aerial points, placed as the sites are: about the loaded sites' height, or, with no site loaded, about
+        /// the points' own ground, so they stand on the plane the census's trees stand on. Made off the main actor: a
+        /// site's points run to a few hundred thousand.
+        private func rebuildPoints(_ next: MapLayers.AerialPoints?) {
+            points = next
+            pointBuild?.cancel()
+            for node in pointRoot.childNodes { node.removeFromParentNode() }
+            guard let next else { return }
+            let anchor = anchor
+            let siteElevation: Float? = reference == nil ? nil : elevation
+            pointBuild = Task { [weak self] in
+                // The vertices off the main actor; the nodes, which are not Sendable, on it.
+                let clouds = await Task.detached(priority: .userInitiated) {
+                    next.clouds.map { cloud in
+                        let elevation = siteElevation ?? Self.groundElevation(cloud)
+                        let transform = SiteToScene(
+                            georeference: cloud.georeference, scene: anchor, elevation: elevation)
+                        return AerialPointsNode.vertices(cloud, ground: 0, place: transform.place)
+                    }
+                }.value
+                guard let self, !Task.isCancelled, self.points === next else { return }
+                for cloud in clouds {
+                    self.pointRoot.addChildNode(AerialPointsNode.node(positions: cloud.positions, colors: cloud.colors))
+                }
+            }
+        }
+
+        /// The middle height of a cloud's ground points (class 2), or of all its points when none is ground.
+        nonisolated static func groundElevation(_ cloud: MapLayers.AerialPoints.Cloud) -> Float {
+            let ground =
+                cloud.classes.count == cloud.points.count
+                ? zip(cloud.points, cloud.classes).filter { $0.1 == 2 }.map(\.0.z) : []
+            let heights = (ground.isEmpty ? cloud.points.map(\.z) : ground).sorted()
+            return heights.isEmpty ? 0 : heights[heights.count / 2]
         }
 
         /// Scene coordinates of a map point on the ground: the site ground where a loaded site has it, else y = 0.
@@ -815,6 +866,7 @@ struct WireframeMap: UIViewRepresentable {
             case .ended, .cancelled:
                 let velocity = gesture.state == .ended ? releaseVelocity() : .zero
                 gestureStart = nil
+                hidePole()
                 if hypot(velocity.x, velocity.y) > 150 {
                     startGliding(velocity)
                 } else {
@@ -840,7 +892,18 @@ struct WireframeMap: UIViewRepresentable {
                 switch intent {
                 case .undecided: return
                 case .tilt: rig = Self.tilt(start.rig, from: start.points, to: points)
-                case .transform: rig = Self.transform(start.rig, anchor: start.anchor, from: start.points, to: points)
+                case .turn:
+                    rig = Self.turn(start.rig, from: start.points, to: points)
+                    showPole()
+                case .transform:
+                    if abs(TwoFingerIntent.angle(from: start.points, to: points)) > TwoFingerIntent.turnSwitch {
+                        // A clear twist: turn from here, about the middle of the view.
+                        intent = .turn
+                        gestureStart = (rig, points, start.anchor, start.fingers)
+                        showPole()
+                        return
+                    }
+                    rig = Self.transform(start.rig, anchor: start.anchor, from: start.points, to: points)
                 }
             }
             placeCamera()
@@ -868,9 +931,8 @@ struct WireframeMap: UIViewRepresentable {
             return tilted.clamped()
         }
 
-        /// The rig after two fingers pinched, twisted and moved: zoomed by how much their spacing changed, turned as
-        /// far as they turned past a small threshold (`TwoFingerIntent.turn`), with the ground point first between them
-        /// (`anchor`) still between them.
+        /// The rig after two fingers pinched and moved: zoomed by how much their spacing changed, with the ground
+        /// point first between them (`anchor`) still between them. It never turns: a twist is a turn of its own.
         nonisolated static func transform(
             _ rig: CameraRig, anchor: SIMD3<Float>?, from start: [CGPoint], to now: [CGPoint]
         ) -> CameraRig {
@@ -878,10 +940,45 @@ struct WireframeMap: UIViewRepresentable {
             let before = TwoFingerIntent.spacing(start)
             let after = TwoFingerIntent.spacing(now)
             if before > 1, after > 1 { moved.distance = rig.distance * Float(before / after) }
-            moved.azimuth = rig.azimuth + Float(TwoFingerIntent.turn(TwoFingerIntent.angle(from: start, to: now)))
             moved = moved.clamped()
             if let anchor { moved = moved.keeping(anchor, under: TwoFingerIntent.centroid(now)) }
             return moved
+        }
+
+        /// The rig after two fingers twisted: turned with them about the upright pole through the middle of the view
+        /// (the target), which stays where it is on screen and upright, the scene spinning round it; closer or
+        /// farther as they spread or close. The camera never rolls: its up is always toward the sky.
+        nonisolated static func turn(_ rig: CameraRig, from start: [CGPoint], to now: [CGPoint]) -> CameraRig {
+            var turned = rig
+            turned.azimuth = rig.azimuth + Float(TwoFingerIntent.angle(from: start, to: now))
+            let before = TwoFingerIntent.spacing(start)
+            let after = TwoFingerIntent.spacing(now)
+            if before > 1, after > 1 { turned.distance = rig.distance * Float(before / after) }
+            return turned.clamped()
+        }
+
+        /// The pole a turn goes round, drawn while two fingers turn the map: from the ground at the middle of the view
+        /// up a quarter of the camera's distance.
+        private func showPole() {
+            for node in poleRoot.childNodes { node.removeFromParentNode() }
+            var mesh = VectorMesh(place: { $0 })
+            let foot = rig.target
+            let height = max(rig.distance * 0.25, 2)
+            mesh.add(sceneSegments: [
+                Wireframe.Segment(from: foot, to: foot + SIMD3(0, height, 0)),
+                Wireframe.Segment(from: foot - SIMD3(height * 0.06, 0, 0), to: foot + SIMD3(height * 0.06, 0, 0)),
+                Wireframe.Segment(from: foot - SIMD3(0, 0, height * 0.06), to: foot + SIMD3(0, 0, height * 0.06)),
+            ])
+            let node = mesh.node(color: CanopyColor.survey.uiColor, fill: false)
+            node.enumerateHierarchy { child, _ in
+                child.renderingOrder = 12
+                child.geometry?.firstMaterial?.readsFromDepthBuffer = false
+            }
+            poleRoot.addChildNode(node)
+        }
+
+        private func hidePole() {
+            for node in poleRoot.childNodes { node.removeFromParentNode() }
         }
 
         /// Double tap: in by half, keeping the tapped point where it is.

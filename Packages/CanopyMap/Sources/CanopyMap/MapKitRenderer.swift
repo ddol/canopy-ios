@@ -65,7 +65,7 @@ struct MapKitMap: View {
                     .stroke(PatchOutline(patch).color, lineWidth: PatchOutline(patch).width)
             }
             if layers.visibility.vectors {
-                ForEach(Array(layers.detailedLines.enumerated()), id: \.offset) { _, line in
+                ForEach(Array(layers.appleMapLines().enumerated()), id: \.offset) { _, line in
                     vector(line)
                 }
             }
