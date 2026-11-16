@@ -31,6 +31,16 @@ struct LiDARCensusView: View {
     /// The AR session origin's map position, from the best GPS fix so far and the camera's offset then.
     @State private var sessionOrigin: GeoPoint?
     @State private var sessionOriginAccuracy = Double.infinity
+    /// How far the overlay is turned by hand about the vertical, radians (`GPSPlacement`).
+    @State private var sessionYaw = 0.0
+    /// Where GPS last put the session origin, before any moving by hand.
+    @State private var gpsOrigin: GeoPoint?
+    /// Whether the player has moved or turned the overlay by hand: GPS then leaves it alone until From GPS.
+    @State private var placedByHand = false
+    /// Whether the placement radar and pad are up.
+    @State private var showsPlacement = false
+    /// The trees near by as they were when the list was opened, while it is.
+    @State private var treeChoices: [NearbyTreeList.Choice]?
     /// The tile whose site was last asked for on arrival, so a slow server is asked once.
     @State private var autoLoadTile: S2CellID?
     /// When a load of the site under the player last failed on its own: it is not tried again for a while, and
@@ -98,6 +108,12 @@ struct LiDARCensusView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
+            .sheet(
+                isPresented: Binding(get: { treeChoices != nil }, set: { if !$0 { treeChoices = nil } })
+            ) {
+                NearbyTreeList(choices: treeChoices ?? [], selected: target?.id, onChoose: choose)
+                    .presentationDetents([.medium, .large])
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { overlayMenu }
             }
@@ -110,15 +126,24 @@ struct LiDARCensusView: View {
                 .ignoresSafeArea()
             Reticle()
             VStack(spacing: Spacing.s) {
-                SelectedTreeCard(
-                    focus: focus, tracker: tracker,
-                    placeholder: placeholder,
-                    choices: nearby, onChoose: choose)
-                overlayStatusRow
+                // While a scanned trunk is fitted, the screen is the tree's: the card and the overlay's lines go.
+                if fit == nil {
+                    SelectedTreeCard(
+                        focus: focus, tracker: tracker,
+                        placeholder: placeholder,
+                        canChoose: !nearby.isEmpty, onChooseAnother: openTreeChoices)
+                    overlayStatusRow
+                }
                 if let notice {
-                    HStack(spacing: Spacing.xs) {
+                    HStack(alignment: .top, spacing: Spacing.xs) {
                         if loadingVectors, !loadingQuietly { ProgressView().controlSize(.small) }
                         Text(notice)
+                            .lineLimit(fit == nil ? nil : 3)
+                        Spacer(minLength: 0)
+                        Button("Dismiss", systemImage: "xmark") { self.notice = nil }
+                            .labelStyle(.iconOnly)
+                            .font(.caption)
+                            .foregroundStyle(Color.canopyInkMuted)
                     }
                     .font(.footnote)
                     .padding(Spacing.xs)
@@ -172,6 +197,12 @@ struct LiDARCensusView: View {
             MovePanel(
                 name: move.name, offset: moveOffset(move), onReticle: moveToReticle, onCancel: endMove,
                 onPlace: { Task { await placeMovedTree() } })
+        } else if showsPlacement {
+            PlacementPanel(
+                tracker: tracker, trees: radarTrees, status: placementStatus,
+                canMove: registered == nil && sessionOrigin != nil, focusName: focus?.title,
+                isMovedByHand: placedByHand, onMove: walk, onTurn: turn, onLineUp: lineUpFocus,
+                onReset: placeFromGPS, onDone: { showsPlacement = false })
         } else if let selection {
             SelectedTreePanel(
                 selection: selection, form: selectedFormBinding, isAdjusted: model.treeForms[selection.id] != nil,
@@ -184,7 +215,7 @@ struct LiDARCensusView: View {
 
     /// The compass shows while there is a selected tree out of view and nothing else is going on.
     private var showsCompass: Bool {
-        !tracker.inView && capture.scan == nil && fit == nil && move == nil
+        !tracker.inView && capture.scan == nil && fit == nil && move == nil && !showsPlacement
     }
 
     /// Whether Not a tree and Move apply: the selected tree is a census tree, and it is in view.
@@ -197,7 +228,7 @@ struct LiDARCensusView: View {
     private var overlayInputs: OverlayInputs {
         OverlayInputs(
             sites: model.loadedVectors.count, registration: registered?.registrationID, origin: sessionOrigin,
-            layers: overlayLayers)
+            yaw: sessionYaw, layers: overlayLayers, fitting: fit != nil)
     }
 
     /// What the census trees and cells are drawn from.
@@ -240,6 +271,7 @@ struct LiDARCensusView: View {
                 tracker.follow(trackerTargets.focus, nearby: trackerTargets.nearby)
             }
             .onChange(of: focus?.id, initial: true) { capture.highlightWireframe(id: focus?.id) }
+            .onChange(of: model.censusTarget, initial: true) { takeCensusTarget() }
             .onChange(of: nearbyInputs) { refreshNearby() }
             .onChange(of: capture.lastDrag) {
                 if let drag = capture.lastDrag { dragTree(drag) }
@@ -308,6 +340,24 @@ struct LiDARCensusView: View {
         targetID = tree.id
     }
 
+    /// A tree sent from the map to scan: it becomes the selected tree, wherever it is.
+    private func takeCensusTarget() {
+        guard let id = model.censusTarget else { return }
+        model.censusTarget = nil
+        guard let tree = model.tree(id) else { return }
+        choose(tree)
+        showsPlacement = false
+        notice =
+            "Scanning " + tree.name + ": point the middle of the screen at its trunk and tap Scan " + tree.name
+            + ". The scan measures this tree even if another is nearer."
+    }
+
+    /// Opens the list of trees near by, as they are now.
+    private func openTreeChoices() {
+        refreshNearby()
+        treeChoices = nearby.map { NearbyTreeList.Choice(tree: $0.0, distance: $0.1) }
+    }
+
     /// Which wireframes are drawn, and loading the site here.
     private var overlayMenu: some View {
         Menu {
@@ -340,12 +390,13 @@ struct LiDARCensusView: View {
                     if let here = location.geoPoint { loadVectors(around: here) }
                 }
                 .disabled(model.alignClient == nil || model.aerial.isWorking || location.geoPoint == nil)
-                Button("Re-place overlay from GPS", systemImage: "scope") {
-                    sessionOriginAccuracy = .infinity
-                    placeSession()
-                    rebuildOverlay()
+                Button("Line up the overlay by hand", systemImage: "dot.circle.and.hand.point.up.left.fill") {
+                    showsPlacement = true
                 }
-                .disabled(registered != nil || location.geoPoint == nil)
+                .disabled(registered != nil || sessionOrigin == nil)
+                .accessibilityIdentifier("placement-open")
+                Button("Re-place overlay from GPS", systemImage: "scope") { placeFromGPS() }
+                    .disabled(registered != nil || location.geoPoint == nil)
                 registrationControl
                 Text(overlayStatus)
             }
@@ -373,15 +424,24 @@ struct LiDARCensusView: View {
             .buttonStyle(.canopySecondary)
             .accessibilityIdentifier("load-site-here")
         } else if !model.loadedVectors.isEmpty {
-            HStack(spacing: Spacing.xs) {
-                Image(systemName: "square.3.layers.3d")
-                Text(overlayStatus)
+            // Tapped, it opens the radar to line the overlay up by hand.
+            Button {
+                if registered == nil, sessionOrigin != nil { showsPlacement.toggle() }
+            } label: {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "square.3.layers.3d")
+                    Text(overlayStatus)
+                    if registered == nil, sessionOrigin != nil {
+                        Image(systemName: "dot.circle.and.hand.point.up.left.fill")
+                    }
+                }
+                .font(CanopyFont.mono(.caption))
+                .foregroundStyle(Color.canopyInkMuted)
+                .padding(.horizontal, Spacing.xs)
+                .padding(.vertical, Spacing.xxs)
+                .background(.thinMaterial, in: Capsule())
             }
-            .font(CanopyFont.mono(.caption))
-            .foregroundStyle(Color.canopyInkMuted)
-            .padding(.horizontal, Spacing.xs)
-            .padding(.vertical, Spacing.xxs)
-            .background(.thinMaterial, in: Capsule())
+            .buttonStyle(.plain)
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("overlay-status")
         }
@@ -418,7 +478,9 @@ struct LiDARCensusView: View {
         if let registered {
             placed = "placed by 3DEP ±" + format.length(registered.sigma, fractionDigits: 2)
         } else if sessionOrigin != nil, sessionOriginAccuracy.isFinite {
-            placed = "placed by GPS ±" + format.length(sessionOriginAccuracy, fractionDigits: 0)
+            placed =
+                placedByHand
+                ? "lined up by hand" : "placed by GPS ±" + format.length(sessionOriginAccuracy, fractionDigits: 0)
         } else {
             placed = "waiting for GPS"
         }
@@ -433,7 +495,7 @@ struct LiDARCensusView: View {
             TreeActionsRow(
                 canEdit: canEditFocus, onNotATree: rejectFocus, onMove: startMove,
                 onNewTree: { Task { await addTreeAtReticle() } })
-            ScanHeroButton(action: startScan)
+            ScanHeroButton(treeName: focus?.source == .chosen ? focus?.title : nil, action: startScan)
         }
     }
 
@@ -481,8 +543,18 @@ struct LiDARCensusView: View {
         if let registered {
             return registered.position(ofARKit: point)
         }
-        guard let sessionOrigin, sessionOriginAccuracy.isFinite else { return nil }
-        return GeoReference.position(ofARKit: point, origin: sessionOrigin, accuracy: sessionOriginAccuracy)
+        guard let placement, sessionOriginAccuracy.isFinite else { return nil }
+        // Lined up by hand on the trees, it is as good as the trees it was lined up on, not the GPS fix.
+        let accuracy = placedByHand ? min(sessionOriginAccuracy, Self.placedByHandAccuracy) : sessionOriginAccuracy
+        return GeoReference.position(ofARKit: point, placement: placement, accuracy: accuracy)
+    }
+
+    /// How well the overlay is placed once it has been lined up on the trees by hand, in metres.
+    static let placedByHandAccuracy = 1.0
+
+    /// The session's placement on the map by GPS, with what the player moved and turned by hand.
+    private var placement: GPSPlacement? {
+        sessionOrigin.map { GPSPlacement(origin: $0, yaw: sessionYaw) }
     }
 
     /// Where an AR world point is on the map: as the overlay draws it once the session is placed, so a tree added or
@@ -805,14 +877,108 @@ struct LiDARCensusView: View {
 
     /// Fixes where the AR session's origin is on the map: the GPS fix, less the camera's offset from the origin.
     /// Done again whenever a clearly better fix arrives, until a 3DEP registration takes over.
+    /// Once lined up by hand, it stays where the player put it: a new fix would undo that.
     private func placeSession() {
-        guard registered == nil, let fix = location.geoPoint, let accuracy = location.accuracy,
+        guard registered == nil, !placedByHand, let fix = location.geoPoint, let accuracy = location.accuracy,
             let camera = capture.cameraPosition, capture.isNorthAligned
         else { return }
         guard sessionOrigin == nil || accuracy < sessionOriginAccuracy - 2 else { return }
         sessionOrigin =
             LocalFrame(origin: fix).geoPoint(of: ENU(east: Double(-camera.x), north: Double(camera.z), up: 0)).point
+        gpsOrigin = sessionOrigin
+        sessionYaw = 0
         sessionOriginAccuracy = accuracy
+    }
+
+    /// Back to placing the overlay by GPS: what was moved by hand is forgotten.
+    private func placeFromGPS() {
+        placedByHand = false
+        sessionYaw = 0
+        sessionOrigin = gpsOrigin ?? sessionOrigin
+        sessionOriginAccuracy = .infinity
+        placeSession()
+        rebuildOverlay()
+    }
+
+    // MARK: Lining the overlay up by hand
+
+    /// Moves or turns the overlay by hand, about the camera.
+    private func adjustPlacement(_ change: (GPSPlacement, SIMD3<Float>) -> GPSPlacement) {
+        guard registered == nil, let placement, let camera = capture.cameraPosition else { return }
+        let next = change(placement, camera)
+        placedByHand = true
+        sessionOrigin = next.origin
+        sessionYaw = next.yaw
+    }
+
+    /// The way the camera faces on the map, degrees clockwise from north.
+    private var facing: Double {
+        tracker.heading ?? capture.cameraTransform.flatMap(Compass.heading(ofCamera:)) ?? 0
+    }
+
+    /// Moves the player `forward` and `right` metres through the drawing, as the camera faces: the drawing moves the
+    /// other way.
+    private func walk(forward: Double, right: Double) {
+        let h = facing * .pi / 180
+        let ahead = SIMD3<Float>(Float(sin(h)), 0, Float(-cos(h)))
+        let side = SIMD3<Float>(Float(cos(h)), 0, Float(sin(h)))
+        let step = ahead * Float(forward) + side * Float(right)
+        adjustPlacement { placement, camera in placement.moving(drawnAt: camera, to: camera - step) }
+    }
+
+    /// Turns the player `degrees` clockwise against the drawing: the drawing turns the other way about them.
+    private func turn(clockwise degrees: Double) {
+        adjustPlacement { placement, camera in
+            placement.turning(clockwise: -degrees * .pi / 180, about: camera)
+        }
+    }
+
+    /// Moves the overlay so the selected tree, as drawn, stands on the trunk under the reticle.
+    private func lineUpFocus() {
+        guard let focus, let drawn = drawnCensus[focus.id] ?? drawnSite[focus.id] else {
+            notice = "Wait until the tree is drawn in AR, then try again."
+            return
+        }
+        let radius = Float((focus.dbh?.diameter.value ?? 0.3) / 2)
+        guard let base = reticleTrunkBase(radius: radius) else {
+            notice = "Point the centre of the screen at the foot of the trunk, within 25 m."
+            return
+        }
+        let distance = simd_length(Compass.offset(from: drawn.base, to: base))
+        adjustPlacement { placement, _ in placement.moving(drawnAt: drawn.base, to: base) }
+        notice =
+            "Moved the overlay " + format.length(distance, fractionDigits: 1) + " to put " + focus.title
+            + " on the trunk. Turn it with the pad if the trees round it are still off."
+    }
+
+    /// The trees the overlay draws within reach of the radar.
+    private var radarTrees: [RadarTree] {
+        guard let camera = tracker.camera else { return [] }
+        func near(_ drawn: DrawnTree) -> Bool { simd_length(Compass.offset(from: camera, to: drawn.base)) < 45 }
+        var trees: [RadarTree] = []
+        for (id, drawn) in drawnSite where near(drawn) && id != focus?.id {
+            trees.append(RadarTree(id: id, base: drawn.base, kind: .site))
+        }
+        for (id, drawn) in drawnCensus where near(drawn) && id != focus?.id {
+            trees.append(RadarTree(id: id, base: drawn.base, kind: .census))
+        }
+        if let focus, let drawn = drawnCensus[focus.id] ?? drawnSite[focus.id] {
+            trees.append(RadarTree(id: focus.id, base: drawn.base, kind: .focus))
+        }
+        return trees
+    }
+
+    /// "Placed by GPS ±6 m", or how far it was moved and turned by hand.
+    private var placementStatus: String {
+        if registered != nil { return "Placed by 3DEP: nothing to line up by hand." }
+        guard let sessionOrigin, sessionOriginAccuracy.isFinite else { return "Waiting for GPS to place the overlay." }
+        guard placedByHand, let gpsOrigin else {
+            return "Placed by GPS ±" + format.length(sessionOriginAccuracy, fractionDigits: 0)
+                + ". Move until the drawn trees stand on the real ones."
+        }
+        let moved = simd_length(Compass.offset(from: gpsOrigin, to: sessionOrigin))
+        return "Moved " + format.length(moved, fractionDigits: 1) + " and turned "
+            + format.angle(abs(sessionYaw * 180 / .pi), fractionDigits: 0) + " from GPS. GPS leaves it alone now."
     }
 
     /// Asks for the site under the player once per tile arrived at, when a server is set and it is not loaded yet.
@@ -881,14 +1047,14 @@ struct LiDARCensusView: View {
                     token: token, loaded: loaded,
                     frame: ARSiteFrame(registered: registered, georeference: loaded.georeference))
             }
-            guard let sessionOrigin else { return nil }
-            let originSite = loaded.georeference.site(of: sessionOrigin)
+            guard let placement else { return nil }
+            let originSite = loaded.georeference.site(of: placement.origin)
             let siteGround =
                 ARSiteFrame.groundHeight(loaded.vectors.ground, at: originSite) ?? Self.typicalGround(loaded.vectors)
             return PlacedSite(
                 token: token, loaded: loaded,
                 frame: ARSiteFrame(
-                    origin: sessionOrigin, georeference: loaded.georeference, arGroundAtOrigin: arGround,
+                    placement: placement, georeference: loaded.georeference, arGroundAtOrigin: arGround,
                     siteGroundAtOrigin: siteGround))
         }
     }
@@ -903,7 +1069,8 @@ struct LiDARCensusView: View {
     /// Draws parts of the overlay again from what is loaded and where the session is placed: by default all of it.
     private func rebuildOverlay(_ parts: OverlayParts = .all) {
         guard !parts.isEmpty else { return }
-        let sites = placedSites()
+        // A trunk being fitted is drawn alone: the site's lines and the census's trees round it would bury its rings.
+        let sites = fit == nil ? placedSites() : []
         let camera = capture.cameraPosition ?? .zero
         if !parts.isDisjoint(with: [.siteTrees, .siteOther]) {
             for layer in SiteWireframes.Layer.allCases where layer.isSiteLayer {
@@ -949,16 +1116,16 @@ struct LiDARCensusView: View {
                 ?? Self.typicalGround(site.loaded.vectors)
             return site.frame.arkit(SIMD3<Double>(xy.x, xy.y, z))
         }
-        guard let sessionOrigin else { return nil }
-        let enu = LocalFrame(origin: sessionOrigin).enu(of: geo)
-        return SIMD3(Float(enu.east), arGround, Float(-enu.north))
+        guard let placement else { return nil }
+        let xz = placement.arkitXZ(of: geo)
+        return SIMD3(xz.x, arGround, xz.y)
     }
 
     /// The S2 cells round the player on the ground: level-16 tiles (surveyed ones in green) and their level-13
     /// parents, each with posts at its corners.
     private func rebuildCells(sites: [PlacedSite]) {
         let names = ["cells-l16", "cells-l16-surveyed", "cells-l13"]
-        guard overlayLayers.contains(.cells), let here = location.geoPoint ?? sessionOrigin else {
+        guard overlayLayers.contains(.cells), fit == nil, let here = location.geoPoint ?? sessionOrigin else {
             for name in names { capture.hideWireframes(named: name) }
             return
         }
@@ -985,7 +1152,7 @@ struct LiDARCensusView: View {
     /// The census's trees within 120 m, as wireframes of what is known about them.
     private func rebuildCensusTrees(sites: [PlacedSite]) {
         let name = "census-trees"
-        guard showsCensusTrees, let here = location.geoPoint ?? sessionOrigin else {
+        guard showsCensusTrees, fit == nil, let here = location.geoPoint ?? sessionOrigin else {
             capture.hideWireframes(named: name)
             capture.hideWireframes(named: name + "-surveyed")
             drawnCensus = [:]
@@ -1502,7 +1669,10 @@ private struct OverlayInputs: Equatable {
     var sites: Int
     var registration: String?
     var origin: GeoPoint?
+    var yaw: Double
     var layers: Set<SiteWireframes.Layer>
+    /// Whether a scanned trunk is being fitted, when the overlay is put away.
+    var fitting: Bool
 }
 
 /// Parts of the AR overlay to draw again.

@@ -19,6 +19,21 @@ import simd
         return try SiteGeoreference(origin: origin, samples: samples)
     }
 
+    /// The 3D map draws the player at their fix, on the ground about its anchor, and takes them down without one.
+    @MainActor @Test func theThreeDMapDrawsThePlayerWhereTheyAre() {
+        let coordinator = WireframeMap.Coordinator(anchor: origin)
+        var layers = MapLayers(state: CensusState())
+        let here = LocalFrame(origin: origin).geoPoint(of: ENU(east: 30, north: 40, up: 0)).point
+        layers.userLocation = MapLayers.UserLocation(geo: here, accuracy: 5)
+        coordinator.apply(layers, selection: nil)
+        #expect(!coordinator.userRoot.childNodes.isEmpty)
+        #expect(abs(coordinator.userRoot.position.x - 30) < 0.1)
+        #expect(abs(coordinator.userRoot.position.z + 40) < 0.1)
+        layers.userLocation = nil
+        coordinator.apply(layers, selection: nil)
+        #expect(coordinator.userRoot.childNodes.isEmpty)
+    }
+
     @Test func siteMetresLandInSceneMetresAboutTheAnchor() throws {
         // The scene is anchored 200 m east and 100 m north of the site origin, at elevation 40.
         let anchor = LocalFrame(origin: origin).geoPoint(of: ENU(east: 200, north: 100, up: 0)).point

@@ -171,9 +171,13 @@ extension GeoReference {
     /// the overlay draws the census's trees, so a tree placed in AR stays where it is drawn. The uncertainty adds the
     /// AR offset's own (`arOffsetSigma`, and drift growing with the distance from the origin).
     public static func position(ofARKit point: SIMD3<Float>, origin: GeoPoint, accuracy: Double) -> Position {
-        let enu = ENU(east: Double(point.x), north: Double(-point.z), up: 0)
-        let (geo, _) = LocalFrame(origin: origin).geoPoint(of: enu)
-        let ar = arOffsetSigma + arDriftPerMetre * enu.horizontalDistance
+        position(ofARKit: point, placement: GPSPlacement(origin: origin), accuracy: accuracy)
+    }
+
+    /// The same through a placement moved or turned by hand.
+    public static func position(ofARKit point: SIMD3<Float>, placement: GPSPlacement, accuracy: Double) -> Position {
+        let geo = placement.geo(ofARKit: point)
+        let ar = arOffsetSigma + arDriftPerMetre * Double(simd_length(SIMD2(point.x, point.z)))
         let gps = max(accuracy, 0)
         let sigma = (gps * gps + ar * ar).squareRoot()
         return Position(geo: geo, covariance: .isotropic(horizontal: sigma, vertical: max(sigma, 1)))

@@ -237,6 +237,10 @@ struct WireframeMap: UIViewRepresentable {
         let poleRoot = SCNNode()
         /// The aerial lidar points loaded, as one point cloud a site.
         let pointRoot = SCNNode()
+        /// Where the player is: a dot kept the same size on screen, with the way they face, over the GPS accuracy.
+        let userRoot = SCNNode()
+        let userMarker = SCNNode()
+        private var userLocation: MapLayers.UserLocation?
         private var points: MapLayers.AerialPoints?
         private var pointBuild: Task<Void, Never>?
         /// The scene's origin on the map.
@@ -313,6 +317,7 @@ struct WireframeMap: UIViewRepresentable {
             scene.rootNode.addChildNode(contextRoot)
             scene.rootNode.addChildNode(poleRoot)
             scene.rootNode.addChildNode(pointRoot)
+            scene.rootNode.addChildNode(userRoot)
             placeCamera()
         }
 
@@ -328,6 +333,10 @@ struct WireframeMap: UIViewRepresentable {
                 // After the sites, whose ground sets the height the scene is drawn about.
                 if layers.aerialPoints !== points { rebuildPoints(layers.aerialPoints) }
                 pointRoot.isHidden = !visibility.aerialPoints
+                if layers.userLocation != userLocation || layers.reference !== userReference {
+                    drawUser(layers.userLocation)
+                    userReference = layers.reference
+                }
             }
             let formsChanged = layers.treeForms != treeForms || layers.treeProfiles != treeProfiles
             treeForms = layers.treeForms
@@ -814,6 +823,70 @@ struct WireframeMap: UIViewRepresentable {
         nonisolated static let groundLow = SIMD4<Float>(0.22, 0.32, 0.26, 1)
         nonisolated static let groundHigh = SIMD4<Float>(0.72, 0.76, 0.62, 1)
 
+        /// The reference the player's dot was set on the ground of.
+        private var userReference: MapLayers.Reference?
+
+        /// The player's dot on the ground: a blue disc in a white ring with a wedge the way they face, drawn over
+        /// everything at a fixed size on screen (`scaleUserMarker`), on a pale disc as wide as the GPS is good.
+        private func drawUser(_ location: MapLayers.UserLocation?) {
+            userLocation = location
+            for node in userRoot.childNodes { node.removeFromParentNode() }
+            for node in userMarker.childNodes { node.removeFromParentNode() }
+            guard let location else { return }
+            userRoot.position = SCNVector3(scenePoint(location.geo) + SIMD3(0, 0.5, 0))
+            let blue = UIColor.systemBlue
+            if location.accuracy > 0 {
+                let disc = SCNCylinder(radius: CGFloat(min(location.accuracy, 200)), height: 0.02)
+                disc.firstMaterial = Self.flat(blue.withAlphaComponent(0.15))
+                userRoot.addChildNode(Self.onTop(SCNNode(geometry: disc), order: 13))
+            }
+            let ring = SCNCylinder(radius: 1.35, height: 0.04)
+            ring.firstMaterial = Self.flat(.white)
+            let dot = SCNCylinder(radius: 1, height: 0.06)
+            dot.firstMaterial = Self.flat(blue)
+            userMarker.addChildNode(Self.onTop(SCNNode(geometry: ring), order: 14))
+            userMarker.addChildNode(Self.onTop(SCNNode(geometry: dot), order: 15))
+            if let heading = location.heading {
+                let wedge = SCNNode(geometry: Self.wedge())
+                wedge.eulerAngles.y = -Float(heading * .pi / 180)
+                userMarker.addChildNode(Self.onTop(wedge, order: 14))
+            }
+            userRoot.addChildNode(userMarker)
+            scaleUserMarker()
+        }
+
+        /// A flat triangle ahead of the dot, pointing north (scene -z) before it is turned.
+        private static func wedge() -> SCNGeometry {
+            let points = [SCNVector3(0, 0.03, -2.6), SCNVector3(-0.8, 0.03, -1.2), SCNVector3(0.8, 0.03, -1.2)]
+            let element = SCNGeometryElement(indices: [UInt16(0), 1, 2, 0, 2, 1], primitiveType: .triangles)
+            let geometry = SCNGeometry(sources: [SCNGeometrySource(vertices: points)], elements: [element])
+            geometry.firstMaterial = flat(UIColor.systemBlue.withAlphaComponent(0.8))
+            geometry.firstMaterial?.isDoubleSided = true
+            return geometry
+        }
+
+        private static func flat(_ color: UIColor) -> SCNMaterial {
+            let material = SCNMaterial()
+            material.lightingModel = .constant
+            material.diffuse.contents = color
+            return material
+        }
+
+        private static func onTop(_ node: SCNNode, order: Int) -> SCNNode {
+            node.renderingOrder = order
+            node.geometry?.firstMaterial?.readsFromDepthBuffer = false
+            return node
+        }
+
+        /// Keeps the player's dot about 9 points across at the camera's target, however far the camera is.
+        private func scaleUserMarker() {
+            guard userLocation != nil else { return }
+            let height = Float(max(view?.bounds.height ?? rig.size.height, 1))
+            let perPoint = 2 * rig.distance * tan(rig.fieldOfView / 2 * .pi / 180) / height
+            let scale = max(perPoint * 9 / 2, 0.15)
+            userMarker.scale = SCNVector3(scale, scale, scale)
+        }
+
         // MARK: Camera
 
         func look(at viewport: MapViewport) {
@@ -829,6 +902,7 @@ struct WireframeMap: UIViewRepresentable {
             if let size = view?.bounds.size, size.width > 0 { rig.size = size }
             camera.position = SCNVector3(rig.position)
             camera.look(at: SCNVector3(rig.target))
+            scaleUserMarker()
         }
 
         /// The region in view, from the target and the distance.

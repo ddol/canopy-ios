@@ -35,6 +35,8 @@ struct MapScreen: View {
     /// Where the player is, asked for once so the map can open there when that is not San Francisco.
     @State private var location = LocationProvider()
     @State private var openedAtPlayer = false
+    /// Go to the player as soon as there is a fix: the button was tapped before there was one.
+    @State private var goingToPlayer = false
     /// The crowns aerial lidar found round the tree being moved.
     @State private var moveCrowns: [AppModel.Crown] = []
     /// Whether the move guide shows where the tree stands now, and the crowns round it.
@@ -52,19 +54,13 @@ struct MapScreen: View {
                         MoveCrosshair().allowsHitTesting(false)
                     }
                 }
+                .overlay(alignment: .topTrailing) {
+                    // Apple's map has its own button for this; the 3D map has this one.
+                    if baseMap == .gerardus { goToPlayerButton }
+                }
                 .safeAreaInset(edge: .top) {
-                    VStack(spacing: Spacing.xs) {
-                        SummaryBar([
-                            .init(label: "Confirmed", value: format.count(model.summary.confirmed)),
-                            .init(label: "Estimated", value: format.count(model.summary.estimated)),
-                            .init(label: "Coverage", value: coverage),
-                        ])
-                        .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("summary-bar")
-                        .padding(.horizontal, Spacing.m)
-                        StatusFilterBar(shown: $visibility.statuses, counts: statusCounts)
-                    }
-                    .padding(.top, Spacing.xs)
+                    StatusFilterBar(shown: $visibility.statuses, counts: statusCounts)
+                        .padding(.top, Spacing.xs)
                 }
                 .safeAreaInset(edge: .bottom) {
                     VStack(alignment: .leading, spacing: Spacing.xs) {
@@ -124,9 +120,13 @@ struct MapScreen: View {
                 }
                 .onChange(of: model.mapTarget, initial: true) { showMapTarget() }
                 .onChange(of: model.mapMove, initial: true) { startMove() }
-                .onAppear { if !openedAtPlayer { location.start() } }
+                .onAppear { followPlayer() }
                 .onDisappear { location.stop() }
-                .onChange(of: location.geoPoint) { _, fix in openAtPlayer(fix) }
+                .onChange(of: baseMap) { followPlayer() }
+                .onChange(of: location.geoPoint) { _, fix in
+                    openAtPlayer(fix)
+                    if goingToPlayer, fix != nil { goToPlayer() }
+                }
                 #if DEBUG || TESTING_TOOLS
                     // For profiling a load with Instruments without UI automation: launch with
                     // `-canopy.loadTreesAtLaunch YES` (and a server) to load the trees in view once the app is ready.
@@ -259,7 +259,10 @@ struct MapScreen: View {
         var layers = baseLayers
         if let tree = movingTree { layers.moveGuide = moveGuide(tree) }
         // Only the 3D map draws points.
-        if baseMap == .gerardus { layers.aerialPoints = model.mapAerialPoints }
+        if baseMap == .gerardus {
+            layers.aerialPoints = model.mapAerialPoints
+            layers.userLocation = userLocation
+        }
         return layers
     }
 
@@ -331,9 +334,62 @@ struct MapScreen: View {
     private func openAtPlayer(_ fix: GeoPoint?) {
         guard !openedAtPlayer, let fix else { return }
         openedAtPlayer = true
-        location.stop()
+        followPlayer()
         guard let region = MapViewport.opening(at: fix), viewport == nil, model.mapTarget == nil else { return }
         focus = MapFocus(region)
+    }
+
+    /// Follows the player while the 3D map is up, which draws them itself, and until the first fix has opened the map
+    /// where they are; Apple's map follows them on its own.
+    private func followPlayer() {
+        if baseMap == .gerardus || !openedAtPlayer {
+            // No compass: each heading would make the layers again, several times a second.
+            location.start()
+        } else {
+            location.stop()
+        }
+    }
+
+    /// Where the player is, for the 3D map.
+    private var userLocation: MapLayers.UserLocation? {
+        guard baseMap == .gerardus, let geo = location.geoPoint else { return nil }
+        return MapLayers.UserLocation(geo: geo, accuracy: location.accuracy ?? 0)
+    }
+
+    /// Takes the 3D map to the player, at the same scale when it is close already, else close enough to see the
+    /// trees round them.
+    private func goToPlayer() {
+        guard let fix = location.geoPoint else {
+            goingToPlayer = true
+            location.start()
+            return
+        }
+        goingToPlayer = false
+        if let shown = viewport, shown.cornerDistance < 600 {
+            focus = MapFocus(
+                MapViewport(center: fix, latitudeDelta: shown.latitudeDelta, longitudeDelta: shown.longitudeDelta))
+        } else {
+            focus = MapFocus(MapViewport(center: fix, radius: Self.playerRadius))
+        }
+    }
+
+    /// How much of the map is in view round the player when the map goes to them from far off, in metres.
+    static let playerRadius = 80.0
+
+    private var goToPlayerButton: some View {
+        Button {
+            goToPlayer()
+        } label: {
+            Image(systemName: goingToPlayer ? "location.circle" : "location.fill")
+                .font(.body.weight(.semibold))
+                .frame(width: 44, height: 44)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(location.isDenied ? Color.canopyInkMuted : Color.accentColor)
+        .padding(Spacing.m)
+        .accessibilityLabel("Go to my location")
+        .accessibilityIdentifier("map-go-to-me")
     }
 
     /// The middle of the map in view.
@@ -432,12 +488,6 @@ struct MapScreen: View {
     private var statusCounts: [CountStatus: Int] {
         let total = model.censusTiles.total
         return Dictionary(uniqueKeysWithValues: CountStatus.allCases.map { ($0, total[$0]) })
-    }
-
-    /// One decimal below 10 %, so the first few trees show progress.
-    private var coverage: String {
-        let fraction = model.summary.coverage
-        return format.percent(fraction, fractionDigits: fraction > 0 && fraction < 0.1 ? 1 : 0)
     }
 
     /// Another screen asked to show a tree (`AppModel.showOnMap`, such as a scan's Show on map): close any screen open

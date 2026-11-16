@@ -1,3 +1,4 @@
+import CanopyCapture
 import CanopyDesign
 import CanopyMap
 import CanopyModel
@@ -43,6 +44,14 @@ struct TreeSheet: View {
                         Button("Not a tree", systemImage: "xmark.circle", role: .destructive) {
                             Task { await model.reject(tree) }
                         }
+                    }
+                    if tree.effectiveStatus != .removed, LiDAR.isAvailable {
+                        // The tree in front of the player: straight to its scan, without finding it in the census.
+                        Button("Scan this tree", systemImage: "record.circle") {
+                            dismiss()
+                            model.scanInCensus(tree)
+                        }
+                        .accessibilityIdentifier("scan-this-tree")
                     }
                     if tree.effectiveStatus != .removed {
                         Button("Move on the map", systemImage: "arrow.up.and.down.and.arrow.left.and.right") {

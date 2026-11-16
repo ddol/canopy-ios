@@ -69,8 +69,14 @@ here** asks again. Neighbouring sites overlap, and a feature is drawn once.
 Where the site lands in the AR world comes from the 3DEP registration when there is one (**Register with 3DEP**, in
 the overlay menu), exact to its sigma. Before that it comes from the GPS fix: the session origin's position from the best fix so far
 and the camera's offset then, the site's georeference for the horizontal, and the ground under the origin (the
-LiDAR mesh's floor against the site's ground grid) for the vertical. That is GPS metres out, which is what
-eyeballing a wireframe against the real tree is for; **Re-place overlay from GPS** takes the current fix again.
+LiDAR mesh's floor against the site's ground grid) for the vertical. That is GPS metres out, and AR tracking drifts
+as the player walks, so the drawing can creep with them from tree to tree. **Line up the overlay by hand** (in the
+overlay menu, or by tapping the overlay's status under the tree card) opens a radar of the trees as drawn round the
+player, heading up, with a pad. The pad moves the player through the drawing: forward, back, left and right by 25 cm
+or 1 m, and turns of 1° or 5° (`GPSPlacement`, which `ARSiteFrame` places sites through). **Put the tree on the
+trunk in the middle** moves the drawing so the selected tree stands on the trunk under the reticle. Once lined up by
+hand, GPS leaves the placement alone, and trees placed from then on are good to a metre rather than the fix's
+accuracy. **Re-place overlay from GPS** (or **From GPS** on the pad) undoes it and takes the current fix again.
 
 The selected tree is the one tapped, else the census tree chosen from the card's list, else the nearest. Its card at
 the top names it with its status, distance and bearing (from the camera once the overlay is placed, by GPS before),

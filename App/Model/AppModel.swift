@@ -127,6 +127,8 @@ final class AppModel {
     var tagTarget: UUID?
     /// The tree the Map screen should centre on and select (`showOnMap`).
     var mapTarget: UUID?
+    /// The tree the Census screen should make its selected tree, to scan it (`scanInCensus`).
+    var censusTarget: UUID?
 
     /// The clients for the Gerardus server in Settings, kept so calls share connections and the reference cache
     /// (see `AppModel+Aerial`).

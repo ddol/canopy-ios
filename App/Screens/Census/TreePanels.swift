@@ -66,23 +66,39 @@ struct TreeFitPanel: View {
     /// How each confirmed ring was set before, so taking the confirmation back restores it. Kept here, not in the
     /// rings editor, which is made afresh each time Rings is picked.
     @State private var beforeConfirming: [TreeSection.ID: TreeSection.Source] = [:]
+    /// Folded down to its first rows, so the tree and the scan have the screen while the player walks round.
+    @State private var folded = false
 
     var body: some View {
         VStack(spacing: Spacing.xs) {
-            Picker("Edit", selection: $mode) {
-                Text("Shape").tag(Mode.shape)
-                Text("Rings").tag(Mode.rings)
+            HStack(spacing: Spacing.xs) {
+                Picker("Edit", selection: $mode) {
+                    Text("Shape").tag(Mode.shape)
+                    Text("Rings").tag(Mode.rings)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("fit-mode")
+                Button(
+                    folded ? "Show the controls" : "Fold the controls away",
+                    systemImage: folded ? "chevron.up" : "chevron.down"
+                ) {
+                    withAnimation(.snappy) { folded.toggle() }
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.canopySecondary)
+                .accessibilityIdentifier("fit-fold")
             }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("fit-mode")
             switch mode {
             case .shape:
                 // The rings fitted or confirmed against the tree stay; the rest follow the sliders.
-                TreeFormSliders(form: Binding(get: { fitting.shape }, set: { fitting.reshape($0) }))
+                if !folded {
+                    TreeFormSliders(form: Binding(get: { fitting.shape }, set: { fitting.reshape($0) }))
+                }
             case .rings:
                 TreeSectionEditor(
                     profile: $fitting.profile, selected: $selectedSection, beforeConfirming: $beforeConfirming,
-                    onSnap: onSnap, isAligning: isAligning, alignStatus: alignStatus, onAlign: onAlign)
+                    onSnap: onSnap, isAligning: isAligning, alignStatus: alignStatus, onAlign: onAlign,
+                    folded: folded)
             }
             HStack(spacing: Spacing.s) {
                 Button("Back", systemImage: "chevron.backward", action: onBack)
@@ -126,6 +142,8 @@ struct TreeSectionEditor: View {
     var isAligning = false
     var alignStatus: String?
     var onAlign: () -> Void = {}
+    /// Only the rings to pick from, and what the picked one is: the sliders and buttons are put away.
+    var folded = false
     private let format = QuantityFormat()
 
     private var section: TreeSection? { selected.flatMap { profile.section($0) } }
@@ -141,34 +159,39 @@ struct TreeSectionEditor: View {
             }
             .scrollIndicators(.hidden)
             .accessibilityIdentifier("fit-rings")
-            HStack(spacing: Spacing.s) {
-                Button(
-                    isAligning ? "Stop aligning" : "Align steps",
-                    systemImage: isAligning ? "stop.circle" : "camera.viewfinder", action: onAlign
-                )
-                .buttonStyle(.canopySecondary)
-                .labelStyle(.titleAndIcon)
-                .accessibilityIdentifier("rings-align")
-                Text(alignStatus ?? "Rings a metre apart up the trunk, set from the camera above the scan.")
+            if let section {
+                Text(describe(section))
+                    .font(CanopyFont.mono(.caption2))
+                    .foregroundStyle(Color.canopyInkMuted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let alignStatus {
+                Text(alignStatus)
                     .font(.caption2)
                     .foregroundStyle(Color.canopyInkMuted)
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("rings-align-status")
             }
-            .font(.footnote)
-            if let section {
+            if !folded, let section {
                 slider(
                     "Height", value: Binding(get: { section.height }, set: { reshape(height: $0) }),
                     in: TreeProfile.heights, step: 0.05, digits: 2, id: "ring-height")
                 slider(
-                    section.part == .trunk ? "Trunk diameter" : "Foliage width",
+                    section.part == .trunk ? "Diameter" : "Width",
                     value: Binding(get: { section.diameter }, set: { reshape(radius: $0 / 2) }),
                     in: section.part == .trunk ? TreeForm.trunkDiameters : TreeForm.crownWidths,
                     step: section.part == .trunk ? 0.01 : 0.25, digits: section.part == .trunk ? 2 : 1,
                     id: "ring-width")
-                HStack(spacing: Spacing.s) {
-                    Button("Snap to scan", systemImage: "scope", action: onSnap)
+                HStack(spacing: Spacing.xs) {
+                    Button(
+                        isAligning ? "Stop" : "Align",
+                        systemImage: isAligning ? "stop.circle" : "camera.viewfinder", action: onAlign
+                    )
+                    .accessibilityIdentifier("rings-align")
+                    Button("Snap", systemImage: "scope", action: onSnap)
                         .accessibilityIdentifier("ring-snap")
                     Button(
                         section.source == .confirmed ? "Confirmed" : "Looks right",
@@ -202,12 +225,8 @@ struct TreeSectionEditor: View {
                 }
                 .buttonStyle(.canopySecondary)
                 .labelStyle(.titleAndIcon)
-                .font(.footnote)
-                Text(describe(section))
-                    .font(CanopyFont.mono(.caption2))
-                    .foregroundStyle(Color.canopyInkMuted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
+                .font(.caption)
+            } else if section == nil {
                 Text("Pick a ring.").font(.footnote).foregroundStyle(Color.canopyInkMuted)
             }
         }
@@ -284,22 +303,21 @@ struct TreeSectionEditor: View {
         profile[ring.id] = ring
     }
 
+    /// A ring's slider on one line: its name, the slider and its value, so the panel is short.
     private func slider(
         _ label: String, value: Binding<Double>, in range: ClosedRange<Double>, step: Double, digits: Int, id: String
     ) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(label).font(.footnote)
-                Spacer()
-                Text(format.length(value.wrappedValue, fractionDigits: digits))
-                    .font(CanopyFont.mono(.footnote))
-                    .foregroundStyle(Color.canopyInkMuted)
-            }
+        HStack(spacing: Spacing.xs) {
+            Text(label).font(.caption).frame(width: 58, alignment: .leading)
             Slider(value: value, in: range, step: step) {
                 Text(label)
             }
             .tint(Color.canopySurvey)
             .accessibilityIdentifier(id)
+            Text(format.length(value.wrappedValue, fractionDigits: digits))
+                .font(CanopyFont.mono(.caption))
+                .foregroundStyle(Color.canopyInkMuted)
+                .frame(width: 58, alignment: .trailing)
         }
     }
 }
@@ -391,11 +409,15 @@ struct TreeActionsRow: View {
 
 /// Scan trunk: the census view's main button.
 struct ScanHeroButton: View {
+    /// The tree the scan will measure, when it was chosen for it, such as from the map.
+    var treeName: String?
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Label("Scan trunk", systemImage: "record.circle")
+            Label(treeName.map { "Scan \($0)" } ?? "Scan trunk", systemImage: "record.circle")
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .font(.title3.weight(.semibold))
                 .frame(maxWidth: .infinity, minHeight: 52)
         }

@@ -226,6 +226,21 @@ public struct MapLayers: Equatable, Sendable {
         }
     }
 
+    /// Where the player is: the GPS fix, how good it is, and the way they face.
+    public struct UserLocation: Equatable, Sendable {
+        public var geo: GeoPoint
+        /// Metres, one standard deviation.
+        public var accuracy: Double
+        /// Degrees clockwise from true north; nil without a compass.
+        public var heading: Double?
+
+        public init(geo: GeoPoint, accuracy: Double, heading: Double? = nil) {
+            self.geo = geo
+            self.accuracy = accuracy
+            self.heading = heading
+        }
+    }
+
     /// Aerial lidar (USGS 3DEP) points round loaded sites, in each site's own frame, thinned on the server. A class,
     /// so comparing layers does not compare every point.
     public final class AerialPoints: Equatable, Sendable {
@@ -262,6 +277,8 @@ public struct MapLayers: Equatable, Sendable {
     public var moveGuide: MoveGuide?
     /// The aerial lidar points loaded, for the 3D map; nil when none are, or they are hidden.
     public var aerialPoints: AerialPoints?
+    /// Where the player is, for the 3D map (Apple's map shows them itself); nil while it is not known.
+    public var userLocation: UserLocation?
     /// The region the layers were made for, when known.
     public var region: MapViewport?
     public var routes: [RouteLine]

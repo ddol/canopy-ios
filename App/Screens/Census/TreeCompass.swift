@@ -83,6 +83,8 @@ final class TreeTracker {
     /// Where the camera looks (or the compass points), degrees clockwise from north.
     private(set) var heading: Double?
     private(set) var inView = false
+    /// Where the camera is in the AR world, to the nearest 10 cm, for the placement radar.
+    private(set) var camera: SIMD3<Float>?
 
     /// How often the camera is read, in seconds.
     static let interval = 0.2
@@ -104,6 +106,7 @@ final class TreeTracker {
         if let heading = Compass.heading(camera: transform, compass: location.heading) {
             set(\.heading, heading.rounded())
         }
+        set(\.camera, camera.map { ($0 * 10).rounded(.toNearestOrEven) / 10 })
         let here = location.geoPoint
         func offset(_ target: Target) -> (SIMD2<Double>, fromAR: Bool)? {
             if let world = target.world, let camera { return (Compass.offset(from: camera, to: world), true) }
@@ -173,8 +176,9 @@ struct SelectedTreeCard: View {
     let tracker: TreeTracker
     /// What to say with no tree: waiting for GPS, or none near.
     let placeholder: String
-    let choices: [(Tree, Double)]
-    var onChoose: (Tree) -> Void
+    /// Whether there are trees near by to choose from.
+    var canChoose: Bool
+    var onChooseAnother: () -> Void
     private let format = QuantityFormat()
 
     var body: some View {
@@ -200,22 +204,16 @@ struct SelectedTreeCard: View {
                     .font(.subheadline)
             }
             Spacer(minLength: 0)
-            Menu {
-                ForEach(choices.prefix(8), id: \.0.id) { tree, distance in
-                    Button {
-                        onChoose(tree)
-                    } label: {
-                        Label(
-                            "\(tree.name), \(tree.displayStatus.presentation.label.lowercased()), "
-                                + format.length(distance, fractionDigits: 0),
-                            systemImage: tree.displayStatus.presentation.systemImage)
-                    }
-                }
-            } label: {
-                Label("Change tree", systemImage: "arrow.triangle.2.circlepath")
+            // A sheet, not a menu: a menu is made again each time the trees near by are, which is every fix, and
+            // closes or jumps back to the top under the finger.
+            Button(action: onChooseAnother) {
+                Label("Change tree", systemImage: "list.bullet")
                     .labelStyle(.iconOnly)
+                    .padding(Spacing.xs)
+                    .contentShape(Rectangle())
             }
-            .disabled(choices.isEmpty)
+            .disabled(!canChoose)
+            .accessibilityIdentifier("change-tree")
         }
         .padding(Spacing.s)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.large))
@@ -246,6 +244,62 @@ struct SelectedTreeCard: View {
             parts.append("DBH " + format.length(dbh.diameter.value, uncertainty: dbh.diameter.uncertainty))
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// The trees near the player to choose the selected tree from, as they were when the list was opened: a list that
+/// moved with every fix would not stay still to be read or scrolled.
+struct NearbyTreeList: View {
+    struct Choice: Identifiable {
+        var tree: Tree
+        var distance: Double
+        var id: UUID { tree.id }
+    }
+
+    let choices: [Choice]
+    let selected: UUID?
+    var onChoose: (Tree) -> Void
+    @Environment(\.dismiss) private var dismiss
+    private let format = QuantityFormat()
+
+    var body: some View {
+        NavigationStack {
+            List(choices) { choice in
+                Button {
+                    onChoose(choice.tree)
+                    dismiss()
+                } label: {
+                    HStack(spacing: Spacing.s) {
+                        StatusBadge(choice.tree.displayStatus.presentation)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(choice.tree.name).font(.subheadline.weight(.semibold))
+                            if let dbh = choice.tree.dbh {
+                                Text("DBH " + format.length(dbh.diameter.value, uncertainty: dbh.diameter.uncertainty))
+                                    .font(CanopyFont.mono(.caption))
+                                    .foregroundStyle(Color.canopyInkMuted)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Text(format.length(choice.distance, fractionDigits: choice.distance < 10 ? 1 : 0))
+                            .font(CanopyFont.mono(.footnote))
+                            .foregroundStyle(Color.canopyInkMuted)
+                        if choice.tree.id == selected {
+                            Image(systemName: "checkmark").foregroundStyle(Color.canopyBrand)
+                        }
+                    }
+                }
+                .foregroundStyle(Color.canopyInk)
+                .accessibilityIdentifier("nearby-tree-" + choice.tree.id.uuidString)
+            }
+            .overlay {
+                if choices.isEmpty { ContentUnavailableView("No trees within 60 m", systemImage: "tree") }
+            }
+            .navigationTitle("Trees near you")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+        }
     }
 }
 
@@ -361,7 +415,7 @@ struct TreeCompassView: View {
             focus: FocusTree(
                 id: "census:preview", title: "Steadfast Raelin Caelum", status: .detected, tree: nil, geo: nil,
                 source: .nearest),
-            tracker: tracker, placeholder: "", choices: [], onChoose: { _ in })
+            tracker: tracker, placeholder: "", canChoose: true, onChooseAnother: {})
         Spacer()
         HStack {
             Spacer()
@@ -382,7 +436,7 @@ struct TreeCompassView: View {
             focus: FocusTree(
                 id: "census:preview", title: "Steadfast Raelin Caelum", status: .detected, tree: nil, geo: nil,
                 source: .tapped),
-            tracker: tracker, placeholder: "", choices: [], onChoose: { _ in })
+            tracker: tracker, placeholder: "", canChoose: true, onChooseAnother: {})
         Spacer()
         TreeActionsRow(canEdit: true, onNotATree: {}, onMove: {}, onNewTree: {})
         ScanHeroButton {}
