@@ -284,7 +284,11 @@ struct WireframeMap: UIViewRepresentable {
         private var selected: UUID?
         /// Which of the sites' parts are shown: the ground, and the vectors (buildings, streets, Gerardus's trees).
         private var visibility = MapLayers.Visibility()
-        private var context: (routes: [MapLayers.RouteLine], boundary: [[GeoPoint]], tiles: [MapLayers.TileOutline])?
+        private var context:
+            (
+                routes: [MapLayers.RouteLine], boundary: [[GeoPoint]], tiles: [MapLayers.TileOutline],
+                moveGuide: MapLayers.MoveGuide?
+            )?
 
         init(anchor: GeoPoint) {
             self.anchor = LocalFrame(origin: anchor)
@@ -339,7 +343,7 @@ struct WireframeMap: UIViewRepresentable {
             }
             if layers.summaries != summaries { rebuildSummaries(layers.summaries) }
             if context == nil || context!.routes != layers.routes || context!.boundary != layers.boundary
-                || context!.tiles != layers.tiles
+                || context!.tiles != layers.tiles || context!.moveGuide != layers.moveGuide
             {
                 rebuildContext(layers)
             }
@@ -665,7 +669,7 @@ struct WireframeMap: UIViewRepresentable {
         static let patchFill = "patch-fill"
 
         private func rebuildContext(_ layers: MapLayers) {
-            context = (layers.routes, layers.boundary, layers.tiles)
+            context = (layers.routes, layers.boundary, layers.tiles, layers.moveGuide)
             for node in contextRoot.childNodes { node.removeFromParentNode() }
             var routes = VectorMesh(place: { $0 })
             for route in layers.routes {
@@ -701,6 +705,58 @@ struct WireframeMap: UIViewRepresentable {
             contextRoot.addChildNode(tiles.node(color: CanopyColor.lineStrong.uiColor, fill: false))
             contextRoot.addChildNode(surveyed.node(color: CanopyColor.brand.uiColor, fill: false))
             contextRoot.addChildNode(cells13.node(color: CanopyColor.inkMuted.uiColor, fill: false))
+            if let guide = layers.moveGuide { drawMoveGuide(guide) }
+        }
+
+        /// A tree being moved: each crown aerial lidar found round it as a ring on the ground and another most of the
+        /// way up, with a post to its top (the tree's own crown in the brand green), and where the tree stands now
+        /// as a cross with a post, a dashed line on the ground to the map's middle. Drawn over everything, so a crown
+        /// shows through the trees.
+        private func drawMoveGuide(_ guide: MapLayers.MoveGuide) {
+            var crowns = VectorMesh(place: { $0 })
+            var own = VectorMesh(place: { $0 })
+            let lift = SIMD3<Float>(0, 0.4, 0)
+            for crown in guide.crowns {
+                let base = scenePoint(crown.centre) + lift
+                let up = SIMD3<Float>(0, Float(crown.height ?? 0), 0)
+                var segments = Wireframe.ring(centre: base, radius: Float(crown.radius), count: 48)
+                if crown.height != nil {
+                    // Where a crown is about widest, some way below its top.
+                    segments += Wireframe.ring(centre: base + up * 0.7, radius: Float(crown.radius), count: 48)
+                    segments.append(Wireframe.Segment(from: base, to: base + up))
+                }
+                if crown.isOwn { own.add(sceneSegments: segments) } else { crowns.add(sceneSegments: segments) }
+            }
+            var from = VectorMesh(place: { $0 })
+            if let start = guide.from {
+                let a = scenePoint(start) + lift
+                let b = scenePoint(guide.to) + lift
+                from.add(sceneSegments: [
+                    Wireframe.Segment(from: a - SIMD3(0.6, 0, 0), to: a + SIMD3(0.6, 0, 0)),
+                    Wireframe.Segment(from: a - SIMD3(0, 0, 0.6), to: a + SIMD3(0, 0, 0.6)),
+                    Wireframe.Segment(from: a, to: a + SIMD3(0, 3, 0)),
+                ])
+                // Dashed: a metre on, half a metre off.
+                let length = simd_distance(a, b)
+                var at: Float = 0
+                while at < length {
+                    let end = min(at + 1, length)
+                    from.add(sceneSegments: [
+                        Wireframe.Segment(from: a + (b - a) * (at / length), to: a + (b - a) * (end / length))
+                    ])
+                    at += 1.5
+                }
+            }
+            for (mesh, color) in [
+                (crowns, CanopyColor.canopy.uiColor), (own, CanopyColor.brand.uiColor), (from, CanopyColor.ink.uiColor),
+            ] where !mesh.isEmpty {
+                let node = mesh.node(color: color, fill: false)
+                node.enumerateHierarchy { child, _ in
+                    child.renderingOrder = 11
+                    child.geometry?.firstMaterial?.readsFromDepthBuffer = false
+                }
+                contextRoot.addChildNode(node)
+            }
         }
 
         /// Low ground and high ground, in the scene's own tints: a dull green low, a pale one high.

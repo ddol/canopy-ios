@@ -35,32 +35,99 @@ struct CanopyCloud: Equatable, Sendable {
     static func == (a: CanopyCloud, b: CanopyCloud) -> Bool { a.id == b.id }
 }
 
+/// Where the align view's camera is: looking at `target` from `distance` metres, `elevation` radians above it, turned
+/// `azimuth` radians from the south side (a larger azimuth carries the camera east, and turns the scene clockwise
+/// as seen from above). The camera's up is always toward the sky, so the ground stays level and down however the
+/// view is turned: there is no roll to get wrong. Scene axes are the scan's: x east, y up, z south.
+nonisolated struct ScanOrbit: Equatable, Sendable {
+    var target: SIMD3<Float>
+    var distance: Float
+    var elevation: Float
+    var azimuth: Float = 0
+
+    /// How far the camera may look down on the trunk (90°: from straight above) or up at it from below the point it
+    /// turns about, in degrees. Straight down itself would leave the camera without a heading.
+    static let elevations: ClosedRange<Float> = (-20 * .pi / 180)...(89 * .pi / 180)
+    static let distances: ClosedRange<Float> = 0.25...150
+    /// Radians the view turns for a point of finger travel.
+    static let turnPerPoint: Float = 0.008
+
+    /// 3.2 m from the trunk on its south side, a little above breast height, looking at it.
+    static func home(_ target: SIMD3<Float>) -> ScanOrbit {
+        ScanOrbit(target: target, distance: simd_length(SIMD2<Float>(0.8, 3.2)), elevation: atan2(0.8, 3.2))
+    }
+
+    /// `distance` metres off `target` on the south side, a little above it: to take in a whole crown.
+    static func framing(_ target: SIMD3<Float>, distance: Float) -> ScanOrbit {
+        ScanOrbit(
+            target: target, distance: distance * simd_length(SIMD2<Float>(0.3, 1)), elevation: atan2(0.3, 1))
+    }
+
+    var position: SIMD3<Float> {
+        target + SIMD3(sin(azimuth) * cos(elevation), sin(elevation), cos(azimuth) * cos(elevation)) * distance
+    }
+
+    /// The camera's transform: at `position`, looking at the target, its up toward the sky.
+    var transform: simd_float4x4 {
+        let back = simd_normalize(position - target)
+        let right = SIMD3(cos(azimuth), 0, -sin(azimuth))
+        let up = simd_cross(back, right)
+        return simd_float4x4(
+            SIMD4(right, 0), SIMD4(up, 0), SIMD4(back, 0), SIMD4(position, 1))
+    }
+
+    func clamped() -> ScanOrbit {
+        var orbit = self
+        orbit.elevation = min(max(elevation, Self.elevations.lowerBound), Self.elevations.upperBound)
+        orbit.distance = min(max(distance, Self.distances.lowerBound), Self.distances.upperBound)
+        return orbit
+    }
+
+    /// One finger dragged by `translation` points: round the trunk for a drag sideways (the scan turning with the
+    /// finger, as if pushed round), over or under it for a drag down or up.
+    func orbiting(by translation: CGPoint) -> ScanOrbit {
+        var orbit = self
+        orbit.azimuth -= Float(translation.x) * Self.turnPerPoint
+        orbit.elevation += Float(translation.y) * Self.turnPerPoint
+        return orbit.clamped()
+    }
+
+    /// Two fingers twisted `angle` radians, clockwise on screen positive: the scene turns with them about the upright
+    /// pole through the target.
+    func twisting(by angle: Float) -> ScanOrbit {
+        var orbit = self
+        orbit.azimuth += angle
+        return orbit
+    }
+
+    /// Two fingers pinched to `scale` times their spacing: closer as they spread.
+    func pinching(by scale: CGFloat) -> ScanOrbit {
+        var orbit = self
+        orbit.distance /= Float(max(scale, 0.01))
+        return orbit.clamped()
+    }
+
+    /// Two fingers dragged by `translation` points in a view `height` points tall with a `fieldOfView`° vertical
+    /// field: the scan follows them, sideways along the ground and up or down the trunk.
+    func sliding(by translation: CGPoint, height: CGFloat, fieldOfView: Float) -> ScanOrbit {
+        var orbit = self
+        let metresPerPoint = distance * 2 * tan(fieldOfView / 2 * .pi / 180) / Float(max(height, 1))
+        let right = SIMD3(cos(azimuth), 0, -sin(azimuth))
+        orbit.target +=
+            -right * Float(translation.x) * metresPerPoint
+            + SIMD3(0, 1, 0) * Float(translation.y) * metresPerPoint
+        return orbit
+    }
+}
+
 /// The view's camera, for the controls: where the screen's right and "away" point on the ground, so a ring moves the
-/// way the arrows say whichever side the player has turned the view to.
+/// way the arrows say whichever side the player has turned the view to; and the orbit the gestures move.
 @MainActor
 final class ScanAlignmentCamera {
     fileprivate weak var view: SCNView?
-    fileprivate var home: SCNNode?
     /// What the view turns about when it opens: the trunk at breast height.
     fileprivate var homeTarget: SIMD3<Float>?
-
-    /// How far the camera may look down on the trunk (90°: from straight above) or up at it from below the point it
-    /// turns about, in degrees.
-    nonisolated static let verticalAngles: ClosedRange<Float> = -20...89
-
-    /// A camera transform carried round the upright line through `pole` by `angle` radians: positive for fingers
-    /// twisting clockwise on screen, which turns the scene clockwise as seen from above (the camera going round it
-    /// the other way). The camera's up stays as it was, so a level view stays level.
-    nonisolated static func turned(
-        _ transform: simd_float4x4, by angle: Float, about pole: SIMD3<Float>
-    ) -> simd_float4x4 {
-        let rotation = simd_float4x4(simd_quatf(angle: angle, axis: SIMD3(0, 1, 0)))
-        var toPole = matrix_identity_float4x4
-        toPole.columns.3 = SIMD4(pole, 1)
-        var fromPole = matrix_identity_float4x4
-        fromPole.columns.3 = SIMD4(-pole, 1)
-        return toPole * rotation * fromPole * transform
-    }
+    fileprivate var orbit: ScanOrbit?
 
     /// The screen's right and the direction into the screen, on the ground (scene x and z), each a unit vector.
     var groundAxes: (right: SIMD2<Float>, away: SIMD2<Float>) {
@@ -84,30 +151,90 @@ final class ScanAlignmentCamera {
         return (unitRight, away)
     }
 
+    /// Puts the camera where `orbit` says, gliding there when `animated`.
+    fileprivate func place(_ next: ScanOrbit, animated: Bool = false) {
+        orbit = next
+        guard let pov = view?.pointOfView else { return }
+        if animated {
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.35
+        }
+        pov.simdTransform = next.transform
+        if animated { SCNTransaction.commit() }
+    }
+
     /// Back to where the view started.
     func reset() {
-        guard let view, let home else { return }
-        SCNTransaction.begin()
-        SCNTransaction.animationDuration = 0.3
-        view.pointOfView = home
-        let target = homeTarget ?? SIMD3(view.defaultCameraController.target)
-        view.defaultCameraController.target = SCNVector3(target)
-        home.simdTransform = ScanAlignmentSceneView.homeTransform(target: target)
-        SCNTransaction.commit()
+        guard let target = homeTarget ?? orbit?.target else { return }
+        place(.home(target), animated: true)
     }
 
     /// Turns the view about `target` from `distance` metres away on the south side, a little above it: to take in a
     /// whole crown.
     func frame(_ target: SIMD3<Float>, distance: Float) {
-        guard let view, let pov = view.pointOfView else { return }
-        let node = SCNNode()
-        node.simdPosition = target + SIMD3(0, distance * 0.3, distance)
-        node.simdLook(at: target)
-        SCNTransaction.begin()
-        SCNTransaction.animationDuration = 0.4
-        view.defaultCameraController.target = SCNVector3(target)
-        pov.simdTransform = node.simdTransform
-        SCNTransaction.commit()
+        place(.framing(target, distance: distance), animated: true)
+    }
+
+    // MARK: Gestures
+
+    /// Where the gesture under way started.
+    private var start: ScanOrbit?
+    private var twistStart: ScanOrbit?
+
+    /// One finger: round and over the trunk. It stands still while two fingers are down, and carries on from where
+    /// they left the view when one of them lifts.
+    fileprivate func orbitGesture(_ recogniser: UIPanGestureRecognizer) {
+        guard let orbit else { return }
+        switch recogniser.state {
+        case .began, .changed:
+            guard twistStart == nil, recogniser.numberOfTouches < 2 else {
+                start = nil
+                return
+            }
+            guard let start else {
+                start = orbit
+                recogniser.setTranslation(.zero, in: recogniser.view)
+                return
+            }
+            place(start.orbiting(by: recogniser.translation(in: recogniser.view)))
+        default:
+            start = nil
+        }
+    }
+
+    /// Two fingers: pinch, twist and slide at once, each from where the fingers were when they last landed.
+    fileprivate func twoFingers(
+        pinch: UIPinchGestureRecognizer, twist: UIRotationGestureRecognizer, slide: UIPanGestureRecognizer
+    ) {
+        guard let orbit, let view else { return }
+        let states = [pinch.state, twist.state, slide.state]
+        if !states.contains(where: { $0 == .began || $0 == .changed }) {
+            twistStart = nil
+            return
+        }
+        if twistStart == nil {
+            twistStart = orbit
+            pinch.scale = 1
+            twist.rotation = 0
+            slide.setTranslation(.zero, in: view)
+        }
+        guard let from = twistStart else { return }
+        let fov = Float(view.pointOfView?.camera?.fieldOfView ?? 50)
+        // As on the 3D map, a small twist leaves the heading alone so a pinch does not turn the view by accident.
+        let angle = Float(TwoFingerTurn.turn(twist.rotation))
+        place(
+            from.pinching(by: pinch.scale).twisting(by: angle)
+                .sliding(by: slide.translation(in: view), height: view.bounds.height, fieldOfView: fov))
+    }
+}
+
+/// A twist smaller than this, in radians (about 6°), leaves the view's heading alone, so a pinch does not turn it by
+/// accident; past it the view turns with the fingers, less this much, so it starts turning smoothly.
+enum TwoFingerTurn {
+    static let threshold: CGFloat = 0.1
+
+    static func turn(_ angle: CGFloat) -> CGFloat {
+        abs(angle) <= threshold ? 0 : angle - (angle > 0 ? threshold : -threshold)
     }
 }
 
@@ -150,8 +277,9 @@ nonisolated struct ScanSurface: Sendable {
     var isEmpty: Bool { triangles.isEmpty }
 }
 
-/// The scan's triangles in 3D with the overlay over them. SceneKit's turntable camera orbits the trunk: drag to turn
-/// round it and up or down, pinch to zoom, two fingers to slide. Tapping near a ring picks it.
+/// The scan's triangles in 3D with the overlay over them. The camera orbits the trunk (`ScanOrbit`): drag to turn round
+/// it and over or under it, pinch to zoom, twist two fingers to turn it about its upright, and drag two fingers to
+/// slide it. Tapping near a ring picks it.
 ///
 /// The 3D map's `CameraRig` is not used: it keeps the ground under a finger and starts 12 m up, which suits a park,
 /// not a metre of trunk turned in the hand.
@@ -187,29 +315,29 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
         pov.camera?.zNear = 0.02
         pov.camera?.zFar = 400
         pov.camera?.fieldOfView = 50
-        pov.simdTransform = Self.homeTransform(target: overlay.target)
         scene.rootNode.addChildNode(pov)
         view.pointOfView = pov
-        view.allowsCameraControl = true
-        view.cameraControlConfiguration.autoSwitchToFreeCamera = false
-        view.defaultCameraController.interactionMode = .orbitTurntable
-        view.defaultCameraController.inertiaEnabled = true
-        view.defaultCameraController.target = SCNVector3(overlay.target)
-        // Never over the top or far under the ground, so the ground stays down (`ScanAlignmentCamera.verticalAngles`).
-        view.defaultCameraController.minimumVerticalAngle = ScanAlignmentCamera.verticalAngles.lowerBound
-        view.defaultCameraController.maximumVerticalAngle = ScanAlignmentCamera.verticalAngles.upperBound
-        // SceneKit's own two-finger twist rolls the camera about its line of sight, which turns the ground over. As
-        // on Apple's maps, a twist turns the view about an upright pole through what it looks at instead.
-        for recogniser in view.gestureRecognizers ?? [] where recogniser is UIRotationGestureRecognizer {
-            recogniser.isEnabled = false
-        }
-        let twist = UIRotationGestureRecognizer(
-            target: context.coordinator, action: #selector(Coordinator.twisted(_:)))
-        twist.delegate = context.coordinator
-        view.addGestureRecognizer(twist)
+        // The camera is the app's own orbit (`ScanOrbit`), not SceneKit's camera controller: that one rolls the view
+        // about its line of sight for a twist and fights a camera moved from outside it, which turned the ground over.
+        view.allowsCameraControl = false
         camera.view = view
-        camera.home = pov
         camera.homeTarget = overlay.target
+        camera.place(.home(overlay.target))
+        let coordinator = context.coordinator
+        coordinator.camera = camera
+        let orbit = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.orbited(_:)))
+        orbit.maximumNumberOfTouches = 1
+        let pinch = UIPinchGestureRecognizer(target: coordinator, action: #selector(Coordinator.twoFingers(_:)))
+        let twist = UIRotationGestureRecognizer(target: coordinator, action: #selector(Coordinator.twoFingers(_:)))
+        let slide = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.twoFingers(_:)))
+        slide.minimumNumberOfTouches = 2
+        coordinator.pinch = pinch
+        coordinator.twist = twist
+        coordinator.slide = slide
+        for recogniser in [orbit, pinch, twist, slide] as [UIGestureRecognizer] {
+            recogniser.delegate = coordinator
+            view.addGestureRecognizer(recogniser)
+        }
 
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
         view.addGestureRecognizer(tap)
@@ -223,14 +351,6 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
     func updateUIView(_ view: SCNView, context: Context) {
         context.coordinator.onPick = onPick
         context.coordinator.update(overlay, in: view)
-    }
-
-    /// 3.2 m from the trunk on its south side, a little above breast height, looking at it.
-    static func homeTransform(target: SIMD3<Float>) -> simd_float4x4 {
-        let node = SCNNode()
-        node.simdPosition = target + SIMD3(0, 0.8, 3.2)
-        node.simdLook(at: target)
-        return node.simdTransform
     }
 
     @MainActor
@@ -254,17 +374,21 @@ struct ScanAlignmentSceneView: UIViewRepresentable {
             }
         }
 
-        /// Two fingers twisting: the camera goes round the upright pole through the point it turns about, the scene
-        /// turning with the fingers and the ground staying level and down.
-        @objc func twisted(_ recogniser: UIRotationGestureRecognizer) {
-            guard let view = recogniser.view as? SCNView, let pov = view.pointOfView else { return }
-            let angle = Float(recogniser.rotation)
-            recogniser.rotation = 0
-            pov.simdTransform = ScanAlignmentCamera.turned(
-                pov.simdTransform, by: angle, about: SIMD3(view.defaultCameraController.target))
+        weak var camera: ScanAlignmentCamera?
+        weak var pinch: UIPinchGestureRecognizer?
+        weak var twist: UIRotationGestureRecognizer?
+        weak var slide: UIPanGestureRecognizer?
+
+        @objc func orbited(_ recogniser: UIPanGestureRecognizer) {
+            camera?.orbitGesture(recogniser)
         }
 
-        /// The twist goes with SceneKit's pinch and two-finger pan, as on a map.
+        @objc func twoFingers(_ recogniser: UIGestureRecognizer) {
+            guard let pinch, let twist, let slide else { return }
+            camera?.twoFingers(pinch: pinch, twist: twist, slide: slide)
+        }
+
+        /// Pinch, twist and two-finger slide go together, as on a map.
         nonisolated func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer

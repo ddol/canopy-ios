@@ -61,6 +61,9 @@ struct ProposalsScreen: View {
                 case .yours:
                     let open = model.openProposals
                     yoursSection(open)
+                    if model.gerardusURL != nil {
+                        otherDevicesSection(model.otherDeviceProposals)
+                    }
                     #if DEBUG || TESTING_TOOLS
                         debugSection(open)
                     #endif
@@ -72,6 +75,19 @@ struct ProposalsScreen: View {
             .navigationTitle("Proposals")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    // Pull to refresh is hard to find on an iPad: the same sync as a button.
+                    if model.gerardusURL != nil {
+                        if model.isSyncing {
+                            ProgressView().accessibilityIdentifier("proposals-syncing")
+                        } else {
+                            Button("Refresh from server", systemImage: "arrow.clockwise") {
+                                Task { await model.sync() }
+                            }
+                            .accessibilityIdentifier("proposals-refresh")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .principal) {
                     Picker("List", selection: Binding(get: { part }, set: { choice.pick($0) })) {
                         Text("Review").tag(Part.review)
@@ -143,6 +159,30 @@ struct ProposalsScreen: View {
         } footer: {
             Text("A change reaches the shared map when a second player agrees and at least one of you is trusted.")
         }
+    }
+
+    /// The player's open proposals sent from their other devices, which this device's store never held.
+    private func otherDevicesSection(_ others: [Changeset]) -> some View {
+        Section {
+            if others.isEmpty {
+                Text(
+                    model.lastSync == nil
+                        ? "Refresh to see the proposals you sent from your other devices."
+                        : "None in the areas this device's map has shown."
+                )
+                .foregroundStyle(Color.canopyInkMuted)
+            }
+            ForEach(others) { changeset in
+                proposal(changeset)
+            }
+        } header: {
+            Text("From your other devices (\(others.count))")
+        } footer: {
+            Text(
+                "Proposals you sent from another device under the same Game Center account, in the areas this "
+                    + "device's map has shown. Open the map where you worked and refresh to bring in more.")
+        }
+        .accessibilityIdentifier("other-device-proposals")
     }
 
     private func historySection(_ closed: [Changeset]) -> some View {

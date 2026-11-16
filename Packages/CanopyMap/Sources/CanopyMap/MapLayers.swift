@@ -181,8 +181,52 @@ public struct MapLayers: Equatable, Sendable {
         public static func == (lhs: Reference, rhs: Reference) -> Bool { lhs === rhs }
     }
 
+    /// What the map draws while a tree is being moved, to set it by: where it stands now, and the crowns aerial lidar
+    /// (USGS 3DEP) found round it. Its new place is the map's middle, under the crosshair.
+    public struct MoveGuide: Equatable, Sendable {
+        /// A crown found by aerial lidar: its top, seen from above, and how wide it is.
+        public struct Crown: Identifiable, Hashable, Sendable {
+            public var id: UUID
+            public var centre: GeoPoint
+            /// In metres.
+            public var radius: Double
+            /// Canopy height, in metres, when known.
+            public var height: Double?
+            /// Whether this is the crown the moving tree itself was detected as.
+            public var isOwn: Bool
+
+            public init(id: UUID, centre: GeoPoint, radius: Double, height: Double? = nil, isOwn: Bool = false) {
+                self.id = id
+                self.centre = centre
+                self.radius = radius
+                self.height = height
+                self.isOwn = isOwn
+            }
+
+            /// A crown of a detection that gave no width: a quarter of its height, between 2 and 8 m, or 3 m.
+            public static func radius(height: Double?) -> Double {
+                height.map { min(max($0 / 4, 2), 8) } ?? 3
+            }
+        }
+
+        /// Where the tree stands now; nil when the player hides it.
+        public var from: GeoPoint?
+        /// Where it would go: the map's middle when it last settled.
+        public var to: GeoPoint
+        /// The crowns round it; empty when the player hides them.
+        public var crowns: [Crown]
+
+        public init(from: GeoPoint?, to: GeoPoint, crowns: [Crown]) {
+            self.from = from
+            self.to = to
+            self.crowns = crowns
+        }
+    }
+
     public var trees: [TreeMarker]
     public var tags: [TagMarker]
+    /// Set while a tree is being moved.
+    public var moveGuide: MoveGuide?
     public var routes: [RouteLine]
     public var tiles: [TileOutline]
     /// Park outline: outer rings of the boundary polygons.

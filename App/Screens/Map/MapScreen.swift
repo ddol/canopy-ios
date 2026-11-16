@@ -35,6 +35,11 @@ struct MapScreen: View {
     /// Where the player is, asked for once so the map can open there when that is not San Francisco.
     @State private var location = LocationProvider()
     @State private var openedAtPlayer = false
+    /// The crowns aerial lidar found round the tree being moved.
+    @State private var moveCrowns: [AppModel.Crown] = []
+    /// Whether the move guide shows where the tree stands now, and the crowns round it.
+    @AppStorage("canopy.move.showsFrom") private var showsMoveFrom = true
+    @AppStorage("canopy.move.showsCrowns") private var showsMoveCrowns = true
 
     private let format = QuantityFormat()
 
@@ -147,9 +152,23 @@ struct MapScreen: View {
 
     /// Centres the map close on the tree to move, its sheet closed so the map is free to drag.
     private func startMove() {
+        moveCrowns = []
         guard let tree = movingTree else { return }
         selection = nil
         focus = MapFocus(MapViewport(center: tree.position.geo, radius: Self.moveRadius))
+        Task {
+            let crowns = await model.crowns(near: tree)
+            if model.mapMove == tree.id { moveCrowns = crowns }
+        }
+    }
+
+    /// The tree's own crown, when it was detected as one, and how far the map's middle is from it.
+    private var ownCrown: AppModel.Crown? { moveCrowns.first(where: \.isOwn) }
+
+    /// What the map draws while `tree` is being moved.
+    private func moveGuide(_ tree: Tree) -> MapLayers.MoveGuide {
+        MapLayers.MoveGuide(
+            from: showsMoveFrom ? tree.position.geo : nil, to: centre, crowns: showsMoveCrowns ? moveCrowns : [])
     }
 
     /// How much of the map is in view round a tree being moved, in metres: close enough to set it within a metre.
@@ -157,8 +176,7 @@ struct MapScreen: View {
 
     /// How far, in metres, the map's middle is from where `tree` stands now.
     private func moveDistance(_ tree: Tree) -> Double {
-        let enu = LocalFrame(origin: tree.position.geo).enu(of: centre, altitude: 0)
-        return (enu.east * enu.east + enu.north * enu.north).squareRoot()
+        LocalFrame(origin: tree.position.geo).enu(of: centre).horizontalDistance
     }
 
     private func moveBar(_ tree: Tree) -> some View {
@@ -170,6 +188,24 @@ struct MapScreen: View {
             )
             .font(.footnote)
             .accessibilityIdentifier("move-distance")
+            Text(crownNote)
+                .font(.footnote)
+                .foregroundStyle(Color.canopyInkMuted)
+                .accessibilityIdentifier("move-crown-note")
+            HStack(spacing: Spacing.xs) {
+                Toggle(isOn: $showsMoveFrom) { Label("Now", systemImage: "smallcircle.circle") }
+                    .accessibilityIdentifier("move-show-from")
+                Toggle(isOn: $showsMoveCrowns) { Label("3DEP crowns", systemImage: "circle.dashed") }
+                    .accessibilityIdentifier("move-show-crowns")
+                    .disabled(moveCrowns.isEmpty)
+                Button("Snap to crown", systemImage: "scope") { snapToCrown() }
+                    .disabled(AppModel.snapTarget(for: centre, among: moveCrowns) == nil)
+                    .accessibilityIdentifier("move-snap")
+            }
+            .toggleStyle(.button)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .font(.footnote)
             HStack {
                 Button("Cancel", role: .cancel) { model.mapMove = nil }
                     .buttonStyle(.canopySecondary)
@@ -195,8 +231,36 @@ struct MapScreen: View {
         .accessibilityIdentifier("move-bar")
     }
 
+    /// What the guide says about the crowns aerial lidar found.
+    private var crownNote: String {
+        if let own = ownCrown {
+            let away = LocalFrame(origin: own.centre).enu(of: centre).horizontalDistance
+            return "Its crown in 3DEP (dark green ring) is " + format.length(away, fractionDigits: 1)
+                + " from the crosshair. A trunk stands under its crown unless the tree leans."
+        }
+        return moveCrowns.isEmpty
+            ? "No aerial lidar crowns here. Layers → Load real trees in view brings them in."
+            : "Green rings are crowns aerial lidar (3DEP) found. Snap to crown sets the crosshair on the nearest top."
+    }
+
+    /// Centres the map on the top of the crown nearest the crosshair: where aerial lidar puts the tree.
+    private func snapToCrown() {
+        guard let crown = AppModel.snapTarget(for: centre, among: moveCrowns) else { return }
+        // At the same scale as now.
+        let shown = viewport ?? MapViewport(center: centre, radius: Self.moveRadius)
+        focus = MapFocus(
+            MapViewport(
+                center: crown.centre, latitudeDelta: shown.latitudeDelta, longitudeDelta: shown.longitudeDelta))
+    }
+
     /// What the map draws, made once per update and shared by the map and the note under it.
     private var layers: MapLayers {
+        var layers = baseLayers
+        if let tree = movingTree { layers.moveGuide = moveGuide(tree) }
+        return layers
+    }
+
+    private var baseLayers: MapLayers {
         MapTiming.measure("layers") {
             MapLayers(
                 // Before the map reports where it is, the region it opens on: without one, everything is drawn in full.

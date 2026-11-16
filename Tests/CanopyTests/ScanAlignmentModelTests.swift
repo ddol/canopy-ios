@@ -104,27 +104,52 @@ import simd
         #expect(simd_distance(down.right, SIMD2(1, 0)) < 1e-5 && simd_distance(down.away, SIMD2(0, -1)) < 1e-5)
     }
 
-    /// Two fingers twisting carry the camera round an upright pole through the trunk: the ground stays down and level,
-    /// the camera keeps its distance and height, and a clockwise twist turns the scene clockwise seen from above.
-    @Test func aTwistTurnsTheViewAboutAnUprightPole() {
+    /// The view opens 3.2 m south of the trunk and 0.8 m above the point it turns about, looking at it.
+    @Test func theViewOpensSouthOfTheTrunk() {
         let pole = SIMD3<Float>(0, 1.37, 0)
         let node = SCNNode()
-        node.simdPosition = pole + SIMD3(0, 0.8, 3.2)
-        node.simdLook(at: pole)
-        let before = node.simdTransform
-        let upright = node.simdWorldUp.y
-        let level = simd_dot(node.simdWorldRight, SIMD3(0, 1, 0))
+        node.simdTransform = ScanOrbit.home(pole).transform
+        #expect(simd_distance(node.simdPosition, pole + SIMD3(0, 0.8, 3.2)) < 1e-4)
+        #expect(simd_distance(node.simdWorldFront, simd_normalize(pole - node.simdPosition)) < 1e-4)
+        #expect(abs(node.simdWorldRight.y) < 1e-6 && node.simdWorldUp.y > 0)
+    }
+
+    /// However the fingers drag, twist, pinch and slide, the camera never rolls: its right stays level and its up
+    /// toward the sky, so the ground stays down. A clockwise twist turns the scene clockwise seen from above.
+    @Test func noGestureTurnsTheGroundOver() {
+        let pole = SIMD3<Float>(0, 1.37, 0)
+        var orbit = ScanOrbit.home(pole)
+        let node = SCNNode()
         // A quarter turn clockwise: from the south, looking north, to the east, looking west.
-        node.simdTransform = ScanAlignmentCamera.turned(before, by: .pi / 2, about: pole)
+        node.simdTransform = orbit.twisting(by: .pi / 2).transform
         #expect(simd_distance(node.simdPosition, pole + SIMD3(3.2, 0.8, 0)) < 1e-4)
         #expect(simd_distance(simd_normalize(SIMD2(node.simdWorldFront.x, node.simdWorldFront.z)), SIMD2(-1, 0)) < 1e-3)
-        // However far it turns, its up keeps the same height above the ground: no roll.
-        for _ in 0..<7 {
-            node.simdTransform = ScanAlignmentCamera.turned(node.simdTransform, by: 1.1, about: pole)
-            #expect(abs(simd_length(node.simdPosition - pole) - simd_length(SIMD3<Float>(0, 0.8, 3.2))) < 1e-3)
-            #expect(abs(node.simdWorldUp.y - upright) < 1e-4)
-            #expect(abs(simd_dot(node.simdWorldRight, SIMD3(0, 1, 0)) - level) < 1e-4)
+        for step in 0..<40 {
+            let k = CGFloat(step)
+            orbit = orbit.orbiting(by: CGPoint(x: 37 * sin(k), y: 90 * cos(k * 1.3)))
+                .twisting(by: Float(sin(k * 0.7)) * 2)
+                .pinching(by: 1 + 0.3 * sin(k))
+                .sliding(by: CGPoint(x: 20 * cos(k), y: 15 * sin(k)), height: 800, fieldOfView: 50)
+            node.simdTransform = orbit.transform
+            #expect(abs(node.simdWorldRight.y) < 1e-5)
+            #expect(node.simdWorldUp.y > 0)
+            #expect(ScanOrbit.elevations.contains(orbit.elevation))
+            #expect(abs(simd_distance(node.simdPosition, orbit.target) - orbit.distance) < 1e-3 * orbit.distance)
+            #expect(simd_distance(node.simdWorldFront, simd_normalize(orbit.target - node.simdPosition)) < 1e-3)
         }
+    }
+
+    /// Dragging one finger down looks down on the trunk; two fingers dragged down slide the scan down the screen, so
+    /// the view rises up the trunk.
+    @Test func dragsMoveTheViewAsTheyLook() {
+        let pole = SIMD3<Float>(0, 1.37, 0)
+        let home = ScanOrbit.home(pole)
+        #expect(home.orbiting(by: CGPoint(x: 0, y: 50)).elevation > home.elevation)
+        #expect(home.orbiting(by: CGPoint(x: 0, y: 5000)).elevation == ScanOrbit.elevations.upperBound)
+        #expect(home.sliding(by: CGPoint(x: 0, y: 100), height: 800, fieldOfView: 50).target.y > pole.y)
+        // Sliding right moves the scan right, so the view moves left: west, seen from the south.
+        #expect(home.sliding(by: CGPoint(x: 100, y: 0), height: 800, fieldOfView: 50).target.x < 0)
+        #expect(home.pinching(by: 2).distance < home.distance)
     }
 
     /// The scan is readied to draw off the main thread: a unit normal at every vertex and each edge once.
