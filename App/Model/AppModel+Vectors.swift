@@ -112,18 +112,20 @@ extension AppModel {
     nonisolated static func reference(
         _ vectors: VectorReference, georeference: SiteGeoreference, token: String = ""
     ) -> MapLayers.Reference {
-        let lines = vectors.features.compactMap { feature -> MapLayers.Reference.Line? in
-            if feature.layer == .trees {
-                guard let tree = GerardusTree(feature.line) else { return nil }
-                return MapLayers.Reference.Line(
-                    kind: .tree, points: crown(of: tree, georeference: georeference), closed: true)
-            }
-            guard let kind = lineKind(layer: feature.layer, kind: feature.line.kind) else { return nil }
-            let points = feature.line.points.map { georeference.geo(x: $0.x, y: $0.y) }
-            guard Set(points.map { [$0.latitude, $0.longitude] }).count >= 2 else { return nil }
-            return MapLayers.Reference.Line(
-                kind: kind, points: points, closed: feature.line.closed || kind == .building || kind == .surface)
+        // A clump's segments are one tree, one crown.
+        let trees = SiteWireframes.trees(in: vectors.features).map { tree in
+            MapLayers.Reference.Line(kind: .tree, points: crown(of: tree, georeference: georeference), closed: true)
         }
+        let lines =
+            trees
+            + vectors.features.compactMap { feature -> MapLayers.Reference.Line? in
+                if feature.layer == .trees { return nil }
+                guard let kind = lineKind(layer: feature.layer, kind: feature.line.kind) else { return nil }
+                let points = feature.line.points.map { georeference.geo(x: $0.x, y: $0.y) }
+                guard Set(points.map { [$0.latitude, $0.longitude] }).count >= 2 else { return nil }
+                return MapLayers.Reference.Line(
+                    kind: kind, points: points, closed: feature.line.closed || kind == .building || kind == .surface)
+            }
         return MapLayers.Reference(
             canopies: [], lines: lines,
             sites: [MapLayers.Reference.Site(token: token, vectors: vectors, georeference: georeference)])

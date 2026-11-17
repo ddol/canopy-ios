@@ -69,11 +69,12 @@ Registering to aerial crowns, which should bring σ down to well under a metre, 
 | `countStatus` | `CountStatus` | The agreed status on the shared map |
 | `proposedStatus` | `CountStatus?` | **Local only.** The status this device has proposed and is waiting for agreement on |
 | `species`, `localName` | String? | |
-| `dbh` | `DBH?` | `diameter` (`Quantity`, m), `method` (`lidarCircleFit`, `tape`, `estimate`), `height` (1.37 m) |
+| `dbh` | `DBH?` | `diameter` (`Quantity`, m), `method` (`lidarCircleFit`, `tape`, `estimate`), `height` (1.37 m). For a tree of several stems, their equivalent DBH: √Σd² |
 | `lean` | `Lean?` | `angle` from vertical (`Quantity`, °), `azimuth` from true north (`Quantity?`, °) |
 | `height` | `TreeHeight?` | `height` (`Quantity`, m), `source` (`aerialLidar`, `groundLidar`, `estimate`) |
 | `evidenceRefs` | [`BlobRef`] | SHA-256 of evidence meshes |
 | `candidateID` | String? | The aerial candidate the tree came from |
+| `stems` | [`StemMeasure`]? | Every stem at breast height, for a tree with more than one there: `diameter` (`Quantity`, m), `east` and `north` of `position` (m), `lean`. Absent for one stem. A client that does not know it ignores it, and Gerardus keeps it as sent ([MULTI-STEM.md](MULTI-STEM.md)) |
 
 A `Quantity` is a value and its standard uncertainty (one standard deviation): `0.42 ± 0.01 m`.
 
@@ -198,7 +199,8 @@ shares it, and a `kind`:
 | `treeAdded(Tree)` | Census → New tree here |
 | `treeRejected(treeID)` | Census → Not a tree |
 | `treeMoved(treeID, position)` | Census → Move → Place here: the tree's true spot, placed in AR |
-| `trunkMeasured(treeID, dbh, lean, evidence)` | Census → Scan trunk |
+| `trunkMeasured(treeID, dbh, lean, evidence, stems)` | Census → Scan trunk. `stems` for a tree of several, nil in a log written before stems were kept |
+| `stemsMeasured(treeID, dbh, stems)` | Census → Stems: a measured tree's stems sorted with no new scan (Not a stem, Add, Split here) |
 | `tagPlaced(Tag)` | Tag |
 
 ## Deriving the current state

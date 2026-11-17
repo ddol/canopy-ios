@@ -241,7 +241,10 @@ struct SelectedTreeCard: View {
             if !reading.fromAR { parts.append("by GPS") }
         }
         if let dbh = focus.dbh {
-            parts.append("DBH " + format.length(dbh.diameter.value, uncertainty: dbh.diameter.uncertainty))
+            let stems = focus.tree?.stemCount ?? 1
+            parts.append(
+                (stems > 1 ? "\(stems) stems, DBH " : "DBH ")
+                    + format.length(dbh.diameter.value, uncertainty: dbh.diameter.uncertainty))
         }
         return parts.joined(separator: " · ")
     }

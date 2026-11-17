@@ -50,10 +50,12 @@ public struct MapLayers: Equatable, Sendable {
         public var lean: Lean?
         /// A detection in a cell the player has marked as surveyed: looked over without a verdict, drawn faint.
         public var inSurveyedCell = false
+        /// Every stem, for a tree of several (`Tree.stems`); `dbh` is then their equivalent DBH.
+        public var stems: [StemMeasure]?
 
         public init(
             id: UUID, location: GeoPoint, status: CountStatus, hazardCount: Int, dbh: Double? = nil,
-            height: Double? = nil, lean: Lean? = nil, inSurveyedCell: Bool = false
+            height: Double? = nil, lean: Lean? = nil, inSurveyedCell: Bool = false, stems: [StemMeasure]? = nil
         ) {
             self.id = id
             self.location = location
@@ -63,6 +65,7 @@ public struct MapLayers: Equatable, Sendable {
             self.height = height
             self.lean = lean
             self.inSurveyedCell = inSurveyedCell
+            self.stems = stems
         }
 
         public var symbol: TreeSymbol { TreeSymbol(status) }
@@ -475,7 +478,7 @@ public struct MapLayers: Equatable, Sendable {
                     id: tree.id, location: shown.location, status: shown.status,
                     hazardCount: hazards[tree.id] ?? 0, dbh: tree.dbh?.diameter.value,
                     height: tree.height?.height.value, lean: tree.lean,
-                    inSurveyedCell: shown.status == .detected && surveyed.contains(shown.tile))
+                    inSurveyedCell: shown.status == .detected && surveyed.contains(shown.tile), stems: tree.stems)
             }
 
         var tags: [TagMarker] = []

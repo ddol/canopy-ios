@@ -110,13 +110,15 @@ enum WireframeTrees {
         var pickable: [(id: UUID, base: SIMD3<Float>, top: SIMD3<Float>)] = []
     }
 
-    /// Rings of 16 sides; 8 for detected trees when hundreds are drawn, which halves a neighbourhood's lines.
+    /// Rings of 16 sides; 8 for detected trees when hundreds are drawn, which halves a neighbourhood's lines, and for a
+    /// tree of more than three stems, each a trunk of its own. `count` is how many trunks are drawn, every stem of a
+    /// tree of several counted.
     static func detail(_ marker: MapLayers.TreeMarker, among count: Int) -> Float {
-        marker.status == .detected && count > 400 ? 0.25 : 0.5
+        (marker.status == .detected && count > 400) || (marker.stems?.count ?? 1) > 3 ? 0.25 : 0.5
     }
 
     /// A census tree's figure standing at `base`, from its fitted profile, the shape the player gave it, or its
-    /// measurements, and its height.
+    /// measurements (with every stem, for a tree of several), and its height.
     static func figure(
         _ marker: MapLayers.TreeMarker, at base: SIMD3<Float>, forms: [String: TreeForm],
         profiles: [String: TreeProfile], detail: Float
@@ -124,8 +126,9 @@ enum WireframeTrees {
         let key = MapLayers.censusWireframeID(marker.id)
         let profile = profiles[key]
         let form = profile?.form ?? forms[key] ?? Self.form(marker)
+        let drawn = profile ?? marker.stems.map { TreeProfile(form: form, stems: $0) }
         let figure =
-            profile.map { WireframeTree.figure($0, lean: marker.lean, at: base, detail: detail) }
+            drawn.map { WireframeTree.figure($0, lean: marker.lean, at: base, detail: detail) }
             ?? WireframeTree.figure(form, lean: marker.lean, at: base, detail: detail)
         return (figure, form.height)
     }
@@ -136,11 +139,17 @@ enum WireframeTrees {
         place: (GeoPoint) -> SIMD3<Float>
     ) -> Batches {
         var batches = Batches()
+        let trunks = markers.reduce(0) { $0 + ($1.stems?.count ?? 1) }
         for marker in markers where marker.status != .removed {
             let base = place(marker.location)
             let (figure, height) = Self.figure(
-                marker, at: base, forms: forms, profiles: profiles, detail: detail(marker, among: markers.count))
+                marker, at: base, forms: forms, profiles: profiles, detail: detail(marker, among: trunks))
             batches.pickable.append((marker.id, base, base + SIMD3(0, Float(height), 0)))
+            // Tapping any stem of a tree of several picks the tree.
+            for stem in marker.stems ?? [] where stem.distance > 0.3 {
+                let at = base + SIMD3(Float(stem.east), 0, Float(-stem.north))
+                batches.pickable.append((marker.id, at, at + SIMD3(0, Float(height), 0)))
+            }
             let look = Look(status: marker.status, faint: marker.inSurveyedCell)
             batches.meshes[look, default: VectorMesh(place: { $0 })].add(sceneSegments: figure.all)
         }
@@ -554,9 +563,7 @@ struct WireframeMap: UIViewRepresentable {
             forms: [String: TreeForm]
         ) -> VectorMesh {
             var trees = VectorMesh(place: { transform.place($0) })
-            for feature in site.vectors.features where feature.layer == .trees && owners[feature.line.featureID] == key
-            {
-                guard var tree = GerardusTree(feature.line) else { continue }
+            for var tree in SiteWireframes.trees(in: site.vectors.features) where owners[tree.id] == key {
                 if let form = forms[tree.id] { tree.form = form }
                 trees.add(tree)
             }

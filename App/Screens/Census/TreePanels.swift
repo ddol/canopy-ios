@@ -56,10 +56,13 @@ struct TreeFitPanel: View {
     var onMoveHere: () -> Void
     var onBack: () -> Void
     var onMeasurement: () -> Void
+    /// The tree's stems at breast height, to sort in Stems.
+    var stems = TreeStemsEditor.Actions()
 
     enum Mode: String, CaseIterable {
         case shape
         case rings
+        case stems
     }
 
     @State private var mode = Mode.shape
@@ -75,6 +78,7 @@ struct TreeFitPanel: View {
                 Picker("Edit", selection: $mode) {
                     Text("Shape").tag(Mode.shape)
                     Text("Rings").tag(Mode.rings)
+                    Text(stems.count > 1 ? "Stems \(stems.count)" : "Stems").tag(Mode.stems)
                 }
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("fit-mode")
@@ -99,6 +103,9 @@ struct TreeFitPanel: View {
                     profile: $fitting.profile, selected: $selectedSection, beforeConfirming: $beforeConfirming,
                     onSnap: onSnap, isAligning: isAligning, alignStatus: alignStatus, onAlign: onAlign,
                     folded: folded)
+            case .stems:
+                TreeStemsEditor(
+                    profile: fitting.profile, selected: $selectedSection, actions: stems, folded: folded)
             }
             HStack(spacing: Spacing.s) {
                 Button("Back", systemImage: "chevron.backward", action: onBack)
@@ -124,6 +131,7 @@ struct TreeFitPanel: View {
                     ?? fitting.profile.sections.first?.id
             }
             if mode == .shape { selectedSection = nil }
+            if mode == .stems { selectedSection = TreeStemsEditor.ring(of: nil, in: fitting.profile)?.id }
         }
     }
 }
@@ -319,6 +327,134 @@ struct TreeSectionEditor: View {
                 .foregroundStyle(Color.canopyInkMuted)
                 .frame(width: 58, alignment: .trailing)
         }
+    }
+}
+
+/// A tree's stems at breast height, to sort them: one chip per stem with its diameter (picking one picks out its ring
+/// there in AR), the equivalent DBH of them all, and the buttons to take out what is not a stem, add one the scan
+/// missed, split the clump into two trees with a cut through the middle of the screen, and record the stems.
+struct TreeStemsEditor: View {
+    /// What the census does with the stems.
+    struct Actions {
+        /// How many stems the tree has at breast height, the other scans' included.
+        var count = 1
+        /// Stems of the tree measured by other scans, kept with these.
+        var others = 0
+        /// The tree's equivalent DBH, as recorded or to be.
+        var dbh: DBH?
+        /// Whether the stems have changed since they were recorded.
+        var isChanged = false
+        var onRemove: (Int) -> Void = { _ in }
+        var onAdd: () -> Void = {}
+        var onSplit: () -> Void = {}
+        var onSave: () -> Void = {}
+    }
+
+    let profile: TreeProfile
+    @Binding var selected: TreeSection.ID?
+    var actions: Actions
+    var folded = false
+    private let format = QuantityFormat()
+
+    /// The ring a stem is picked out by: its ring nearest breast height.
+    static func ring(of stem: Int?, in profile: TreeProfile) -> TreeSection? {
+        profile.rings(onStem: stem).min {
+            abs($0.height - DBH.standardHeight) < abs($1.height - DBH.standardHeight)
+        }
+    }
+
+    private var stems: [BreastHeightStem] { profile.breastHeightStems() }
+    /// The stem picked, by the ring picked out.
+    private var pickedStem: Int?? { selected.flatMap { profile.section($0) }.map(\.stem) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            ScrollView(.horizontal) {
+                HStack(spacing: Spacing.xs) {
+                    ForEach(Array(stems.enumerated()), id: \.offset) { index, stem in
+                        chip(stem, number: index + 1)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+            .accessibilityIdentifier("fit-stems")
+            Text(summary)
+                .font(CanopyFont.mono(.caption2))
+                .foregroundStyle(Color.canopyInkMuted)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("stems-summary")
+            if !folded {
+                HStack(spacing: Spacing.xs) {
+                    Button("Not a stem", systemImage: "xmark.circle", role: .destructive) {
+                        if case .some(.some(let stem)) = pickedStem { actions.onRemove(stem) }
+                    }
+                    .disabled(!isOtherStemPicked)
+                    .accessibilityIdentifier("stem-remove")
+                    Button("Add", systemImage: "plus.circle", action: actions.onAdd)
+                        .accessibilityIdentifier("stem-add")
+                    Button("Split here", systemImage: "scissors", action: actions.onSplit)
+                        .disabled(profile.groundStems.isEmpty)
+                        .accessibilityIdentifier("stem-split")
+                    Spacer(minLength: 0)
+                    Button("Save", systemImage: "square.and.arrow.down", action: actions.onSave)
+                        .disabled(!actions.isChanged)
+                        .accessibilityIdentifier("stems-save")
+                }
+                .buttonStyle(.canopySecondary)
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+            }
+        }
+    }
+
+    /// Whether a stem other than the main trunk is picked, which can be taken out.
+    private var isOtherStemPicked: Bool {
+        if case .some(.some) = pickedStem { true } else { false }
+    }
+
+    private var summary: String {
+        var text =
+            stems.count == 1
+            ? "One stem at breast height."
+            : "\(stems.count) stems at breast height"
+        if actions.others > 0 {
+            text += (stems.count == 1 ? " " : ", ") + "and \(actions.others) from another scan"
+        }
+        if let dbh = actions.dbh, actions.count > 1 {
+            text +=
+                (text.hasSuffix(".") ? " " : ": ") + "equivalent DBH "
+                + format.length(dbh.diameter.value, uncertainty: dbh.diameter.uncertainty)
+        }
+        if !text.hasSuffix(".") { text += "." }
+        if !folded {
+            text += " Aim between stems for Split here, at a missed one for Add."
+        }
+        return text
+    }
+
+    private func chip(_ stem: BreastHeightStem, number: Int) -> some View {
+        let picked = pickedStem == .some(stem.stem)
+        let tint = stem.isMeasured ? Color.canopyAccent : Color.canopyInkMuted
+        return Button {
+            selected = Self.ring(of: stem.stem, in: profile)?.id
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: stem.stem == nil ? "circle.circle" : "circle")
+                Text("⌀ " + format.length(stem.diameter, fractionDigits: 2))
+            }
+            .font(CanopyFont.mono(.caption))
+            .padding(.horizontal, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
+            .background(tint.opacity(picked ? 0.3 : 0.12), in: Capsule())
+            .overlay(Capsule().strokeBorder(picked ? tint : .clear, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            (stem.stem == nil ? "Main stem" : "Stem \(number)") + ", "
+                + format.length(stem.diameter, fractionDigits: 2) + " across"
+        )
+        .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }
 

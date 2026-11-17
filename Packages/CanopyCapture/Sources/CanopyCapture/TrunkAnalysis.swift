@@ -27,7 +27,30 @@ public struct TrunkAnalysis: Sendable {
         public var stemCenters: [SIMD3<Double>]
         /// How many raw depth points the DBH circle was fitted to; 0 when it came from the mesh's slices.
         public var depthPointCount = 0
+        /// Every stem of the tree the slice 1.37 m up crosses, the one the scan started on (`circle`) first: the
+        /// stems standing no further than `TrunkAnalysis.clumpGap` apart, bark to bark, from it or from each other.
+        /// In the mesh frame (x, z), as `circle`. Just `circle` for a tree of one stem.
+        public var stems: [FittedCircle] = []
+
+        /// The equivalent DBH of every stem (`DBH.equivalent`), or the scanned stem's for a tree of one.
+        public var equivalentDBH: DBH {
+            guard stems.count > 1 else { return dbh }
+            let diameters = stems.enumerated().map { index, stem in
+                index == 0
+                    ? dbh.diameter
+                    : Quantity(
+                        2 * stem.radius, uncertainty: (pow(2 * stem.radiusUncertainty, 2) + 0.005 * 0.005).squareRoot())
+            }
+            return DBH.equivalent(of: diameters, method: dbh.method) ?? dbh
+        }
     }
+
+    /// Stems standing further apart than this, bark to bark, in metres, are not taken for one tree's: a clump's
+    /// stems stand closer. The player can still split a clump into trees, or take a stem out, in the census.
+    public static let clumpGap = 1.5
+    /// Whether every stem of a clump is looked for at breast height, not only the scanned one. Off for the live
+    /// progress, which only needs the scanned stem.
+    public var findsStems = true
 
     /// Offsets from 1.37 m above the ground that are sliced and pooled for the DBH fit, in metres.
     public var sliceOffsets: [Double] = [-0.04, -0.02, 0, 0.02, 0.04]
@@ -93,8 +116,32 @@ public struct TrunkAnalysis: Sendable {
             circle: circle,
             center: circle.center,
             stemCenters: stemCenters,
-            depthPointCount: fromDepth ? band.count : 0
+            depthPointCount: fromDepth ? band.count : 0,
+            stems: findsStems ? Self.clump(of: circle, in: slice, plausible: plausibleDiameters) : [circle]
         )
+    }
+
+    /// The stems of the tree whose stem is `scanned`, as the slice crosses them: `scanned` first, then every other
+    /// ring through the slice (`TrunkStems.rings`) of a plausible trunk's size that stands within `clumpGap`, bark to
+    /// bark, of one already taken, nearest first.
+    static func clump(
+        of scanned: FittedCircle, in slice: [SIMD2<Double>], plausible: ClosedRange<Double>
+    ) -> [FittedCircle] {
+        var others = TrunkStems.rings(through: slice).filter { ring in
+            // Not the scanned stem again.
+            simd_distance(ring.center, scanned.center) > max(ring.radius, scanned.radius)
+                && plausible.contains(2 * ring.radius)
+        }
+        var clump = [scanned]
+        func gap(_ ring: FittedCircle) -> Double {
+            clump.map { simd_distance($0.center, ring.center) - $0.radius - ring.radius }.min() ?? .infinity
+        }
+        while let next = others.indices.min(by: { gap(others[$0]) < gap(others[$1]) }), gap(others[next]) <= clumpGap {
+            // Overlapping the ones taken: the same bark seen twice, not a stem of its own.
+            if gap(others[next]) > -0.02 { clump.append(others[next]) }
+            others.remove(at: next)
+        }
+        return clump
     }
 
     /// The points of a slice on the trunk whose surface passes nearest `point` (the scan's start, on the bark): the
