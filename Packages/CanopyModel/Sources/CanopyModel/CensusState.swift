@@ -101,10 +101,16 @@ public struct CensusState: Hashable, Sendable {
                     tree.countStatus = .confirmed
                 }
             }
-        case .trunkMeasured(let id, let dbh, let lean, let evidence):
+        case .stemsMeasured(let id, let dbh, let stems):
+            update(tree: id) { tree in
+                tree.dbh = dbh
+                tree.stems = stems.count > 1 ? stems : nil
+            }
+        case .trunkMeasured(let id, let dbh, let lean, let evidence, let stems):
             update(tree: id) { tree in
                 tree.dbh = dbh
                 tree.lean = lean
+                tree.stems = (stems?.count ?? 0) > 1 ? stems : nil
                 if !tree.evidenceRefs.contains(evidence) {
                     tree.evidenceRefs.append(evidence)
                 }

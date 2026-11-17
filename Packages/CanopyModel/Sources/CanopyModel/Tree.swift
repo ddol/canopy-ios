@@ -36,6 +36,57 @@ public struct DBH: Hashable, Codable, Sendable {
         self.method = method
         self.height = height
     }
+
+    /// The DBH a tree of several stems is reported by, as urban forest inventories do: the diameter of the one stem
+    /// whose cross-section is all of theirs together, the square root of the sum of their squared diameters. Its
+    /// uncertainty follows from theirs. Nil without a stem.
+    public static func equivalent(of stems: [Quantity], method: Method) -> DBH? {
+        guard !stems.isEmpty else { return nil }
+        let sum = stems.reduce(0) { $0 + $1.value * $1.value }
+        let diameter = sum.squareRoot()
+        // dD/dd_i = d_i / D.
+        let variance = stems.reduce(0) { $0 + pow($1.value * $1.uncertainty, 2) }
+        let uncertainty = diameter > 0 ? variance.squareRoot() / diameter : stems[0].uncertainty
+        return DBH(diameter: Quantity(diameter, uncertainty: uncertainty), method: method)
+    }
+}
+
+/// One stem of a tree that comes out of the ground, or forks below breast height, as several: its diameter at
+/// breast height and where it stands, in metres east and north of the tree's position.
+public struct StemMeasure: Hashable, Codable, Sendable {
+    /// At breast height (`DBH.standardHeight`), in metres.
+    public var diameter: Quantity
+    /// From the tree's position, on the ground, in metres.
+    public var east: Double
+    public var north: Double
+    public var lean: Lean?
+
+    public init(diameter: Quantity, east: Double, north: Double, lean: Lean? = nil) {
+        self.diameter = diameter
+        self.east = east
+        self.north = north
+        self.lean = lean
+    }
+
+    public var distance: Double { (east * east + north * north).squareRoot() }
+
+    /// The stems of two scans of one tree together: a stem of `new` standing within `within` metres of one already
+    /// measured replaces it, and the rest are added.
+    public static func merging(_ old: [StemMeasure], with new: [StemMeasure], within: Double = 0.15) -> [StemMeasure] {
+        var merged = old
+        for stem in new {
+            let near = merged.indices.filter {
+                let (de, dn) = (merged[$0].east - stem.east, merged[$0].north - stem.north)
+                return (de * de + dn * dn).squareRoot() <= within
+            }
+            if let index = near.first {
+                merged[index] = stem
+            } else {
+                merged.append(stem)
+            }
+        }
+        return merged
+    }
 }
 
 /// How far a trunk leans from vertical.
@@ -77,12 +128,16 @@ public struct Tree: Identifiable, Hashable, Codable, Sendable {
     public var proposedStatus: CountStatus?
     public var species: String?
     public var localName: String?
+    /// For a tree of several stems, the equivalent DBH of them all (`DBH.equivalent`).
     public var dbh: DBH?
     public var lean: Lean?
     public var height: TreeHeight?
     public var evidenceRefs: [BlobRef]
     /// The aerial candidate this tree was detected as, if any.
     public var candidateID: String?
+    /// Every stem at breast height, for a tree with more than one there; nil for a tree of one stem. Shared as
+    /// `stems`, which a client that does not know it ignores.
+    public var stems: [StemMeasure]?
 
     public init(
         meta: RecordMeta,
@@ -95,7 +150,8 @@ public struct Tree: Identifiable, Hashable, Codable, Sendable {
         lean: Lean? = nil,
         height: TreeHeight? = nil,
         evidenceRefs: [BlobRef] = [],
-        candidateID: String? = nil
+        candidateID: String? = nil,
+        stems: [StemMeasure]? = nil
     ) {
         self.meta = meta
         self.position = position
@@ -108,9 +164,13 @@ public struct Tree: Identifiable, Hashable, Codable, Sendable {
         self.height = height
         self.evidenceRefs = evidenceRefs
         self.candidateID = candidateID
+        self.stems = stems
     }
 
     public var id: UUID { meta.id }
+
+    /// How many stems the tree has at breast height, as far as is known.
+    public var stemCount: Int { max(stems?.count ?? 1, 1) }
 
     /// The status to show: `proposed` while this device waits for agreement, otherwise the agreed status.
     public var displayStatus: CountStatus { proposedStatus == nil ? countStatus : .proposed }

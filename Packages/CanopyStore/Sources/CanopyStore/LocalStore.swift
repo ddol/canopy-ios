@@ -279,7 +279,8 @@ public actor LocalStore {
             chunk = tree.position.chunk
         case .tagPlaced(let tag):
             chunk = tag.point.position.chunk
-        case .treeConfirmed(let id), .treeRejected(let id), .trunkMeasured(let id, _, _, _), .treeMoved(let id, _):
+        case .treeConfirmed(let id), .treeRejected(let id), .trunkMeasured(let id, _, _, _, _), .treeMoved(let id, _),
+            .stemsMeasured(let id, _, _):
             guard let tree = current.trees[id] else { throw LocalStoreError.unknownSubject(subject.id) }
             chunk = tree.position.chunk
         }

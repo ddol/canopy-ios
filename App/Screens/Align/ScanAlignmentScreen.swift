@@ -199,6 +199,15 @@ struct ScanAlignmentScreen: View {
             Spacer()
             nudges(step: 0.01, move: moveRing)
         }
+        if ring.part == .trunk, !profile.stemIDs.isEmpty {
+            // One stem against the aerial points, with every stem growing off it, the others left where they are.
+            HStack {
+                Text(ring.stem == nil ? "Main stem" : "Whole stem")
+                Spacer()
+                nudges(step: 0.02, move: { moveStem(ring.stem, by: $0) })
+            }
+            .accessibilityIdentifier("align-stem-nudges")
+        }
         HStack(spacing: Spacing.s) {
             Button("Snap to scan", systemImage: "scope") { snap(ring) }
                 .buttonStyle(.canopyPrimary)
@@ -213,7 +222,15 @@ struct ScanAlignmentScreen: View {
                     changed()
                 }
                 Button("Split into stems here", systemImage: "arrow.triangle.branch") { split(ring) }
-                    .disabled(ring.part != .trunk || ring.stem != nil)
+                    .disabled(ring.part != .trunk)
+                if ring.part == .trunk, let stem = ring.stem {
+                    Button("Take this stem out", systemImage: "xmark.circle", role: .destructive) {
+                        profile.removeStem(stem)
+                        selected = profile.mainTrunk.first?.id
+                        note = "Took the stem out, with any stem growing off it."
+                        changed()
+                    }
+                }
                 Button("Take this ring out", systemImage: "minus", role: .destructive) {
                     profile.removeSection(ring.id)
                     selected = profile.section(ring.id) == nil ? nil : ring.id
@@ -394,7 +411,9 @@ struct ScanAlignmentScreen: View {
     // MARK: Text
 
     private func label(_ ring: TreeSection) -> String {
-        (ring.stem.map { "Stem \($0 + 1) · " } ?? "") + ring.part.label + " "
+        (ring.stem.map { stem in
+            "Stem \(stem + 1)" + (profile.groundStems.contains(stem) ? " (own base)" : "") + " · "
+        } ?? "") + ring.part.label + " "
             + format.length(ring.height, fractionDigits: 2) + " up · "
             + format.length(ring.diameter, fractionDigits: 2) + MeasurementSheet.mark(ring.source)
     }
@@ -493,6 +512,20 @@ struct ScanAlignmentScreen: View {
         edit(ring.id) { $0.offset = start + SIMD2(Double(delta.x), Double(delta.y)) }
     }
 
+    /// Moves a stem (nil: the main trunk) and the stems growing off it by `delta` on the ground (scene x and z): their
+    /// rings are set by eye from then on.
+    private func moveStem(_ stem: Int?, by delta: SIMD2<Float>) {
+        let moving = Set(profile.descendants(of: stem) + (stem.map { [$0] } ?? []))
+        profile.moveStem(stem, by: SIMD2(Double(delta.x), Double(delta.y)), lean: tree?.lean)
+        for ring in profile.trunk where ring.stem.map(moving.contains) ?? (stem == nil) {
+            var moved = ring
+            moved.source = .eye
+            moved.radiusUncertainty = nil
+            profile[ring.id] = moved
+        }
+        changed()
+    }
+
     /// Moves Gerardus's tree by `delta` on the ground (scene x east and z south).
     private func moveVectorTree(_ delta: SIMD2<Float>) {
         placement?.placed += SIMD2(Double(delta.x), -Double(delta.y))
@@ -550,12 +583,12 @@ struct ScanAlignmentScreen: View {
         isFitting = true
         Task {
             defer { isFitting = false }
-            let (snapped, count, stems) = await Task.detached {
+            let (snapped, count, _) = await Task.detached {
                 saved.snappingTrunk(current, groundHeight: ground, lean: lean)
             }.value
             profile = snapped
             if selected.flatMap(profile.section) == nil { selected = profile.trunk.first?.id }
-            note = Self.snappedNote(count, stems: stems)
+            note = Self.snappedNote(count, profile: snapped)
             changed()
         }
     }
@@ -579,19 +612,36 @@ struct ScanAlignmentScreen: View {
             }
             profile = split
             selected = rings.first
-            note = "Split into \(rings.count) stems, each fitted to the scan. Add rings up a stem from More."
+            note =
+                "Split into \(rings.count) stems, each fitted to the scan. Add rings up a stem from More, or move a "
+                + "whole stem with its nudges."
             changed()
         }
     }
 
-    static func snappedNote(_ count: Int, stems: Int = 0) -> String {
-        let snapped =
+    static func snappedNote(_ count: Int, profile: TreeProfile? = nil) -> String {
+        var note =
             switch count {
             case 0: "No trunk ring could be fitted to the scan."
             case 1: "Snapped one trunk ring to the scan."
             default: "Snapped \(count) trunk rings to the scan."
             }
-        return stems >= 2 ? snapped + " The trunk forks into \(stems) stems." : snapped
+        guard let profile else { return note }
+        let forks = profile.forks(of: nil).count
+        if forks >= 2 { note += " The trunk forks into \(forks) stems." }
+        let ground = profile.groundStems.count
+        if ground > 0 {
+            note +=
+                ground == 1
+                ? " One more stem comes out of the ground." : " \(ground) more stems come out of the ground."
+        }
+        let breast = profile.breastHeightStems().count
+        if breast > 1, let equivalent = profile.equivalentDiameter() {
+            note +=
+                " \(breast) stems at breast height, equivalent DBH "
+                + QuantityFormat().length(equivalent, fractionDigits: 2) + "."
+        }
+        return note
     }
 
     // MARK: Canopy
@@ -769,11 +819,11 @@ struct ScanAlignmentScreen: View {
                 // Nothing fitted yet: the census's shape, with the trunk's rings snapped to the scan, as AR starts.
                 let fresh = TreeProfile(form: AppModel.knownForm(tree))
                 let lean = tree?.lean
-                let (snapped, count, stems) = await Task.detached {
+                let (snapped, count, _) = await Task.detached {
                     loaded.snappingTrunk(fresh, groundHeight: ground, lean: lean)
                 }.value
                 start = snapped
-                note = Self.snappedNote(count, stems: stems)
+                note = Self.snappedNote(count, profile: snapped)
             }
             profile = start ?? profile
             crown = alignment?.crown ?? CrownShape(profile)

@@ -43,6 +43,18 @@ struct MeasurementSheet: View {
                             .font(CanopyFont.mono(.largeTitle, weight: .semibold))
                             .accessibilityIdentifier("dbh-value")
                     }
+                    if let profile = measurement.profile, profile.breastHeightStems(lean: analysis.lean).count > 1 {
+                        let stems = profile.breastHeightStems(lean: analysis.lean)
+                        LabeledContent("Stems at breast height") {
+                            Text(
+                                "\(stems.count), equivalent "
+                                    + format.length(
+                                        profile.equivalentDiameter(lean: analysis.lean) ?? 0, fractionDigits: 2)
+                            )
+                            .font(CanopyFont.mono())
+                        }
+                        .accessibilityIdentifier("measurement-stems")
+                    }
                     if let lean = analysis.lean {
                         LabeledContent("Lean") {
                             Text(leanText(lean)).font(CanopyFont.mono())

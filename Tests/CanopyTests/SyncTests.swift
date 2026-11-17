@@ -13,7 +13,8 @@ import Testing
 /// server's `serve --admin`): `TEST_RUNNER_CANOPY_GERARDUS_MAP_URL=http://127.0.0.1:50071
 /// TEST_RUNNER_CANOPY_GERARDUS_ADMIN=T:_canopy-admin scripts/test.sh -only-testing:CanopyTests/SyncTests`.
 @MainActor
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["CANOPY_GERARDUS_MAP_URL"] != nil))
+// One at a time: run side by side against one server, their connections were dropped.
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CANOPY_GERARDUS_MAP_URL"] != nil))
 struct SyncTests {
     @Test func syncSendsChangesToTheServerAndBringsBackItsVerdict() async throws {
         let environment = ProcessInfo.processInfo.environment
@@ -123,5 +124,55 @@ struct SyncTests {
         let confirmed = try #require(a.tree(candidate.id))
         #expect(confirmed.countStatus == .confirmed && confirmed.proposedStatus == nil)
         #expect(confirmed.meta.version == 2)
+    }
+
+    /// A tree of several stems keeps them through the server: Gerardus keeps the fields it does not read as they
+    /// were sent, so another phone gets every stem back (`docs/MULTI-STEM.md`).
+    @Test func aTreeOfSeveralStemsComesBackWithEveryStem() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let address = try #require(environment["CANOPY_GERARDUS_MAP_URL"])
+        let endpoint = try #require(GerardusEndpoint(address))
+        func phone(_ player: Player) throws -> AppModel {
+            let settings = ServerSettings.volatile()
+            settings.save(endpoint)
+            return AppModel(
+                store: try LocalStore.inMemory(), players: PlayerService(local: player), serverSettings: settings)
+        }
+        let walker = Player(
+            id: PlayerID(rawValue: "T:_canopy-clump-\(UUID().uuidString.prefix(8))"), alias: "Walker",
+            source: .gameCenter)
+        let admin = Player(
+            id: PlayerID(rawValue: environment["CANOPY_GERARDUS_ADMIN"] ?? "T:_canopy-admin"), alias: "Ranger",
+            source: .gameCenter)
+        let a = try phone(walker)
+        let b = try phone(admin)
+        await a.load()
+        await b.load()
+
+        let location = GeoPoint(
+            latitude: 37.7690 + Double.random(in: 0...0.002), longitude: -122.4850 + Double.random(in: 0...0.01))
+        let stems = [
+            StemMeasure(diameter: Quantity(0.3, uncertainty: 0.01), east: 0, north: 0),
+            StemMeasure(diameter: Quantity(0.4, uncertainty: 0.01), east: 1.1, north: -0.4),
+        ]
+        let position = Position(geo: location, covariance: .isotropic(horizontal: 3, vertical: 3))
+        let clump = Tree(
+            meta: RecordMeta(playerID: walker.id, chunk: position.chunk), position: position, countStatus: .proposed,
+            dbh: DBH.equivalent(of: stems.map(\.diameter), method: .lidarCircleFit), stems: stems)
+        #expect(await a.record(.treeAdded(clump)) != nil)
+        await a.sync()
+        #expect(a.error == nil)
+        let proposal = try #require(a.changesets.first { $0.ops.contains { $0.id == clump.id } })
+
+        let view = MapViewport(center: location, latitudeDelta: 0.002, longitudeDelta: 0.002)
+        b.mapViewport = view
+        await b.sync()
+        let item = try #require(b.reviewQueue.first { $0.changeset.id == proposal.id })
+        await b.review(item, approve: true)
+        #expect(b.error == nil)
+        await b.sync()
+        let shared = try #require(b.tree(clump.id))
+        #expect(shared.stems == stems)
+        #expect(abs((shared.dbh?.diameter.value ?? 0) - 0.5) < 1e-9)
     }
 }

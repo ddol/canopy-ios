@@ -106,6 +106,12 @@ public struct GerardusTree: Equatable, Sendable {
     public var commonName: String?
     /// Which tags the server had, so the panel can say what is measured and what is a default.
     public var measured: Set<String>
+    /// Every stem, for a tree the server sends as several segments sharing a `tree_id` tag, one a stem: each stem's
+    /// DBH and where it stands, east and north of `base` in metres. Empty for a tree of one stem.
+    public var stems: [StemMeasure] = []
+
+    /// The tag that ties a clump's segments into one tree.
+    public static let treeIDTag = "tree_id"
 
     public static let defaultCrownRadius = 2.0
     public static let defaultTrunkDiameter = 0.3
@@ -131,6 +137,52 @@ public struct GerardusTree: Equatable, Sendable {
         species = line.tags["species"].flatMap { $0.isEmpty ? nil : $0 }
         commonName = line.tags["common_name"].flatMap { $0.isEmpty ? nil : $0 }
         measured = Set(["dbh_m", "height_m", "crown_base_m", "crown_radius_m"].filter { number($0) != nil })
+    }
+
+    /// The trees in a layer's lines: a line each, except that the lines sharing a `tree_id` tag are the stems of one
+    /// tree, the one of them with the largest DBH (`dbh_m`), which takes the tallest crown of them and their DBH as
+    /// its equivalent (`DBH.equivalent`). In the order the lines came.
+    public static func trees(_ lines: [LineFeature]) -> [GerardusTree] {
+        var order: [String] = []
+        var groups: [String: [GerardusTree]] = [:]
+        for line in lines {
+            guard let tree = GerardusTree(line) else { continue }
+            let key = line.tags[treeIDTag].flatMap { $0.isEmpty ? nil : "clump:" + $0 } ?? "feature:" + tree.id
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(tree)
+        }
+        return order.compactMap { key in
+            guard let members = groups[key] else { return nil }
+            guard members.count > 1 else { return members.first }
+            return clump(members)
+        }
+    }
+
+    /// One tree of several stems from a clump's members, one a stem.
+    static func clump(_ members: [GerardusTree]) -> GerardusTree {
+        let main = members.max { a, b in a.form.trunkDiameter < b.form.trunkDiameter }!
+        var tree = main
+        tree.stems = members.map { member in
+            StemMeasure(
+                diameter: Quantity(
+                    member.form.trunkDiameter, uncertainty: member.measured.contains("dbh_m") ? 0.02 : 0.1),
+                east: Double(member.base.x - main.base.x), north: Double(member.base.y - main.base.y))
+        }
+        let tallest = members.max { $0.form.height < $1.form.height }!.form
+        tree.form.height = tallest.height
+        tree.form.crownHeight = tallest.crownHeight
+        tree.form.crownWidth = members.map(\.form.crownWidth).max() ?? tree.form.crownWidth
+        tree.measured = members.reduce(into: Set<String>()) { $0.formUnion($1.measured) }
+        tree.species = tree.species ?? members.lazy.compactMap(\.species).first
+        tree.commonName = tree.commonName ?? members.lazy.compactMap(\.commonName).first
+        return tree
+    }
+
+    /// The tree's DBH: the equivalent of its stems for a clump.
+    public var equivalentDiameter: Double {
+        stems.count > 1
+            ? DBH.equivalent(of: stems.map(\.diameter), method: .estimate)?.diameter.value ?? form.trunkDiameter
+            : form.trunkDiameter
     }
 }
 
@@ -228,16 +280,21 @@ public enum SiteWireframes {
     /// Ring segments and uprights are scaled down by this for the site's trees.
     public static let treeDetail: Float = 0.5
 
-    /// The trees in a site's features.
+    /// The trees in a site's features, a clump's segments as one tree (`GerardusTree.trees`).
     public static func trees(in features: [VectorReference.Feature]) -> [GerardusTree] {
-        features.filter { $0.layer == .trees }.compactMap { GerardusTree($0.line) }
+        GerardusTree.trees(features.filter { $0.layer == .trees }.map(\.line))
     }
 
-    /// A tree's wireframe standing at `base` (AR world), selectable by a box round its crown and trunk.
+    /// A tree's wireframe standing at `base` (AR world), selectable by a box round its crown and trunk. A tree of
+    /// several stems (`stems`, east and north of `base`) is drawn with each.
     public static func treeItem(
-        id: String, form: TreeForm, lean: Lean? = nil, at base: SIMD3<Float>, detail: Float = treeDetail
+        id: String, form: TreeForm, lean: Lean? = nil, at base: SIMD3<Float>, detail: Float = treeDetail,
+        stems: [StemMeasure] = []
     ) -> WireframeItem {
-        let figure = WireframeTree.figure(form, lean: lean, at: base, detail: detail)
+        let figure =
+            stems.count > 1
+            ? WireframeTree.figure(TreeProfile(form: form, stems: stems), lean: lean, at: base, detail: detail)
+            : WireframeTree.figure(form, lean: lean, at: base, detail: detail)
         let form = form.clamped
         let width = Float(max(form.crownWidth, form.trunkDiameter, 0.6))
         return WireframeItem(
@@ -258,9 +315,9 @@ public enum SiteWireframes {
         }
         switch layer {
         case .trees:
-            return features.filter { $0.layer == .trees && near($0.line) }.compactMap { feature in
-                guard let tree = GerardusTree(feature.line) else { return nil }
-                return treeItem(id: tree.id, form: forms[tree.id] ?? tree.form, at: frame.arkit(tree.base))
+            let trees = GerardusTree.trees(features.filter { $0.layer == .trees && near($0.line) }.map(\.line))
+            return trees.map { tree in
+                treeItem(id: tree.id, form: forms[tree.id] ?? tree.form, at: frame.arkit(tree.base), stems: tree.stems)
             }
         case .buildings:
             let reconstructed = SiteBuildings.reconstructed(features)

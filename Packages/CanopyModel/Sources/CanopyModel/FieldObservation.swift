@@ -14,8 +14,13 @@ public struct FieldObservation: Identifiable, Hashable, Codable, Sendable {
         case treeRejected(treeID: UUID)
         /// "Move": the tree stands at `position` instead, which also says it is a tree.
         case treeMoved(treeID: UUID, position: Position)
-        /// A trunk measurement with its evidence mesh.
-        case trunkMeasured(treeID: UUID, dbh: DBH, lean: Lean?, evidence: BlobRef)
+        /// A trunk measurement with its evidence mesh. For a tree of several stems, `dbh` is their equivalent DBH and
+        /// `stems` each of them (`Tree.stems`); a log written before stems were kept reads as nil.
+        case trunkMeasured(treeID: UUID, dbh: DBH, lean: Lean?, evidence: BlobRef, stems: [StemMeasure]? = nil)
+        /// The stems of a measured tree sorted by the player, with no new scan: one that was not a stem taken out, one
+        /// the scan missed added, or some split off into a tree of their own. `stems` empty or of one stem leaves the
+        /// tree with one.
+        case stemsMeasured(treeID: UUID, dbh: DBH, stems: [StemMeasure])
         /// A limb hazard.
         case tagPlaced(Tag)
 
@@ -27,6 +32,7 @@ public struct FieldObservation: Identifiable, Hashable, Codable, Sendable {
             case .treeRejected: "treeRejected"
             case .treeMoved: "treeMoved"
             case .trunkMeasured: "trunkMeasured"
+            case .stemsMeasured: "stemsMeasured"
             case .tagPlaced: "tagPlaced"
             }
         }
@@ -35,7 +41,7 @@ public struct FieldObservation: Identifiable, Hashable, Codable, Sendable {
         public var subject: (entity: EntityKind, id: UUID) {
             switch self {
             case .treeConfirmed(let id), .treeRejected(let id): (.tree, id)
-            case .trunkMeasured(let id, _, _, _), .treeMoved(let id, _): (.tree, id)
+            case .trunkMeasured(let id, _, _, _, _), .treeMoved(let id, _), .stemsMeasured(let id, _, _): (.tree, id)
             case .treeAdded(let tree): (.tree, tree.id)
             case .tagPlaced(let tag): (.tag, tag.id)
             }
@@ -45,9 +51,9 @@ public struct FieldObservation: Identifiable, Hashable, Codable, Sendable {
         /// scan is named by its hash (the SHA-256 of its GLB bytes), and one scan is recorded once.
         public var scan: BlobRef? {
             switch self {
-            case .trunkMeasured(_, _, _, let evidence): evidence
+            case .trunkMeasured(_, _, _, let evidence, _): evidence
             case .tagPlaced(let tag): tag.evidenceRef
-            case .treeConfirmed, .treeAdded, .treeRejected, .treeMoved: nil
+            case .treeConfirmed, .treeAdded, .treeRejected, .treeMoved, .stemsMeasured: nil
             }
         }
     }

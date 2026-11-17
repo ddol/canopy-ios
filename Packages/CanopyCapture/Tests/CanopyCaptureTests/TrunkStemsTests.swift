@@ -148,7 +148,7 @@ enum StemMesh {
         // A ring on no stem above the fork, as left from before it was split.
         let high = TreeSection(part: .trunk, height: 4, radius: 0.3)
         let profile = TreeProfile(sections: trunk + left + right + [high])
-        let joins = WireframeTree.joins(profile.trunk).map { [$0.0.id, $0.1.id] }
+        let joins = WireframeTree.joins(profile.trunk, in: profile).map { [$0.0.id, $0.1.id] }
         #expect(joins.contains([trunk[0].id, trunk[1].id]))
         #expect(joins.contains([trunk[1].id, left[0].id]))
         #expect(joins.contains([trunk[1].id, right[0].id]))

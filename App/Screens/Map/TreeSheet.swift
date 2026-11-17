@@ -71,13 +71,32 @@ struct TreeSheet: View {
                 }
 
                 Section("Measurements") {
-                    LabeledContent("DBH") {
+                    LabeledContent(tree.stemCount > 1 ? "DBH, equivalent" : "DBH") {
                         if let dbh = tree.dbh {
                             Text(format.length(dbh.diameter.value, uncertainty: dbh.diameter.uncertainty))
                                 .font(CanopyFont.mono())
                         } else {
                             Text("Not measured")
                         }
+                    }
+                    if let stems = tree.stems, stems.count > 1 {
+                        // Largest first, each with where it stands from the tree's position.
+                        ForEach(
+                            Array(stems.sorted { $0.diameter.value > $1.diameter.value }.enumerated()), id: \.offset
+                        ) {
+                            index, stem in
+                            LabeledContent("Stem \(index + 1)") {
+                                Text(
+                                    format.length(stem.diameter.value, fractionDigits: 2)
+                                        + (stem.distance > 0.05
+                                            ? ", " + format.length(stem.distance, fractionDigits: 1) + " "
+                                                + Compass.point(of: atan2(stem.east, stem.north) * 180 / .pi)
+                                            : "")
+                                )
+                                .font(CanopyFont.mono(.footnote))
+                            }
+                        }
+                        .accessibilityIdentifier("tree-stems")
                     }
                     if let lean = tree.lean {
                         LabeledContent("Lean") {

@@ -44,6 +44,36 @@ public struct TrunkCapture: Sendable {
             to: try fitSection(at: section.height, near: SIMD2(Double(centre.x), Double(centre.z))))
     }
 
+    /// The profile with a stem for each of the tree's other stems the scan found at breast height
+    /// (`TrunkAnalysis.Result.stems`) that it has none for (`addingStem`), carried on up to the crown's base
+    /// (`TreeProfile.reachingCrown`).
+    public func addingStems(to profile: TreeProfile, below top: Double, lean: Lean? = nil) -> TreeProfile {
+        guard analysis.stems.count > 1 else { return profile }
+        var profile = profile
+        for circle in analysis.stems.dropFirst() {
+            profile.addStem(
+                at: circle.center - analysis.center, radius: circle.radius,
+                uncertainty: circle.radiusUncertainty, scan: self, below: top, lean: lean)
+        }
+        return profile.reachingCrown(lean: lean)
+    }
+
+    /// The profile with a stem for the trunk nearest `near` (from the trunk's base, x and z) at breast height, as the
+    /// scan shows it there, carried on up to the crown's base. Throws as `fitSection` does when the scan has too
+    /// little of a trunk there; returns nil when the profile has that stem already.
+    public func addingStem(
+        near: SIMD2<Double>, to profile: TreeProfile, below top: Double, lean: Lean? = nil
+    ) throws -> (profile: TreeProfile, stem: Int)? {
+        let circle = try fitSection(at: DBH.standardHeight, near: near)
+        var profile = profile
+        guard
+            let stem = profile.addStem(
+                at: circle.center, radius: circle.radius, uncertainty: circle.radiusUncertainty, scan: self,
+                below: top, lean: lean)
+        else { return nil }
+        return (profile.reachingCrown(lean: lean), stem)
+    }
+
     /// A trunk's ring through the points of a slice: a robust circle fit, refused when the points are too few, cover
     /// less than 60° of it, or give a diameter no trunk has. Shared by the AR session and a saved scan.
     public static func ring(through slice: [SIMD2<Double>]) throws -> FittedCircle {
@@ -165,9 +195,11 @@ public enum TrunkScan {
         let analysis = try TrunkAnalysis().measure(
             region, points: local, groundHeight: ground, northAligned: northAligned)
 
-        // Keep only the trunk and a margin around it as evidence, centred on the trunk.
+        // Keep only the trunk, every other stem of the tree, and a margin around them as evidence, centred on the
+        // trunk.
         let trunkCenter = center + SIMD3(Float(analysis.center.x), 0, Float(analysis.center.y))
-        let cropRadius = min(Double(regionRadius), analysis.circle.radius + evidenceMargin)
+        let reach = analysis.stems.map { simd_distance($0.center, analysis.center) + $0.radius }.max() ?? 0
+        let cropRadius = min(Double(regionRadius), max(analysis.circle.radius, reach) + evidenceMargin)
         let evidence = world.cropped(around: trunkCenter, radius: Float(cropRadius), below: below, above: above)
         let trunkBase = trunkCenter + SIMD3(0, Float(ground), 0)
         return TrunkCapture(
@@ -197,6 +229,7 @@ public enum TrunkScan {
         var analysis = TrunkAnalysis()
         analysis.minimumArcDegrees = 0
         analysis.leanHeights = []
+        analysis.findsStems = false
         let local = points.cropped(around: center, radius: regionRadius, below: below, above: above)
         guard let result = try? analysis.measure(region, points: local, groundHeight: ground) else {
             return ScanProgress(triangleCount: world.triangleCount, pointCount: points.count)
@@ -232,4 +265,55 @@ public enum CaptureError: Error, Equatable {
     case noGround
     /// Finish was asked for without a scan in progress.
     case notScanning
+}
+
+extension TreeProfile {
+    /// Adds a stem crossing breast height at `centre` (from the trunk's base, x and z) with `radius`, fitted to
+    /// `scan` there: a ring at breast height, and one at each step a metre apart up the stem as far as the scan follows
+    /// it (and, for a stem from the ground, down it). A stem overlapping the main trunk's ring below breast height
+    /// forks off it; one standing apart comes out of the ground. Returns its number, or nil when a stem stands there
+    /// already.
+    @discardableResult
+    mutating func addStem(
+        at centre: SIMD2<Double>, radius: Double, uncertainty: Double, scan: TrunkCapture, below top: Double,
+        lean: Lean?
+    ) -> Int? {
+        let known = breastHeightStems(lean: lean).contains {
+            simd_distance($0.centre, centre) < max($0.radius, radius)
+        }
+        guard !known else { return nil }
+        let breast = TreeSection(
+            part: .trunk, height: DBH.standardHeight, radius: radius, source: .scan, offset: centre,
+            radiusUncertainty: uncertainty)
+        let below = mainTrunk.last { $0.height < DBH.standardHeight - 0.01 }
+        let forks = below.map { simd_distance($0.offset ?? .zero, centre) < $0.radius + radius } ?? false
+        var rings = [breast]
+        func fitted(
+            at height: Double, near: SIMD2<Double>, like last: (centre: SIMD2<Double>, radius: Double)
+        )
+            -> TreeSection?
+        {
+            guard let fit = try? scan.fitSection(at: height, near: near),
+                simd_distance(fit.center, last.centre) <= max(0.15, last.radius),
+                abs(fit.radius - last.radius) < 0.5 * last.radius
+            else { return nil }
+            return TreeSection(
+                part: .trunk, height: height, radius: fit.radius, source: .scan, offset: fit.center,
+                radiusUncertainty: fit.radiusUncertainty)
+        }
+        // Up the stem as far as the scan follows it.
+        var last = (centre: centre, radius: radius)
+        for height in TrunkSteps.heights(below: top) where height > DBH.standardHeight + 0.25 {
+            guard let ring = fitted(at: height, near: last.centre, like: last) else { break }
+            rings.append(ring)
+            last = (ring.offset ?? centre, ring.radius)
+        }
+        // A stem from the ground, down it to half a metre.
+        if !forks {
+            for height in TrunkSteps.heights(below: top) where height < DBH.standardHeight {
+                if let ring = fitted(at: height, near: centre, like: (centre, radius)) { rings.append(ring) }
+            }
+        }
+        return addStem(rings, origin: forks ? .fork(parent: nil) : .ground(base: centre))
+    }
 }

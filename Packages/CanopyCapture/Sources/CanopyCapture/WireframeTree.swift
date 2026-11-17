@@ -99,7 +99,7 @@ public enum WireframeTree {
                     lines += ring
                 }
             }
-            for (lower, upper) in joins(rings) {
+            for (lower, upper) in joins(rings, in: profile) {
                 lines += uprights(
                     from: centre(lower), to: centre(upper), radius: Float(lower.radius),
                     topRadius: Float(upper.radius), count: uprightCount)
@@ -112,23 +112,26 @@ public enum WireframeTree {
         return figure
     }
 
-    /// Which rings of one part are joined by uprights, lower first: each ring to the next on the same stem (or on
-    /// the trunk below the fork), and the lowest ring of each stem down to the trunk's ring below it, so a forked
-    /// trunk funnels into one. A ring on no stem is not joined across a stem's rings to one above the fork.
-    static func joins(_ rings: [TreeSection]) -> [(TreeSection, TreeSection)] {
-        let main = rings.filter { $0.stem == nil }
-        let forked = rings.filter { $0.stem != nil }
+    /// Which rings of one part are joined by uprights, lower first: each ring to the next on the same stem, and the
+    /// lowest ring of each stem down to where it starts (`TreeProfile.start(ofStem:)`): the ring below it of the stem
+    /// it forks off, so a forked trunk funnels into one, or the ground at its base. A stem that ends in a fork
+    /// (`TreeProfile.endsInFork`) is not joined across the stems it forks into to a ring of its own above them.
+    static func joins(_ rings: [TreeSection], in profile: TreeProfile) -> [(TreeSection, TreeSection)] {
         var joins: [(TreeSection, TreeSection)] = []
-        for (lower, upper) in zip(main, main.dropFirst())
-        where !forked.contains(where: { $0.height > lower.height + 1e-6 && $0.height < upper.height - 1e-6 }) {
-            joins.append((lower, upper))
-        }
-        for stem in Set(forked.compactMap(\.stem)).sorted() {
-            let up = forked.filter { $0.stem == stem }
-            if let first = up.first, let below = main.last(where: { $0.height < first.height - 1e-6 }) {
-                joins.append((below, first))
+        let stems: [Int?] = [nil] + Set(rings.compactMap(\.stem)).sorted().map(Optional.some)
+        for stem in stems {
+            let up = rings.filter { $0.stem == stem }
+            if let stem, let first = up.first, let start = profile.start(ofStem: stem) {
+                joins.append((start, first))
             }
-            joins += zip(up, up.dropFirst()).map { ($0, $1) }
+            let forks =
+                profile.endsInFork(stem)
+                ? rings.filter { ring in ring.stem.map { profile.stem($0).origin == .fork(parent: stem) } ?? false }
+                : []
+            for (lower, upper) in zip(up, up.dropFirst())
+            where !forks.contains(where: { $0.height > lower.height + 1e-6 && $0.height < upper.height - 1e-6 }) {
+                joins.append((lower, upper))
+            }
         }
         return joins
     }

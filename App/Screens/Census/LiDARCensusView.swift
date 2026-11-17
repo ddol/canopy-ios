@@ -63,6 +63,8 @@ struct LiDARCensusView: View {
     @State private var tracker = TreeTracker()
     /// The selected tree while it is being moved to its true spot.
     @State private var move: TreeMove?
+    /// The stems from the ground to split off into a tree of their own, while the player confirms it.
+    @State private var pendingSplit: [Int]?
     /// Whether the site load running was asked for on its own (`autoLoadVectors`), so says nothing.
     @State private var loadingQuietly = false
     private let format = QuantityFormat()
@@ -107,6 +109,21 @@ struct LiDARCensusView: View {
                     fit = nil
                 }
                 .presentationDetents([.medium, .large])
+            }
+            .confirmationDialog(
+                splitTitle, isPresented: Binding(get: { pendingSplit != nil }, set: { if !$0 { pendingSplit = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Split them off") {
+                    let roots = pendingSplit ?? []
+                    pendingSplit = nil
+                    Task { await splitOff(roots) }
+                }
+                Button("Cancel", role: .cancel) { pendingSplit = nil }
+            } message: {
+                Text(
+                    "The stems beyond the cut become a new tree, proposed where the largest of them stands, with "
+                        + "their DBH and this scan as evidence. \(fit?.savedTree?.name ?? "This tree") keeps the rest.")
             }
             .sheet(
                 isPresented: Binding(get: { treeChoices != nil }, set: { if !$0 { treeChoices = nil } })
@@ -190,7 +207,7 @@ struct LiDARCensusView: View {
             TreeFitPanel(
                 fitting: fitFittingBinding, selectedSection: fitSectionBinding, onSnap: snapSelectedSection,
                 isAligning: capture.isAligning, alignStatus: alignStatus, onAlign: toggleAlignment,
-                onMoveHere: moveTreeHere, onBack: stopFitting, onMeasurement: showMeasurement)
+                onMoveHere: moveTreeHere, onBack: stopFitting, onMeasurement: showMeasurement, stems: stemActions)
         } else if capture.scan != nil {
             scanControls
         } else if let move {
@@ -664,14 +681,28 @@ struct LiDARCensusView: View {
             form = form.clamped
             deselect()
             // Breast height and the steps a metre apart start fitted to the scan as far up as its points reach, as
-            // the DBH was.
-            let profile = TrunkSteps.fitted(TreeProfile(form: form), to: result, below: form.crownBase)
+            // the DBH was, with every other stem of the tree the scan crosses there.
+            let lean = result.analysis.lean
+            let profile = result.addingStems(
+                to: TrunkSteps.fitted(TreeProfile(form: form), to: result, below: form.crownBase),
+                below: form.crownBase, lean: lean)
+            // A tree with stems measured by another scan keeps those this one did not measure again.
+            let anchor = measuring?.position.geo ?? position.geo
+            let measured = StemRecord.measures(
+                profile, lean: lean, base: result.trunkBase, mainDBH: result.analysis.dbh, anchor: anchor,
+                place: mapPosition(ofARKit:))
+            let others = (measuring?.stems ?? []).filter { old in
+                StemMeasure.merging([old], with: measured).count == measured.count + 1
+            }
+            let stems = others + measured
+            let dbh = stems.count > 1 ? StemRecord.dbh(stems) ?? result.analysis.dbh : result.analysis.dbh
             // Saved on the phone straight away, mesh and all: nothing more to tap for the scan to be kept, and its rings
             // can be aligned from Me → Your scans even if nothing else is done here.
             let saved = await model.saveTrunkMeasurement(
-                dbh: result.analysis.dbh, lean: result.analysis.lean, glb: result.glb,
+                dbh: dbh, lean: lean, glb: result.glb,
                 evidenceMesh: (result.evidence.vertexCount, result.evidence.triangleCount),
-                cropRadius: result.cropRadius, tree: measuring, position: position)
+                cropRadius: result.cropRadius, tree: measuring, position: position,
+                stems: StemRecord.recorded(stems))
             if let saved {
                 await model.saveAlignment(
                     ScanAlignment(
@@ -684,11 +715,17 @@ struct LiDARCensusView: View {
                 capture: result, position: position, fitting: TreeFitting(shape: form, profile: profile),
                 base: result.trunkBase)
             fit.savedTree = saved
+            fit.otherStems = others
             self.fit = fit
             showFit(fit)
             let steps = profile.trunk.filter { $0.source == .scan }.map(\.height).max()
+            let found = profile.breastHeightStems(lean: lean).count
             notice =
                 (saved.map { "Saved the scan of \($0.name) on this phone. " } ?? "")
+                + (found > 1
+                    ? "Found \(found) stems: equivalent DBH "
+                        + format.length(dbh.diameter.value, fractionDigits: 2) + ". Check them under Stems. "
+                    : "")
                 + (steps.map { "Rings are fitted to the scan up to " + format.length($0, fractionDigits: 1) + ". " }
                     ?? "")
                 + "Set the shape with the sliders, or align the rings later from Me → Your scans."
@@ -865,12 +902,176 @@ struct LiDARCensusView: View {
 
     private func showMeasurement() {
         guard let fit else { return }
+        // Stems sorted and not yet recorded are recorded on the way.
+        if fit.stemsChanged { Task { await saveStems() } }
         notice = nil
         capture.stopAligning()
         capture.pause()
         measurement = Measurement(
             capture: fit.capture, position: fit.position, target: fit.savedTree ?? target, form: fit.form,
             profile: fit.profile, saved: fit.savedTree)
+    }
+
+    // MARK: The tree's stems
+
+    /// Where an AR world point is on the map, by the 3DEP registration, the placement, or the GPS fix and the camera.
+    private func mapPosition(ofARKit point: SIMD3<Float>) -> GeoPoint? {
+        if let placed = placedPosition(ofARKit: point) { return placed.geo }
+        guard let device = location.geoPoint, let camera = capture.cameraPosition else { return nil }
+        return position(of: point, camera: camera, device: device).geo
+    }
+
+    /// The fitted tree's stems as it records them: this scan's, with those other scans measured, and their DBH.
+    private func stemRecord(_ fit: TreeFit) -> (dbh: DBH, stems: [StemMeasure]) {
+        let measured = StemRecord.measures(
+            fit.profile, lean: fit.capture.analysis.lean, base: fit.base, mainDBH: fit.capture.analysis.dbh,
+            anchor: fit.savedTree?.position.geo ?? fit.position.geo, place: mapPosition(ofARKit:))
+        let stems = fit.otherStems + measured
+        let dbh = stems.count > 1 ? StemRecord.dbh(stems) : nil
+        return (dbh ?? fit.capture.analysis.dbh, stems)
+    }
+
+    /// What the Stems mode shows and does.
+    private var stemActions: TreeStemsEditor.Actions {
+        guard let fit else { return TreeStemsEditor.Actions() }
+        let record = stemRecord(fit)
+        return TreeStemsEditor.Actions(
+            count: record.stems.count, others: fit.otherStems.count, dbh: record.dbh, isChanged: fit.stemsChanged,
+            onRemove: removeStem, onAdd: addStemAtReticle, onSplit: prepareSplit,
+            onSave: { Task { await saveStems() } })
+    }
+
+    /// Takes out a stem that is not one: a post, a shrub or another tree's.
+    private func removeStem(_ stem: Int) {
+        guard var fit else { return }
+        fit.profile.removeStem(stem)
+        fit.selectedSection = TreeStemsEditor.ring(of: nil, in: fit.profile)?.id
+        fit.stemsChanged = true
+        self.fit = fit
+        showFit(fit)
+        notice = "Took the stem out. Save records the tree's stems."
+    }
+
+    /// Adds the stem under the middle of the screen, fitted to the scan at breast height.
+    private func addStemAtReticle() {
+        guard var fit else { return }
+        guard let hit = capture.raycastCenter(maxDistance: 15) else {
+            notice = "Point the middle of the screen at the stem 1.37 m up."
+            return
+        }
+        let near = SIMD2(Double(hit.position.x - fit.base.x), Double(hit.position.z - fit.base.z))
+        do {
+            let top = fit.profile.crown.first?.height ?? fit.fitting.shape.crownBase
+            guard
+                let (profile, stem) = try fit.capture.addingStem(
+                    near: near, to: fit.profile, below: top, lean: fit.capture.analysis.lean)
+            else {
+                notice = "That stem is the tree's already."
+                return
+            }
+            fit.profile = profile
+            fit.selectedSection = TreeStemsEditor.ring(of: stem, in: profile)?.id
+            fit.stemsChanged = true
+            self.fit = fit
+            showFit(fit)
+            notice = "Added the stem, fitted to the scan. Save records the tree's stems."
+        } catch {
+            notice =
+                "The scan has too little of that stem 1.37 m up. Finish this one, then scan it and save it on the "
+                + "same tree."
+        }
+    }
+
+    /// The question asked before splitting.
+    private var splitTitle: String {
+        let count = pendingSplit?.count ?? 0
+        return count == 1 ? "Split this stem off as its own tree?" : "Split these \(count) stems off as a tree?"
+    }
+
+    /// Cuts the clump along a line on the ground through the middle of the screen, the way the camera faces: the
+    /// stems from the ground beyond it, from the main trunk, are asked to be split off.
+    private func prepareSplit() {
+        guard let fit else { return }
+        guard let hit = capture.raycastCenter(maxDistance: 15) else {
+            notice = "Point the middle of the screen at the ground between the stems to cut there."
+            return
+        }
+        let at = SIMD2(Double(hit.position.x - fit.base.x), Double(hit.position.z - fit.base.z))
+        let camera = SIMD2(Double(hit.cameraPosition.x - fit.base.x), Double(hit.cameraPosition.z - fit.base.z))
+        let along = at - camera
+        guard simd_length(along) > 0.1 else { return }
+        func side(_ point: SIMD2<Double>) -> Double {
+            along.x * (point.y - at.y) - along.y * (point.x - at.x)
+        }
+        let mainSide = side(.zero)
+        let beyond = fit.profile.groundStems.filter { side(fit.profile.base(of: $0)) * mainSide < 0 }
+        guard !beyond.isEmpty, fit.savedTree != nil else {
+            notice =
+                "Every stem is on the main trunk's side of that cut. Aim the middle of the screen at the ground "
+                + "between the stems to split off, facing along the gap."
+            return
+        }
+        pendingSplit = beyond
+    }
+
+    /// Splits stems off the fitted tree into a tree of their own.
+    private func splitOff(_ roots: [Int]) async {
+        guard var fit, let tree = fit.savedTree else { return }
+        let lean = fit.capture.analysis.lean
+        guard let split = fit.profile.splittingOff(roots, lean: lean) else { return }
+        let base = fit.base + SIMD3(Float(split.base.x), 0, Float(split.base.y))
+        guard let geo = mapPosition(ofARKit: base) else {
+            notice = "Waiting for GPS to place the new tree."
+            return
+        }
+        let position =
+            placedPosition(ofARKit: base)
+            ?? Position(geo: geo, covariance: .isotropic(horizontal: location.accuracy ?? 10, vertical: 10))
+        if let refusal = model.splitRefusal(at: geo) {
+            notice = refusal
+            return
+        }
+        let offStems = StemRecord.measures(
+            split.off, lean: lean, base: base, mainDBH: nil, anchor: geo, place: mapPosition(ofARKit:))
+        let offDBH = StemRecord.dbh(offStems) ?? DBH(diameter: Quantity(0.3, uncertainty: 0.1), method: .estimate)
+        fit.profile = split.kept
+        fit.selectedSection = TreeStemsEditor.ring(of: nil, in: fit.profile)?.id
+        let kept = stemRecord(fit)
+        guard
+            let new = await model.splitOff(
+                from: tree, keeping: (kept.dbh, kept.stems), at: position, dbh: offDBH, stems: offStems,
+                evidence: BlobStore.reference(for: fit.capture.glb), profile: split.off)
+        else { return }
+        fit.stemsChanged = false
+        fit.savedTree = model.tree(tree.id) ?? tree
+        self.fit = fit
+        showFit(fit)
+        await model.saveAlignment(
+            ScanAlignment(
+                scan: BlobStore.reference(for: fit.capture.glb), treeID: tree.id, profile: fit.profile,
+                groundHeight: fit.capture.groundHeight))
+        notice =
+            "Split \(offStems.count == 1 ? "a stem" : "\(offStems.count) stems") off as \(new.name), proposed. "
+            + "\(tree.name) keeps \(kept.stems.count == 1 ? "one stem" : "\(kept.stems.count)")."
+    }
+
+    /// Records the fitted tree's stems as sorted, and keeps its rings with the scan.
+    private func saveStems() async {
+        guard var fit, let tree = fit.savedTree else { return }
+        let record = stemRecord(fit)
+        guard await model.saveStems(of: tree.id, dbh: record.dbh, stems: record.stems) else { return }
+        await model.saveAlignment(
+            ScanAlignment(
+                scan: BlobStore.reference(for: fit.capture.glb), treeID: tree.id, profile: fit.profile,
+                groundHeight: fit.capture.groundHeight))
+        fit.stemsChanged = false
+        fit.savedTree = model.tree(tree.id) ?? tree
+        self.fit = fit
+        notice =
+            record.stems.count > 1
+            ? "Recorded \(record.stems.count) stems, equivalent DBH "
+                + format.length(record.dbh.diameter.value, fractionDigits: 2) + "."
+            : "Recorded one stem."
     }
 
     // MARK: Placing the session
@@ -1169,7 +1370,10 @@ struct LiDARCensusView: View {
             var item = SiteWireframes.treeItem(
                 id: id, form: model.treeProfiles[id]?.form ?? model.treeForms[id] ?? Self.censusForm(tree),
                 lean: tree.lean, at: base)
-            if let profile = model.treeProfiles[id] {
+            // Fitted rings, else every stem of a tree of several.
+            if let profile = model.treeProfiles[id]
+                ?? tree.stems.map({ TreeProfile(form: model.treeForms[id] ?? Self.censusForm(tree), stems: $0) })
+            {
                 item.segments =
                     WireframeTree.figure(
                         profile, lean: tree.lean, at: base, detail: SiteWireframes.treeDetail
@@ -1278,9 +1482,7 @@ struct LiDARCensusView: View {
     /// One of Gerardus's trees by its feature id, with the georeference of the site it came from.
     private func gerardusTree(_ id: String) -> (GerardusTree, SiteGeoreference)? {
         for loaded in model.loadedVectors.values {
-            if let feature = loaded.vectors.features.first(where: { $0.layer == .trees && $0.line.featureID == id }),
-                let tree = GerardusTree(feature.line)
-            {
+            if let tree = SiteWireframes.trees(in: loaded.vectors.features).first(where: { $0.id == id }) {
                 return (tree, loaded.georeference)
             }
         }
@@ -1590,6 +1792,10 @@ struct TreeFit {
     var selectedSection: TreeSection.ID?
     /// The tree the scan was saved on as soon as it was measured.
     var savedTree: Tree?
+    /// The tree's stems measured by other scans of it, kept with this scan's.
+    var otherStems: [StemMeasure] = []
+    /// Whether the stems have been sorted since they were last recorded.
+    var stemsChanged = false
 
     /// The rings of the tree, from the ground up.
     var profile: TreeProfile {

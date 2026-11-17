@@ -3,11 +3,11 @@
 Work we know we want but have not scheduled. Issues are turned off on this repository, so this file is the list;
 a pull request that picks an item up should remove it here.
 
-## Trees with many trunks
+## Trees with many trunks: what is left
 
-Clumps of stems under 4 m apart are recorded as one trunk: the scan keeps only the stem nearest where it started.
-The plan (a stem graph in the profile, every stem at breast height, a Split here cut in the census, stems in the
-vector views) is in [MULTI-STEM.md](MULTI-STEM.md).
+Canopy keeps a tree's stems (see [MULTI-STEM.md](MULTI-STEM.md)). Still to do: Gerardus sending a clump's stems in its
+TREES layer, as segments sharing a `tree_id` tag, which Canopy already reads; merging two census records that turn
+out to be one tree; and trying it all on the clumps from the Golden Gate Park survey.
 
 ## Aerial data volume
 

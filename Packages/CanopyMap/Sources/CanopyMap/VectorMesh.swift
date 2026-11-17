@@ -53,7 +53,7 @@ struct VectorMesh {
     }
 
     /// A tree as the Mac visualiser draws it: the trunk up to the crown's base, and a ring of the crown's radius at
-    /// its base and its top.
+    /// its base and its top. A clump has a trunk line for each stem.
     mutating func add(_ tree: GerardusTree) {
         let form = tree.form
         let base = tree.base
@@ -62,6 +62,13 @@ struct VectorMesh {
         let start = UInt32(vertices.count)
         vertices += [base, crownBase].map { SCNVector3(place($0)) }
         edges += [start, start + 1]
+        for stem in tree.stems where stem.distance > 0.05 {
+            // Site frame: x east, y north, z up.
+            let foot = base + SIMD3(Float(stem.east), Float(stem.north), 0)
+            let stemStart = UInt32(vertices.count)
+            vertices += [foot, foot + SIMD3(0, 0, Float(form.crownBase))].map { SCNVector3(place($0)) }
+            edges += [stemStart, stemStart + 1]
+        }
         let radius = Float(form.crownWidth / 2)
         for centre in [crownBase, top] {
             let ringStart = UInt32(vertices.count)

@@ -141,20 +141,22 @@ public struct SavedScan: Sendable {
     }
 
     /// Every trunk ring the mesh can fit snapped to it, except those confirmed against the tree; the rest stay as
-    /// they were. Where the trunk forks, a ring below the fork that the mesh shows as two stems or more becomes a
-    /// ring on each (`TreeSection.stem`), numbered to follow the stems below; above the fork, a ring on no stem that
-    /// the mesh shows as one trunk joins the stem it fits, and one it cannot fit goes. The trunk, or each stem, is
-    /// then carried up to the crown's base (`TreeProfile.reachingCrown`). Returns the profile, how many rings
-    /// snapped, and how many stems the trunk forks into (0 when it does not).
+    /// they were. Where the mesh shows more than one stem at a ring's height, the ring is split
+    /// (`TreeProfile.splitting`): stems coming out of it fork off its stem, stems standing apart from it come out of
+    /// the ground, and stems already in the profile go on up. Above where a stem forks, a ring left on it that the
+    /// mesh shows as one stem joins the stem it fits, and one it cannot fit goes. Every stem is then carried up to
+    /// the crown's base (`TreeProfile.reachingCrown`). Returns the profile, how many rings snapped, and how many
+    /// stems the trunk has besides the main one (0 for one trunk).
     public func snappingTrunk(
         _ profile: TreeProfile, groundHeight: Double, lean: Lean? = nil
     ) -> (profile: TreeProfile, snapped: Int, stems: Int) {
         var profile = profile
         var snapped = 0
         for ring in profile.trunk where ring.source != .confirmed {
+            // Split away by a ring below it.
+            guard let ring = profile.section(ring.id) else { continue }
             let centre = Self.centre(of: ring, lean)
-            let forked = !profile.stems.isEmpty
-            if ring.stem == nil, ring.height >= Self.lowestFork {
+            if ring.height >= Self.lowestFork {
                 let found = stems(
                     at: ring.height, groundHeight: groundHeight, near: centre, within: Self.forkReach(ring))
                 if found.count >= 2 {
@@ -162,10 +164,13 @@ public struct SavedScan: Sendable {
                     continue
                 }
             }
-            if forked, ring.stem == nil {
-                // Above the fork: on one of the stems, or nowhere.
+            if let fork = profile.forkHeight(of: ring.stem), ring.height > fork + 0.01 {
+                // Above where its stem forks: on one of the stems growing off it, or nowhere.
+                let onto = profile.descendants(of: ring.stem).filter {
+                    !(profile.forkHeight(of: $0).map { $0 < ring.height - 0.01 } ?? false)
+                }
                 if let fitted = try? snapping(ring, groundHeight: groundHeight, lean: lean),
-                    let stem = profile.nearestStem(to: fitted.offset ?? .zero, below: ring.height)
+                    let stem = profile.nearestStem(to: fitted.offset ?? .zero, below: ring.height, among: onto)
                 {
                     var onStem = fitted
                     onStem.stem = stem
@@ -180,7 +185,7 @@ public struct SavedScan: Sendable {
             profile[ring.id] = fitted
             snapped += 1
         }
-        return (profile.reachingCrown(lean: lean), snapped, profile.stems.count)
+        return (profile.reachingCrown(lean: lean), snapped, profile.stemIDs.count)
     }
 
     /// No trunk forks lower than this, in metres: below it, two pieces are roots or a buttress.
@@ -189,9 +194,8 @@ public struct SavedScan: Sendable {
     /// How far from a ring's centre its stems are looked for: two metres, or three times its radius.
     static func forkReach(_ ring: TreeSection) -> Double { max(2, 3 * ring.radius) }
 
-    /// Splits the ring nearest `height` on the main trunk into a ring per stem the mesh shows there, as
-    /// `snappingTrunk` does; nil when the mesh shows one trunk or none there. Returns the profile and the stems'
-    /// ring ids.
+    /// Splits the ring `id` into a ring per stem the mesh shows at its height, as `snappingTrunk` does; nil when the
+    /// mesh shows one stem or none there. Returns the profile and the stems' ring ids.
     public func splitting(
         _ profile: TreeProfile, at id: TreeSection.ID, groundHeight: Double, lean: Lean? = nil
     ) -> (profile: TreeProfile, rings: [TreeSection.ID])? {
@@ -202,16 +206,21 @@ public struct SavedScan: Sendable {
         guard found.count >= 2 else { return nil }
         var profile = profile
         let rings = profile.splitting(id, into: found)
-        // The trunk's rings above the split go on to the stems, or go, as when the whole trunk is snapped.
-        for above in profile.mainTrunk where above.height > ring.height + 0.01 && above.source != .confirmed {
-            if let fitted = try? snapping(above, groundHeight: groundHeight, lean: lean),
-                let stem = profile.nearestStem(to: fitted.offset ?? .zero, below: above.height)
+        // The stem's rings above the split go on to the stems it forks into, or go, as when the whole trunk is
+        // snapped. A stem that goes on through the split keeps them.
+        if let fork = profile.forkHeight(of: ring.stem) {
+            let onto = profile.descendants(of: ring.stem)
+            for above in profile.rings(onStem: ring.stem) where above.height > fork + 0.01 && above.source != .confirmed
             {
-                var onStem = fitted
-                onStem.stem = stem
-                profile[above.id] = onStem
-            } else {
-                profile[above.id] = nil
+                if let fitted = try? snapping(above, groundHeight: groundHeight, lean: lean),
+                    let stem = profile.nearestStem(to: fitted.offset ?? .zero, below: above.height, among: onto)
+                {
+                    var onStem = fitted
+                    onStem.stem = stem
+                    profile[above.id] = onStem
+                } else {
+                    profile[above.id] = nil
+                }
             }
         }
         return (profile.reachingCrown(lean: lean), rings)
@@ -219,20 +228,27 @@ public struct SavedScan: Sendable {
 }
 
 extension TreeProfile {
-    /// The stem whose highest ring below `height` is nearest `centre` (x, z from the trunk's base); nil on a trunk
-    /// that does not fork there.
-    public func nearestStem(to centre: SIMD2<Double>, below height: Double) -> Int? {
-        stems.compactMap { stem, rings -> (Int, Double)? in
-            guard let ring = rings.last(where: { $0.height < height - 0.01 }) else { return nil }
+    /// The stem among `stems` (every stem when nil) whose highest ring below `height` is nearest `centre` (x, z from
+    /// the trunk's base); nil when none has a ring below `height`.
+    public func nearestStem(to centre: SIMD2<Double>, below height: Double, among stems: [Int]? = nil) -> Int? {
+        (stems ?? stemIDs).compactMap { stem -> (Int, Double)? in
+            guard let ring = rings(onStem: stem).last(where: { $0.height < height - 0.01 }) else { return nil }
             return (stem, simd_distance(ring.offset ?? .zero, centre))
         }
         .min { $0.1 < $1.1 }?.0
     }
 
-    /// The trunk carried up to the crown's base: a ring a metre (`TrunkSteps.heights`) and one at the crown's base
-    /// added where none is, up the trunk or up each stem of a forked one, continuing the line and the taper of the
-    /// rings below (`TrunkTaper`; a stem with one ring leaves the fork along the line from the trunk's ring below
-    /// it). Rings already there are left as they are; rings set by eye above the crown's base go.
+    /// Where a stem (nil: the main trunk) that ends in a fork forks: the lowest ring of the stems forking off it. Nil
+    /// for a stem that goes on, with one stem or none forking off it.
+    public func forkHeight(of stem: Int?) -> Double? {
+        guard endsInFork(stem) else { return nil }
+        return forks(of: stem).compactMap { rings(onStem: $0).first?.height }.min()
+    }
+
+    /// Every stem carried up to the crown's base: a ring a metre (`TrunkSteps.heights`) and one at the crown's base
+    /// added where none is, up the main trunk and each stem that does not end in a fork, continuing the line and the
+    /// taper of the rings below (`TrunkTaper`; a stem with one ring leaves where it starts along the line from there).
+    /// Rings already there are left as they are; rings set by eye above the crown's base go.
     public func reachingCrown(lean: Lean? = nil) -> TreeProfile {
         guard let top = crown.first?.height, top >= 1 else { return self }
         var profile = self
@@ -241,22 +257,22 @@ extension TreeProfile {
         func missing(_ rings: [TreeSection], above floor: Double) -> [Double] {
             heights.filter { h in h > floor + 0.25 && !rings.contains { abs($0.height - h) < 0.25 } }
         }
-        let stems = profile.stems
-        if stems.isEmpty {
+        if !profile.endsInFork(nil) {
             let main = profile.mainTrunk
-            guard let highest = main.last else { return profile }
-            let taper = TrunkTaper(main, lean: lean)
-            for h in missing(main, above: highest.height) {
-                let ring = TreeSection(
-                    part: .trunk, height: h, radius: taper?.radius(at: h) ?? highest.radius,
-                    offset: taper?.centre(at: h) ?? highest.offset)
-                profile[ring.id] = ring
+            if let highest = main.last {
+                let taper = TrunkTaper(main, lean: lean)
+                for h in missing(main, above: highest.height) {
+                    let ring = TreeSection(
+                        part: .trunk, height: h, radius: taper?.radius(at: h) ?? highest.radius,
+                        offset: taper?.centre(at: h) ?? highest.offset)
+                    profile[ring.id] = ring
+                }
             }
-            return profile
         }
-        for (stem, rings) in stems {
+        for stem in profile.stemIDs where !profile.endsInFork(stem) {
+            let rings = profile.rings(onStem: stem)
             guard let highest = rings.last else { continue }
-            let line = Self.stemLine(rings, below: profile.mainTrunk.last { $0.height < (rings.first?.height ?? 0) })
+            let line = Self.stemLine(rings, below: profile.start(ofStem: stem))
             for h in missing(rings, above: highest.height) {
                 let ring = TreeSection(part: .trunk, height: h, radius: highest.radius, offset: line(h), stem: stem)
                 profile[ring.id] = ring
@@ -266,7 +282,7 @@ extension TreeProfile {
     }
 
     /// Where a stem's axis is at a height: the line through its rings' centres, or, with its rings too close in
-    /// height for a slope, through the trunk's ring below the fork and its own. Never leaning more than 40°.
+    /// height for a slope, through where it starts and its own. Never leaning more than 40°.
     static func stemLine(_ rings: [TreeSection], below fork: TreeSection?) -> (Double) -> SIMD2<Double> {
         var samples = rings.map { (h: $0.height, c: $0.offset ?? .zero) }
         let spread = (samples.map(\.h).max() ?? 0) - (samples.map(\.h).min() ?? 0)
@@ -284,35 +300,92 @@ extension TreeProfile {
         return { h in meanC + slope * (h - meanH) }
     }
 
-    /// Replaces a trunk ring with one ring per circle, each on a stem (`TreeSection.stem`), fitted to the scan. A
-    /// circle takes the number of the stem whose ring below is nearest it, so a stem keeps its number up the tree;
-    /// the rest take numbers not yet used. Returns the new rings' ids, in the circles' order.
+    /// Two rings at one height are one stem's when their centres are no further apart than this beyond their radii,
+    /// in metres.
+    static let continuation = 0.25
+
+    /// Replaces a trunk ring with a ring per circle fitted to the scan at its height, each on a stem:
+    /// - a circle where another stem has a ring at this height already is that ring, and is left out;
+    /// - each other circle comes out of the stem whose ring below is nearest it, when near enough
+    ///   (`continuation`): a stem with one such circle goes on through it, and a stem with two or more forks into
+    ///   them (`TreeStem.Origin.fork`) and ends there;
+    /// - and a circle out of no stem comes out of the ground (`TreeStem.Origin.ground`).
+    ///
+    /// The ring's own stem goes on, forks or ends here; it takes the ring's place when it goes on. Returns the ids of
+    /// the rings put on the circles, in their order.
     @discardableResult
     public mutating func splitting(_ id: TreeSection.ID, into circles: [FittedCircle]) -> [TreeSection.ID] {
-        guard let ring = section(id) else { return [] }
-        let below = stems.compactMapValues { rings in rings.last { $0.height < ring.height - 0.01 } }
-        var free = below.keys.sorted()
-        var next = (stems.keys.max() ?? -1) + 1
-        var ids: [TreeSection.ID] = []
-        self[id] = nil
-        for circle in circles {
-            let stem: Int
-            if let nearest = free.min(by: { a, b in
-                simd_distance(below[a]?.offset ?? .zero, circle.center)
-                    < simd_distance(below[b]?.offset ?? .zero, circle.center)
-            }) {
-                stem = nearest
-                free.removeAll { $0 == nearest }
-            } else {
-                stem = next
-                next += 1
+        guard let ring = section(id), ring.part == .trunk else { return [] }
+        let own = ring.stem
+        let ownOrigin = own.map { stem($0).origin }
+        let height = ring.height
+        func centre(_ ring: TreeSection) -> SIMD2<Double> { ring.offset ?? .zero }
+        // Each stem that reaches up to this height, by its ring below it; the ring's own stem by the ring itself when
+        // it has none below.
+        var below: [Int?: TreeSection] = [:]
+        for stem in [nil] + stemIDs.map(Optional.some) {
+            if let fork = forkHeight(of: stem), fork <= height + 0.01 { continue }
+            if let lower = rings(onStem: stem).last(where: { $0.height < height - 0.01 }) {
+                below[stem] = lower
+            } else if stem == own {
+                below[stem] = ring
             }
-            let added = TreeSection(part: .trunk, height: ring.height, radius: ring.radius, stem: stem)
-                .snapped(to: circle)
-            self[added.id] = added
-            ids.append(added.id)
         }
-        return ids
+        // Circles where another stem has a ring here already are those rings.
+        let atHeight = trunk.filter { $0.id != id && abs($0.height - height) < 0.05 }
+        let fresh = circles.filter { circle in
+            !atHeight.contains { simd_distance(centre($0), circle.center) < max($0.radius, circle.radius) }
+        }
+        var groups: [Int?: [FittedCircle]] = [:]
+        var apart: [FittedCircle] = []
+        for circle in fresh {
+            let nearest = below.min { a, b in
+                simd_distance(centre(a.value), circle.center) < simd_distance(centre(b.value), circle.center)
+            }
+            if let nearest,
+                simd_distance(centre(nearest.value), circle.center)
+                    <= nearest.value.radius + circle.radius + Self.continuation
+            {
+                groups[nearest.key, default: []].append(circle)
+            } else {
+                apart.append(circle)
+            }
+        }
+
+        var placed: [(circle: FittedCircle, ring: TreeSection.ID)] = []
+        self[id] = nil
+        for (stem, group) in groups.sorted(by: { ($0.key ?? -1) < ($1.key ?? -1) }) {
+            let hasRingHere = rings(onStem: stem).contains { abs($0.height - height) < 0.05 }
+            if group.count == 1 {
+                let circle = group[0]
+                if stem == own {
+                    var kept = ring.snapped(to: circle)
+                    kept.stem = own
+                    self[kept.id] = kept
+                    // Taking its ring out above may have dropped where it starts.
+                    if let own, let ownOrigin { setOrigin(ownOrigin, ofStem: own) }
+                    placed.append((circle, kept.id))
+                } else if !hasRingHere {
+                    let added = TreeSection(part: .trunk, height: height, radius: ring.radius, stem: stem)
+                        .snapped(to: circle)
+                    self[added.id] = added
+                    placed.append((circle, added.id))
+                }
+            } else if stem == own || !hasRingHere {
+                // It forks here, into each of them. (Another stem with a ring here forks when that ring is split.)
+                for circle in group {
+                    let added = TreeSection(part: .trunk, height: height, radius: ring.radius).snapped(to: circle)
+                    let new = addStem([added], origin: .fork(parent: stem))
+                    placed.append((circle, rings(onStem: new)[0].id))
+                }
+            }
+        }
+        for circle in apart {
+            let added = TreeSection(part: .trunk, height: height, radius: ring.radius).snapped(to: circle)
+            let new = addStem([added], origin: .ground(base: circle.center))
+            placed.append((circle, rings(onStem: new)[0].id))
+        }
+        return circles.compactMap { circle in placed.first { $0.circle.center == circle.center }?.ring }
     }
 }
 
