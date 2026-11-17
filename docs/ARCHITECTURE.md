@@ -204,7 +204,8 @@ against it later with no AR session and no camera.
 (`SiteWireframes`: trees, buildings, streets) and the census's trees, through `CaptureSession.showWireframes`.
 `ARSiteFrame` places a site's ENU frame in the AR world: through the 3DEP registration's pose when there is one,
 else through the GPS fix (session origin from the fix and the camera offset, the site georeference, and the mesh
-floor against the site's ground grid for height). The site under the player is loaded on arrival and per tile walked
+floor against the site's ground grid for height), which the player can move and turn by hand on the placement radar
+(`GPSPlacement`, `PlacementPanel`). The site under the player is loaded on arrival and per tile walked
 into (`AppModel.loadVectors`, kept raw in `loadedVectors`). Tapping a tree (`pickWireframe`, a collision box round
 each tree) selects it and opens the sliders on it; a census tree so picked becomes the target. See
 GERARDUS-VECTORS.md, *In AR*.
@@ -484,7 +485,7 @@ reported to the player and detection carries on without it.
 ## Map
 
 `MapLayers` is a plain description of what to draw, built from `CensusState`: trees filtered by the statuses the
-player shows (`Visibility.statuses`, the chips under the summary bar), tags, routes, tiles, the boundary, and
+player shows (`Visibility.statuses`, the chips at the top), tags, routes, tiles, the boundary, and
 `Reference`, the last loaded area's own data. Renderers implement `MapRenderer`.
 
 **Level of detail.** A park-wide view holds thousands of trees and every loaded site, more than either renderer draws
@@ -568,7 +569,7 @@ is on. The canopy height grid from the aerial points is kept with the loaded are
 
 A screen moves the map with a `MapFocus` request (a region with its own id), which both renderers follow. Another
 tab sends the player to a tree with `AppModel.showOnMap`: the Map tab moves to a region 160 m across with the tree 60 m
-above its middle, so on a phone the tree sits in the open map between the summary bar and the sheet it opens
+above its middle, so on a phone the tree sits in the open map between the status chips and the sheet it opens
 (`MapViewport.showing`), and selects it.
 
 The map's own steps on the main thread (making the layers, the 3D map applying them, adding its trees and sites) are

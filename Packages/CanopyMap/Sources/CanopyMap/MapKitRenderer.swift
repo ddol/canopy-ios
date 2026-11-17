@@ -65,7 +65,7 @@ struct MapKitMap: View {
                     .stroke(PatchOutline(patch).color, lineWidth: PatchOutline(patch).width)
             }
             if layers.visibility.vectors {
-                ForEach(Array(layers.detailedLines.enumerated()), id: \.offset) { _, line in
+                ForEach(Array(layers.appleMapLines().enumerated()), id: \.offset) { _, line in
                     vector(line)
                 }
             }
@@ -85,6 +85,27 @@ struct MapKitMap: View {
             ForEach(layers.routes) { route in
                 MapPolyline(coordinates: route.points.map(CLLocationCoordinate2D.init))
                     .stroke(Color.canopyInkMuted, lineWidth: 3)
+            }
+            if let guide = layers.moveGuide {
+                ForEach(guide.crowns) { crown in
+                    let tint = crown.isOwn ? Color.canopyBrand : Color.canopyAccent
+                    MapCircle(center: CLLocationCoordinate2D(crown.centre), radius: crown.radius)
+                        .foregroundStyle(tint.opacity(crown.isOwn ? 0.22 : 0.14))
+                        .stroke(tint, lineWidth: crown.isOwn ? 2.5 : 1.5)
+                    Annotation("", coordinate: CLLocationCoordinate2D(crown.centre), anchor: .center) {
+                        Circle().fill(tint).frame(width: 7, height: 7)
+                            .overlay(Circle().stroke(Color.black.opacity(0.4), lineWidth: 0.5))
+                            .accessibilityHidden(true)
+                    }
+                    .annotationTitles(.hidden)
+                }
+                if let from = guide.from {
+                    MapPolyline(coordinates: [CLLocationCoordinate2D(from), CLLocationCoordinate2D(guide.to)])
+                        .stroke(Color.canopyInk, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    Annotation("Now", coordinate: CLLocationCoordinate2D(from), anchor: .center) {
+                        MovedFromMarker()
+                    }
+                }
             }
             ForEach(layers.trees) { tree in
                 Annotation("", coordinate: CLLocationCoordinate2D(tree.location), anchor: .center) {
@@ -110,10 +131,14 @@ struct MapKitMap: View {
             }
             UserAnnotation()
         }
-        .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
+        // Realistic elevation: the hills under the trees, and the map tilts down towards the ground plane with two
+        // fingers dragged up (or the pitch button), turning about the upright, as Apple's Maps does.
+        .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .excludingAll))
         .mapControls {
             MapUserLocationButton()
+            MapPitchToggle()
             MapCompass()
+            MapScaleView()
         }
         .onChange(of: focus) { _, focus in
             guard let focus else { return }
@@ -121,9 +146,11 @@ struct MapKitMap: View {
         }
         .onMapCameraChange(frequency: .onEnd) { context in
             let region = context.region
+            // The camera's centre is the middle of the screen; a tilted map's region is centred farther off.
+            let centre = context.camera.centerCoordinate
             onViewportChange(
                 MapViewport(
-                    center: GeoPoint(latitude: region.center.latitude, longitude: region.center.longitude),
+                    center: GeoPoint(latitude: centre.latitude, longitude: centre.longitude),
                     latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta))
         }
     }
@@ -240,5 +267,21 @@ extension MKCoordinateRegion {
             center: CLLocationCoordinate2D(viewport.center),
             span: MKCoordinateSpan(latitudeDelta: viewport.latitudeDelta, longitudeDelta: viewport.longitudeDelta)
         )
+    }
+}
+
+/// Where a tree being moved stands now: a hollow ring with a dot, so the crosshair's new place reads apart from it.
+struct MovedFromMarker: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.canopyInk, style: StrokeStyle(lineWidth: 2, dash: [3, 3]))
+                .frame(width: 22, height: 22)
+            Circle().fill(Color.canopyInk).frame(width: 5, height: 5)
+        }
+        .shadow(color: .white.opacity(0.6), radius: 1)
+        .accessibilityElement()
+        .accessibilityLabel("Where the tree stands now")
+        .accessibilityIdentifier("move-from")
     }
 }

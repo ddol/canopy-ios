@@ -19,6 +19,21 @@ import simd
         return try SiteGeoreference(origin: origin, samples: samples)
     }
 
+    /// The 3D map draws the player at their fix, on the ground about its anchor, and takes them down without one.
+    @MainActor @Test func theThreeDMapDrawsThePlayerWhereTheyAre() {
+        let coordinator = WireframeMap.Coordinator(anchor: origin)
+        var layers = MapLayers(state: CensusState())
+        let here = LocalFrame(origin: origin).geoPoint(of: ENU(east: 30, north: 40, up: 0)).point
+        layers.userLocation = MapLayers.UserLocation(geo: here, accuracy: 5)
+        coordinator.apply(layers, selection: nil)
+        #expect(!coordinator.userRoot.childNodes.isEmpty)
+        #expect(abs(coordinator.userRoot.position.x - 30) < 0.1)
+        #expect(abs(coordinator.userRoot.position.z + 40) < 0.1)
+        layers.userLocation = nil
+        coordinator.apply(layers, selection: nil)
+        #expect(coordinator.userRoot.childNodes.isEmpty)
+    }
+
     @Test func siteMetresLandInSceneMetresAboutTheAnchor() throws {
         // The scene is anchored 200 m east and 100 m north of the site origin, at elevation 40.
         let anchor = LocalFrame(origin: origin).geoPoint(of: ENU(east: 200, north: 100, up: 0)).point
@@ -99,33 +114,29 @@ import simd
         #expect(close(moved.ground(at: TwoFingerIntent.centroid(now)), anchor, within: 0.05))
     }
 
-    @Test func twistingTurnsTheMapTheWayTheFingersTurnOncePastAThreshold() throws {
-        let rig = rig(tilt: 88)
+    /// A twist turns the map with the fingers about the upright pole through the middle of the view: the pole stays
+    /// where it is on screen, the camera keeps its tilt and never rolls, and the scene spins round the pole.
+    @Test func twistingTurnsTheMapAboutAPoleAtTheMiddle() throws {
+        let rig = rig(tilt: 40)
+        let middle = CGPoint(x: rig.size.width / 2, y: rig.size.height / 2)
+        let pole = try #require(rig.ground(at: middle))
         let start = [CGPoint(x: 120, y: 400), CGPoint(x: 280, y: 400)]
-        let grounds = try start.map { try #require(rig.ground(at: $0)) }
-        let anchor = try #require(rig.ground(at: TwoFingerIntent.centroid(start)))
-        // A quarter turn clockwise on screen about the centroid turns the map clockwise by that, less the threshold.
+        // A quarter turn clockwise on screen turns the map clockwise by as much.
         let now = [CGPoint(x: 200, y: 320), CGPoint(x: 200, y: 480)]
-        let moved = Coordinator.transform(rig, anchor: anchor, from: start, to: now)
-        #expect(abs(moved.azimuth - rig.azimuth - Float(CGFloat.pi / 2 - TwoFingerIntent.turnThreshold)) < 1e-4)
-        // Seen from nearly straight down, every finger keeps its own ground point once that is taken back off, not
-        // just the one between them.
-        let back: CGFloat = -TwoFingerIntent.turnThreshold
-        let (c, s) = (cos(back), sin(back))
-        let unturned = now.map { p -> CGPoint in
-            let dx: CGFloat = p.x - 200
-            let dy: CGFloat = p.y - 400
-            return CGPoint(x: 200 + dx * c - dy * s, y: 400 + dx * s + dy * c)
-        }
-        for (finger, ground) in zip(unturned, grounds) {
-            #expect(close(moved.ground(at: finger), ground, within: 3))
-        }
-        // A slight twist, as fingers make while pinching, leaves the heading alone.
+        let turned = Coordinator.turn(rig, from: start, to: now)
+        #expect(abs(turned.azimuth - rig.azimuth - Float(CGFloat.pi / 2)) < 1e-4)
+        #expect(turned.target == rig.target && turned.tilt == rig.tilt && abs(turned.distance - rig.distance) < 1e-3)
+        #expect(close(turned.ground(at: middle), pole, within: 0.01))
+        // Fingers that also spread bring the view closer, about the same pole.
+        let spread = [CGPoint(x: 200, y: 240), CGPoint(x: 200, y: 560)]
+        #expect(abs(Coordinator.turn(rig, from: start, to: spread).distance - rig.distance / 2) < 0.5)
+        // A pinch never turns the map, however its fingers wander: a twist is a turn of its own.
+        let anchor = try #require(rig.ground(at: TwoFingerIntent.centroid(start)))
         let pinch = [CGPoint(x: 100, y: 405), CGPoint(x: 300, y: 395)]
         #expect(Coordinator.transform(rig, anchor: anchor, from: start, to: pinch).azimuth == rig.azimuth)
     }
 
-    @Test func twoFingersUpTogetherTiltAndAnythingElseTransforms() {
+    @Test func twoFingersUpTogetherTiltTwistingTurnsAndAnythingElseTransforms() {
         let start = [CGPoint(x: 140, y: 500), CGPoint(x: 260, y: 500)]
         #expect(
             TwoFingerIntent.classify(from: start, to: [CGPoint(x: 141, y: 497), CGPoint(x: 261, y: 498)]) == .undecided)
@@ -134,7 +145,7 @@ import simd
         let spread = [CGPoint(x: 110, y: 500), CGPoint(x: 290, y: 500)]
         #expect(TwoFingerIntent.classify(from: start, to: spread) == .transform)
         let twist = [CGPoint(x: 150, y: 520), CGPoint(x: 250, y: 470)]
-        #expect(TwoFingerIntent.classify(from: start, to: twist) == .transform)
+        #expect(TwoFingerIntent.classify(from: start, to: twist) == .turn)
         let drag = [CGPoint(x: 180, y: 500), CGPoint(x: 300, y: 500)]
         #expect(TwoFingerIntent.classify(from: start, to: drag) == .transform)
 

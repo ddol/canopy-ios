@@ -233,6 +233,16 @@ struct WireframeMap: UIViewRepresentable {
         let highlightRoot = SCNNode()
         let summaryRoot = SCNNode()
         let contextRoot = SCNNode()
+        /// The upright pole a two-finger turn goes round, while one is under way.
+        let poleRoot = SCNNode()
+        /// The aerial lidar points loaded, as one point cloud a site.
+        let pointRoot = SCNNode()
+        /// Where the player is: a dot kept the same size on screen, with the way they face, over the GPS accuracy.
+        let userRoot = SCNNode()
+        let userMarker = SCNNode()
+        private var userLocation: MapLayers.UserLocation?
+        private var points: MapLayers.AerialPoints?
+        private var pointBuild: Task<Void, Never>?
         /// The scene's origin on the map.
         let anchor: LocalFrame
         weak var view: SCNView?
@@ -284,7 +294,11 @@ struct WireframeMap: UIViewRepresentable {
         private var selected: UUID?
         /// Which of the sites' parts are shown: the ground, and the vectors (buildings, streets, Gerardus's trees).
         private var visibility = MapLayers.Visibility()
-        private var context: (routes: [MapLayers.RouteLine], boundary: [[GeoPoint]], tiles: [MapLayers.TileOutline])?
+        private var context:
+            (
+                routes: [MapLayers.RouteLine], boundary: [[GeoPoint]], tiles: [MapLayers.TileOutline],
+                moveGuide: MapLayers.MoveGuide?
+            )?
 
         init(anchor: GeoPoint) {
             self.anchor = LocalFrame(origin: anchor)
@@ -301,6 +315,9 @@ struct WireframeMap: UIViewRepresentable {
             scene.rootNode.addChildNode(highlightRoot)
             scene.rootNode.addChildNode(summaryRoot)
             scene.rootNode.addChildNode(contextRoot)
+            scene.rootNode.addChildNode(poleRoot)
+            scene.rootNode.addChildNode(pointRoot)
+            scene.rootNode.addChildNode(userRoot)
             placeCamera()
         }
 
@@ -312,6 +329,15 @@ struct WireframeMap: UIViewRepresentable {
                 for node in siteNodes.values { applyVisibility(to: node) }
                 siteTreeRoot.isHidden = !visibility.vectors
             }
+            defer {
+                // After the sites, whose ground sets the height the scene is drawn about.
+                if layers.aerialPoints !== points { rebuildPoints(layers.aerialPoints) }
+                pointRoot.isHidden = !visibility.aerialPoints
+                if layers.userLocation != userLocation || layers.reference !== userReference {
+                    drawUser(layers.userLocation)
+                    userReference = layers.reference
+                }
+            }
             let formsChanged = layers.treeForms != treeForms || layers.treeProfiles != treeProfiles
             treeForms = layers.treeForms
             treeProfiles = layers.treeProfiles
@@ -320,6 +346,8 @@ struct WireframeMap: UIViewRepresentable {
             if layers.reference !== reference {
                 reference = layers.reference
                 prepareSites()
+                // The points are drawn about the sites' height, which a new reference can change.
+                points = nil
                 detail = layers.detail
                 showSites(layers.detailedSites)
                 rebuildTrees(layers.trees)
@@ -339,7 +367,7 @@ struct WireframeMap: UIViewRepresentable {
             }
             if layers.summaries != summaries { rebuildSummaries(layers.summaries) }
             if context == nil || context!.routes != layers.routes || context!.boundary != layers.boundary
-                || context!.tiles != layers.tiles
+                || context!.tiles != layers.tiles || context!.moveGuide != layers.moveGuide
             {
                 rebuildContext(layers)
             }
@@ -550,6 +578,42 @@ struct WireframeMap: UIViewRepresentable {
             }
         }
 
+        /// The aerial points, placed as the sites are: about the loaded sites' height, or, with no site loaded, about
+        /// the points' own ground, so they stand on the plane the census's trees stand on. Made off the main actor: a
+        /// site's points run to a few hundred thousand.
+        private func rebuildPoints(_ next: MapLayers.AerialPoints?) {
+            points = next
+            pointBuild?.cancel()
+            for node in pointRoot.childNodes { node.removeFromParentNode() }
+            guard let next else { return }
+            let anchor = anchor
+            let siteElevation: Float? = reference == nil ? nil : elevation
+            pointBuild = Task { [weak self] in
+                // The vertices off the main actor; the nodes, which are not Sendable, on it.
+                let clouds = await Task.detached(priority: .userInitiated) {
+                    next.clouds.map { cloud in
+                        let elevation = siteElevation ?? Self.groundElevation(cloud)
+                        let transform = SiteToScene(
+                            georeference: cloud.georeference, scene: anchor, elevation: elevation)
+                        return AerialPointsNode.vertices(cloud, ground: 0, place: transform.place)
+                    }
+                }.value
+                guard let self, !Task.isCancelled, self.points === next else { return }
+                for cloud in clouds {
+                    self.pointRoot.addChildNode(AerialPointsNode.node(positions: cloud.positions, colors: cloud.colors))
+                }
+            }
+        }
+
+        /// The middle height of a cloud's ground points (class 2), or of all its points when none is ground.
+        nonisolated static func groundElevation(_ cloud: MapLayers.AerialPoints.Cloud) -> Float {
+            let ground =
+                cloud.classes.count == cloud.points.count
+                ? zip(cloud.points, cloud.classes).filter { $0.1 == 2 }.map(\.0.z) : []
+            let heights = (ground.isEmpty ? cloud.points.map(\.z) : ground).sorted()
+            return heights.isEmpty ? 0 : heights[heights.count / 2]
+        }
+
         /// Scene coordinates of a map point on the ground: the site ground where a loaded site has it, else y = 0.
         private func scenePoint(_ geo: GeoPoint) -> SIMD3<Float> {
             Self.scenePoint(geo, anchor: anchor, grounds: grounds)
@@ -665,7 +729,7 @@ struct WireframeMap: UIViewRepresentable {
         static let patchFill = "patch-fill"
 
         private func rebuildContext(_ layers: MapLayers) {
-            context = (layers.routes, layers.boundary, layers.tiles)
+            context = (layers.routes, layers.boundary, layers.tiles, layers.moveGuide)
             for node in contextRoot.childNodes { node.removeFromParentNode() }
             var routes = VectorMesh(place: { $0 })
             for route in layers.routes {
@@ -701,11 +765,127 @@ struct WireframeMap: UIViewRepresentable {
             contextRoot.addChildNode(tiles.node(color: CanopyColor.lineStrong.uiColor, fill: false))
             contextRoot.addChildNode(surveyed.node(color: CanopyColor.brand.uiColor, fill: false))
             contextRoot.addChildNode(cells13.node(color: CanopyColor.inkMuted.uiColor, fill: false))
+            if let guide = layers.moveGuide { drawMoveGuide(guide) }
+        }
+
+        /// A tree being moved: each crown aerial lidar found round it as a ring on the ground and another most of the
+        /// way up, with a post to its top (the tree's own crown in the brand green), and where the tree stands now
+        /// as a cross with a post, a dashed line on the ground to the map's middle. Drawn over everything, so a crown
+        /// shows through the trees.
+        private func drawMoveGuide(_ guide: MapLayers.MoveGuide) {
+            var crowns = VectorMesh(place: { $0 })
+            var own = VectorMesh(place: { $0 })
+            let lift = SIMD3<Float>(0, 0.4, 0)
+            for crown in guide.crowns {
+                let base = scenePoint(crown.centre) + lift
+                let up = SIMD3<Float>(0, Float(crown.height ?? 0), 0)
+                var segments = Wireframe.ring(centre: base, radius: Float(crown.radius), count: 48)
+                if crown.height != nil {
+                    // Where a crown is about widest, some way below its top.
+                    segments += Wireframe.ring(centre: base + up * 0.7, radius: Float(crown.radius), count: 48)
+                    segments.append(Wireframe.Segment(from: base, to: base + up))
+                }
+                if crown.isOwn { own.add(sceneSegments: segments) } else { crowns.add(sceneSegments: segments) }
+            }
+            var from = VectorMesh(place: { $0 })
+            if let start = guide.from {
+                let a = scenePoint(start) + lift
+                let b = scenePoint(guide.to) + lift
+                from.add(sceneSegments: [
+                    Wireframe.Segment(from: a - SIMD3(0.6, 0, 0), to: a + SIMD3(0.6, 0, 0)),
+                    Wireframe.Segment(from: a - SIMD3(0, 0, 0.6), to: a + SIMD3(0, 0, 0.6)),
+                    Wireframe.Segment(from: a, to: a + SIMD3(0, 3, 0)),
+                ])
+                // Dashed: a metre on, half a metre off.
+                let length = simd_distance(a, b)
+                var at: Float = 0
+                while at < length {
+                    let end = min(at + 1, length)
+                    from.add(sceneSegments: [
+                        Wireframe.Segment(from: a + (b - a) * (at / length), to: a + (b - a) * (end / length))
+                    ])
+                    at += 1.5
+                }
+            }
+            for (mesh, color) in [
+                (crowns, CanopyColor.canopy.uiColor), (own, CanopyColor.brand.uiColor), (from, CanopyColor.ink.uiColor),
+            ] where !mesh.isEmpty {
+                let node = mesh.node(color: color, fill: false)
+                node.enumerateHierarchy { child, _ in
+                    child.renderingOrder = 11
+                    child.geometry?.firstMaterial?.readsFromDepthBuffer = false
+                }
+                contextRoot.addChildNode(node)
+            }
         }
 
         /// Low ground and high ground, in the scene's own tints: a dull green low, a pale one high.
         nonisolated static let groundLow = SIMD4<Float>(0.22, 0.32, 0.26, 1)
         nonisolated static let groundHigh = SIMD4<Float>(0.72, 0.76, 0.62, 1)
+
+        /// The reference the player's dot was set on the ground of.
+        private var userReference: MapLayers.Reference?
+
+        /// The player's dot on the ground: a blue disc in a white ring with a wedge the way they face, drawn over
+        /// everything at a fixed size on screen (`scaleUserMarker`), on a pale disc as wide as the GPS is good.
+        private func drawUser(_ location: MapLayers.UserLocation?) {
+            userLocation = location
+            for node in userRoot.childNodes { node.removeFromParentNode() }
+            for node in userMarker.childNodes { node.removeFromParentNode() }
+            guard let location else { return }
+            userRoot.position = SCNVector3(scenePoint(location.geo) + SIMD3(0, 0.5, 0))
+            let blue = UIColor.systemBlue
+            if location.accuracy > 0 {
+                let disc = SCNCylinder(radius: CGFloat(min(location.accuracy, 200)), height: 0.02)
+                disc.firstMaterial = Self.flat(blue.withAlphaComponent(0.15))
+                userRoot.addChildNode(Self.onTop(SCNNode(geometry: disc), order: 13))
+            }
+            let ring = SCNCylinder(radius: 1.35, height: 0.04)
+            ring.firstMaterial = Self.flat(.white)
+            let dot = SCNCylinder(radius: 1, height: 0.06)
+            dot.firstMaterial = Self.flat(blue)
+            userMarker.addChildNode(Self.onTop(SCNNode(geometry: ring), order: 14))
+            userMarker.addChildNode(Self.onTop(SCNNode(geometry: dot), order: 15))
+            if let heading = location.heading {
+                let wedge = SCNNode(geometry: Self.wedge())
+                wedge.eulerAngles.y = -Float(heading * .pi / 180)
+                userMarker.addChildNode(Self.onTop(wedge, order: 14))
+            }
+            userRoot.addChildNode(userMarker)
+            scaleUserMarker()
+        }
+
+        /// A flat triangle ahead of the dot, pointing north (scene -z) before it is turned.
+        private static func wedge() -> SCNGeometry {
+            let points = [SCNVector3(0, 0.03, -2.6), SCNVector3(-0.8, 0.03, -1.2), SCNVector3(0.8, 0.03, -1.2)]
+            let element = SCNGeometryElement(indices: [UInt16(0), 1, 2, 0, 2, 1], primitiveType: .triangles)
+            let geometry = SCNGeometry(sources: [SCNGeometrySource(vertices: points)], elements: [element])
+            geometry.firstMaterial = flat(UIColor.systemBlue.withAlphaComponent(0.8))
+            geometry.firstMaterial?.isDoubleSided = true
+            return geometry
+        }
+
+        private static func flat(_ color: UIColor) -> SCNMaterial {
+            let material = SCNMaterial()
+            material.lightingModel = .constant
+            material.diffuse.contents = color
+            return material
+        }
+
+        private static func onTop(_ node: SCNNode, order: Int) -> SCNNode {
+            node.renderingOrder = order
+            node.geometry?.firstMaterial?.readsFromDepthBuffer = false
+            return node
+        }
+
+        /// Keeps the player's dot about 9 points across at the camera's target, however far the camera is.
+        private func scaleUserMarker() {
+            guard userLocation != nil else { return }
+            let height = Float(max(view?.bounds.height ?? rig.size.height, 1))
+            let perPoint = 2 * rig.distance * tan(rig.fieldOfView / 2 * .pi / 180) / height
+            let scale = max(perPoint * 9 / 2, 0.15)
+            userMarker.scale = SCNVector3(scale, scale, scale)
+        }
 
         // MARK: Camera
 
@@ -722,6 +902,7 @@ struct WireframeMap: UIViewRepresentable {
             if let size = view?.bounds.size, size.width > 0 { rig.size = size }
             camera.position = SCNVector3(rig.position)
             camera.look(at: SCNVector3(rig.target))
+            scaleUserMarker()
         }
 
         /// The region in view, from the target and the distance.
@@ -759,6 +940,7 @@ struct WireframeMap: UIViewRepresentable {
             case .ended, .cancelled:
                 let velocity = gesture.state == .ended ? releaseVelocity() : .zero
                 gestureStart = nil
+                hidePole()
                 if hypot(velocity.x, velocity.y) > 150 {
                     startGliding(velocity)
                 } else {
@@ -784,7 +966,18 @@ struct WireframeMap: UIViewRepresentable {
                 switch intent {
                 case .undecided: return
                 case .tilt: rig = Self.tilt(start.rig, from: start.points, to: points)
-                case .transform: rig = Self.transform(start.rig, anchor: start.anchor, from: start.points, to: points)
+                case .turn:
+                    rig = Self.turn(start.rig, from: start.points, to: points)
+                    showPole()
+                case .transform:
+                    if abs(TwoFingerIntent.angle(from: start.points, to: points)) > TwoFingerIntent.turnSwitch {
+                        // A clear twist: turn from here, about the middle of the view.
+                        intent = .turn
+                        gestureStart = (rig, points, start.anchor, start.fingers)
+                        showPole()
+                        return
+                    }
+                    rig = Self.transform(start.rig, anchor: start.anchor, from: start.points, to: points)
                 }
             }
             placeCamera()
@@ -812,9 +1005,8 @@ struct WireframeMap: UIViewRepresentable {
             return tilted.clamped()
         }
 
-        /// The rig after two fingers pinched, twisted and moved: zoomed by how much their spacing changed, turned as
-        /// far as they turned past a small threshold (`TwoFingerIntent.turn`), with the ground point first between them
-        /// (`anchor`) still between them.
+        /// The rig after two fingers pinched and moved: zoomed by how much their spacing changed, with the ground
+        /// point first between them (`anchor`) still between them. It never turns: a twist is a turn of its own.
         nonisolated static func transform(
             _ rig: CameraRig, anchor: SIMD3<Float>?, from start: [CGPoint], to now: [CGPoint]
         ) -> CameraRig {
@@ -822,10 +1014,45 @@ struct WireframeMap: UIViewRepresentable {
             let before = TwoFingerIntent.spacing(start)
             let after = TwoFingerIntent.spacing(now)
             if before > 1, after > 1 { moved.distance = rig.distance * Float(before / after) }
-            moved.azimuth = rig.azimuth + Float(TwoFingerIntent.turn(TwoFingerIntent.angle(from: start, to: now)))
             moved = moved.clamped()
             if let anchor { moved = moved.keeping(anchor, under: TwoFingerIntent.centroid(now)) }
             return moved
+        }
+
+        /// The rig after two fingers twisted: turned with them about the upright pole through the middle of the view
+        /// (the target), which stays where it is on screen and upright, the scene spinning round it; closer or
+        /// farther as they spread or close. The camera never rolls: its up is always toward the sky.
+        nonisolated static func turn(_ rig: CameraRig, from start: [CGPoint], to now: [CGPoint]) -> CameraRig {
+            var turned = rig
+            turned.azimuth = rig.azimuth + Float(TwoFingerIntent.angle(from: start, to: now))
+            let before = TwoFingerIntent.spacing(start)
+            let after = TwoFingerIntent.spacing(now)
+            if before > 1, after > 1 { turned.distance = rig.distance * Float(before / after) }
+            return turned.clamped()
+        }
+
+        /// The pole a turn goes round, drawn while two fingers turn the map: from the ground at the middle of the view
+        /// up a quarter of the camera's distance.
+        private func showPole() {
+            for node in poleRoot.childNodes { node.removeFromParentNode() }
+            var mesh = VectorMesh(place: { $0 })
+            let foot = rig.target
+            let height = max(rig.distance * 0.25, 2)
+            mesh.add(sceneSegments: [
+                Wireframe.Segment(from: foot, to: foot + SIMD3(0, height, 0)),
+                Wireframe.Segment(from: foot - SIMD3(height * 0.06, 0, 0), to: foot + SIMD3(height * 0.06, 0, 0)),
+                Wireframe.Segment(from: foot - SIMD3(0, 0, height * 0.06), to: foot + SIMD3(0, 0, height * 0.06)),
+            ])
+            let node = mesh.node(color: CanopyColor.survey.uiColor, fill: false)
+            node.enumerateHierarchy { child, _ in
+                child.renderingOrder = 12
+                child.geometry?.firstMaterial?.readsFromDepthBuffer = false
+            }
+            poleRoot.addChildNode(node)
+        }
+
+        private func hidePole() {
+            for node in poleRoot.childNodes { node.removeFromParentNode() }
         }
 
         /// Double tap: in by half, keeping the tapped point where it is.

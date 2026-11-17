@@ -248,6 +248,25 @@ import Testing
         #expect(everything.detailedLines.count == 2)
     }
 
+    /// Apple's map draws at most `appleMapLineLimit` vector lines, the nearest the middle first: thousands of MapKit
+    /// overlays stopped the app when going back to it from the 3D map with vectors shown.
+    @Test func applesMapDrawsOnlyTheNearestVectorLines() {
+        let frame = LocalFrame(origin: park)
+        func at(_ east: Double) -> GeoPoint { frame.geoPoint(of: ENU(east: east, north: 0, up: 0)).point }
+        let lines = (0..<1000).reversed().map { i in
+            MapLayers.Reference.Line(
+                kind: .kerb, points: [at(Double(i) / 50), at(Double(i) / 50 + 0.5)], closed: false)
+        }
+        let layers = MapLayers(
+            state: CensusState(), visibility: MapLayers.Visibility(vectors: true), region: region(tiles: 2, at: park),
+            reference: MapLayers.Reference(canopies: [], lines: lines))
+        #expect(layers.detailedLines.count == 1000)
+        let drawn = layers.appleMapLines()
+        #expect(drawn.count == MapLayers.appleMapLineLimit)
+        // The nearest 400: those starting within 8 m of the middle.
+        #expect(drawn.allSatisfy { frame.enu(of: $0.points[0]).east < 8 })
+    }
+
     @Test func gerardusVectorsAreOffUnlessThePlayerShowsThem() {
         #expect(!MapLayers.Visibility().vectors)
         let line = MapLayers.Reference.Line(kind: .road, points: [park, a], closed: false)

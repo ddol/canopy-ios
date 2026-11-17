@@ -22,23 +22,30 @@ enum ProposalStatus {
         guard model.mapClient != nil else {
             return "On this phone only, with the simulated server. Set a Gerardus server in Me → Settings to share it."
         }
-        guard model.lastSync?.known.contains(changeset.id) == true else {
+        let made = model.madeHere(changeset)
+        guard !made || model.lastSync?.known.contains(changeset.id) == true else {
             return "Not on the server yet. Canopy sends it on its own when it can reach the server."
         }
+        // One from another device came from the server, so it is there.
+        let device = made ? "" : "Sent from your other device. "
         let authorTrusted = model.serverPlayer?.isTrusted ?? model.player.isTrusted
         let others = changeset.approvals.count
+        let need: String
         switch changeset.need(authorTrusted: authorTrusted) {
         case .nothing:
-            return "Agreed. It reaches the shared map at the next sync."
+            need = "Agreed. It reaches the shared map at the next sync."
         case .anotherPlayer:
-            return authorTrusted
+            need =
+                authorTrusted
                 ? "Needs one more player to agree. You're trusted, so anyone will do."
                 : "A trusted player agreed. Needs one more player to agree."
         case .trustedPlayer:
-            return others == 0
+            need =
+                others == 0
                 ? "Needs a trusted player to agree. It is in their Review queue when they look at this area."
                 : "\(format.count(others)) \(others == 1 ? "player" : "players") agreed. Still needs a trusted player."
         }
+        return device + need
     }
 }
 
@@ -61,6 +68,10 @@ struct ProposalRow: View {
             }
             if !trees.isEmpty {
                 Text(trees).font(.subheadline)
+            }
+            let scans = changeset.scans
+            if !scans.isEmpty {
+                ChangesetScans(refs: scans)
             }
             Text(ProposalStatus.explain(changeset, in: model))
                 .font(.footnote)

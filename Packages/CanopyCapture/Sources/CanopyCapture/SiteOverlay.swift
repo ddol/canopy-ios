@@ -13,7 +13,7 @@ import simd
 public struct ARSiteFrame: Sendable {
     enum Placement: Sendable {
         case registered(RegisteredScan)
-        case gps(origin: LocalFrame, up: Double)
+        case gps(GPSPlacement, up: Double)
     }
 
     let placement: Placement
@@ -34,7 +34,16 @@ public struct ARSiteFrame: Sendable {
     public init(
         origin: GeoPoint, georeference: SiteGeoreference, arGroundAtOrigin: Float, siteGroundAtOrigin: Double
     ) {
-        placement = .gps(origin: LocalFrame(origin: origin), up: Double(arGroundAtOrigin) - siteGroundAtOrigin)
+        self.init(
+            placement: GPSPlacement(origin: origin), georeference: georeference, arGroundAtOrigin: arGroundAtOrigin,
+            siteGroundAtOrigin: siteGroundAtOrigin)
+    }
+
+    /// Through a GPS fix, moved and turned by hand (`GPSPlacement`).
+    public init(
+        placement: GPSPlacement, georeference: SiteGeoreference, arGroundAtOrigin: Float, siteGroundAtOrigin: Double
+    ) {
+        self.placement = .gps(placement, up: Double(arGroundAtOrigin) - siteGroundAtOrigin)
         self.georeference = georeference
     }
 
@@ -52,9 +61,9 @@ public struct ARSiteFrame: Sendable {
             let inverse = Quaternion(w: q.w, x: -q.x, y: -q.y, z: -q.z)
             let sensor = inverse.rotate(Vector3(x: own.x - t.x, y: own.y - t.y, z: site.z - t.z))
             return ScanRegistration.arkitPoint(fromSensor: SIMD3(Float(sensor.x), Float(sensor.y), Float(sensor.z)))
-        case .gps(let origin, let up):
-            let enu = origin.enu(of: georeference.geo(x: site.x, y: site.y))
-            return SIMD3(Float(enu.east), Float(site.z + up), Float(-enu.north))
+        case .gps(let placement, let up):
+            let xz = placement.arkitXZ(of: georeference.geo(x: site.x, y: site.y))
+            return SIMD3(xz.x, Float(site.z + up), xz.y)
         }
     }
 
@@ -64,9 +73,8 @@ public struct ARSiteFrame: Sendable {
         case .registered(let scan):
             let own = scan.site(ofARKit: point)
             return georeference.site(of: scan.georeference.geo(x: own.x, y: own.y))
-        case .gps(let origin, _):
-            let geo = origin.geoPoint(of: ENU(east: Double(point.x), north: Double(-point.z), up: 0)).point
-            return georeference.site(of: geo)
+        case .gps(let placement, _):
+            return georeference.site(of: placement.geo(ofARKit: point))
         }
     }
 

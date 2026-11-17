@@ -18,7 +18,9 @@ final class StandInUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing", "-canopy.gerardusURL", server]
         app.launch()
-        XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label == %@", "Detected trees, 200")).firstMatch.waitForExistence(
+                timeout: mapTimeout))
         keep(app, "1 map with the sample")
 
         let first = try load(app)
@@ -32,7 +34,9 @@ final class StandInUITests: XCTestCase {
         let credit = app.staticTexts["aerial-attribution"].firstMatch
         XCTAssertTrue(credit.waitForExistence(timeout: 5))
         XCTAssertTrue(credit.label.contains("3D Elevation Program"), credit.label)
-        XCTAssertFalse(app.otherElements["Estimated: 200"].exists, "the sample should have been replaced")
+        XCTAssertFalse(
+            app.buttons.matching(NSPredicate(format: "label == %@", "Detected trees, 200")).firstMatch.exists,
+            "the sample should have been replaced")
 
         app.buttons["Dismiss"].firstMatch.tap()
         let again = try load(app)
@@ -60,7 +64,9 @@ final class StandInUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing", "-canopy.gerardusURL", server]
         app.launch()
-        XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label == %@", "Detected trees, 200")).firstMatch.waitForExistence(
+                timeout: mapTimeout))
 
         app.buttons["Proposals"].firstMatch.tap()
         let review = app.buttons["Review"].firstMatch

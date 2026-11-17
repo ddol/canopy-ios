@@ -88,7 +88,7 @@ A `Quantity` is a value and its standard uncertainty (one standard deviation): `
 | `removed` | Agreed not to be a tree, or gone | hidden |
 
 The UI shows `displayStatus`, which is `proposed` while this device waits for agreement and the agreed
-status otherwise. The map can show or hide each status (the chips under the summary bar).
+status otherwise. The map can show or hide each status (the chips at the top of the map, which count them).
 
 ### Tree names
 
@@ -246,9 +246,9 @@ canonical token of its L19 chunk as `s2_l19_token`.
 **Policy.** A changeset reaches the shared map only when at least two distinct players agree, and at least one
 of them is trusted. The author's submission counts as one agreement (`Changeset.meetsPolicy`).
 
-## Summary bar
+## Summary
 
-`CensusSummary` gives the Map tab's numbers:
+`CensusSummary` gives the census's numbers (the Map tab no longer shows them: its status chips count the trees):
 
 - **Confirmed**: trees whose agreed status is `confirmed` or `verified`;
 - **Estimated**: trees this device believes are not `removed` (agreed status, or this device's proposal);

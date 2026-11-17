@@ -19,6 +19,12 @@ extension AppModel {
         mapTarget = tree.id
         section = .map
     }
+
+    /// Goes to the Census tab with `tree` as the selected tree, so the next scan measures it wherever it is drawn.
+    func scanInCensus(_ tree: Tree) {
+        censusTarget = tree.id
+        section = .census
+    }
 }
 
 extension MapViewport {

@@ -30,12 +30,12 @@ final class LaunchTests: XCTestCase {
     }
 
     @MainActor
-    func testMapShowsTheSummaryOfTheFixtureCandidates() {
+    func testMapCountsTheFixtureCandidatesOnItsStatusChips() {
         let app = launch()
-        XCTAssertTrue(app.otherElements["summary-bar"].firstMatch.waitForExistence(timeout: mapTimeout))
-        XCTAssertTrue(
-            app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
-        XCTAssertTrue(app.otherElements["Confirmed: 0"].firstMatch.exists)
+        waitForMap(app)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == %@", "Confirmed trees, 0")).firstMatch.exists)
+        // The summary bar (confirmed, estimated, coverage) is gone: the chips count the trees.
+        XCTAssertFalse(app.otherElements["summary-bar"].exists)
     }
 
     @MainActor
@@ -56,8 +56,9 @@ final class LaunchTests: XCTestCase {
         confirm.tap()
         XCTAssertTrue(app.staticTexts["Proposed"].firstMatch.waitForExistence(timeout: 10))
         app.buttons["Done"].firstMatch.tap()
-        let coverage = app.otherElements["Coverage: 0.5\u{202F}%"].firstMatch
-        XCTAssertTrue(coverage.waitForExistence(timeout: 10))
+        // The status chips count it as proposed now.
+        let proposed = app.buttons.matching(NSPredicate(format: "label == %@", "Proposed trees, 1")).firstMatch
+        XCTAssertTrue(proposed.waitForExistence(timeout: 10))
     }
 
     @MainActor
@@ -216,7 +217,7 @@ final class LaunchTests: XCTestCase {
         add(onMap)
         // Under the sheet is the map, not the screen that was open over it.
         app.buttons["Done"].firstMatch.tap()
-        XCTAssertTrue(app.otherElements["summary-bar"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["status-filter"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.navigationBars["Surveyed cells"].firstMatch.exists)
     }
 
@@ -294,7 +295,9 @@ final class LaunchTests: XCTestCase {
     /// time out the accessibility query on CI runners.
     @MainActor
     private func waitForMap(_ app: XCUIApplication) {
-        XCTAssertTrue(app.otherElements["Estimated: 200"].firstMatch.waitForExistence(timeout: mapTimeout))
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label == %@", "Detected trees, 200")).firstMatch.waitForExistence(
+                timeout: mapTimeout))
     }
 
     /// Picks one of the Proposals tab's lists in its segmented control. A busy runner can miss a tap, so tap again
